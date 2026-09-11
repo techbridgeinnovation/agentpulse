@@ -1,0 +1,5 @@
+.alis/
+.env
+*.env
+.idea/
+.vscode/
