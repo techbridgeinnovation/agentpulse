@@ -29,9 +29,9 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -139,11 +139,20 @@ func requestOf(ctx agent.ReadonlyContext) string {
 // cost and what each call cost. Partial responses are skipped — in streaming
 // mode every chunk arrives here, and counting them would multiply a turn's
 // usage by however many chunks it happened to be split into.
+//
+// A chunk is still read for the model it reports, because the final response
+// of a streamed call arrives without one (see inFlightModels).
 func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback {
 	return func(ctx agent.CallbackContext, response *adkmodel.LLMResponse, callErr error) (*adkmodel.LLMResponse, error) {
-		if response == nil || response.Partial {
+		if response == nil {
 			return nil, nil
 		}
+		key := callKey(ctx)
+		if response.Partial {
+			inFlight.served(key, response.ModelVersion)
+			return nil, nil
+		}
+		known := inFlight.take(key)
 
 		activity := &pb.Activity{
 			Agent:           opts.Agent,
@@ -153,7 +162,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			CallerService:   opts.Service,
 			CallerComponent: componentOf(ctx),
 			Skill:           opts.Skill,
-			Model:           response.ModelVersion,
+			Model:           modelOf(response, known),
 			Provider:        opts.provider(),
 			Status:          statusOf(response, callErr),
 			ErrorCode:       response.ErrorCode,
@@ -215,6 +224,9 @@ func AfterAgent(r *recorder.Recorder, _ Options) agent.AfterAgentCallback {
 // BeforeModel labels the outgoing request with who it belongs to, then — if
 // a Decider is configured — asks governance whether the call may proceed.
 //
+// It also notes which model the call asks for, so a call whose provider reports
+// no model at all is still recorded against the one requested.
+//
 // Labels set here are carried into the cloud billing export, which is what
 // makes a charge that is not measured in tokens attributable at all. Only
 // opaque identifiers go on a label — never an email — so nothing reaches
@@ -243,6 +255,7 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 		if request == nil {
 			return nil, nil
 		}
+		inFlight.requested(callKey(ctx), request.Model)
 
 		labels := map[string]string{}
 		if user := labelValue(ctx.UserID()); user != "" {
