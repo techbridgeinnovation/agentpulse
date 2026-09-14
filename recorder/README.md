@@ -20,7 +20,7 @@ Dropped records are counted and the count is readable. That counter is the one t
 
 ## Dependencies
 
-**Calls out to** `metering/v1`, the default destination, one call per batch rather than one per record. Nothing else, deliberately: a team can configure a log file or nothing at all and still take the library.
+**Calls out to** `metering/v1` for records and the rate card, and `governance/v1` for spend decisions, one call per batch rather than one per record. An agent inside this product reaches them directly; every other agent reaches them through `gateway/v1`, which is the only one of the three on the public internet, and presents an api key on every call. Nothing else, deliberately: a team can configure a log file or nothing at all and still take the library.
 
 **Called by** each agent's own process, in line.
 
@@ -42,13 +42,27 @@ Every dependency is public. The metering and governance contracts the recorder s
 
 ## Wiring it in
 
+Three settings, read from the environment and refused at startup when missing. The organisation is the one the spend is filed under, the agent is a name of the team's choosing under it, and the key is issued for that organisation in the console. A default for any of them would file a stranger's spend under the wrong organisation, and metering would refuse it quietly.
+
+```go
+organisation := os.Getenv("AP_ORGANISATION") // organisations/<id>
+agent := os.Getenv("AP_AGENT")               // organisations/<id>/agents/<name>
+
+conn, err := recorder.Dial(os.Getenv("AP_GATEWAY"), os.Getenv("AP_API_KEY"))
+if err != nil || organisation == "" || agent == "" {
+    log.Fatal("AP_GATEWAY, AP_API_KEY, AP_ORGANISATION and AP_AGENT must all be set")
+}
+```
+
+`Dial` opens one TLS connection to the gateway with the key attached to every call, and it is lazy: nothing is touched on the network until the first record is sent. The same connection serves the sink, the rate source and the decider.
+
 Two kinds of code spend money on models, and they cannot report the same way.
 
 **An agent built on Google's ADK.** The framework offers moments to hook into, so the recorder is registered once and no call site changes.
 
 ```go
 rec := recorder.New(recorder.Config{
-    Sinks: []recorder.Sink{recorder.NewGRPCSink(conn, "organisations/techbridge")},
+    Sinks: []recorder.Sink{recorder.NewGRPCSink(conn, organisation)},
 })
 
 opts := adkhooks.Options{Agent: agentName, Service: "atlas-agent"}
@@ -117,6 +131,7 @@ recorder/
 ├── context.go                  who a piece of work is for, carried on the context
 ├── sink.go                     where records go
 ├── sink_grpc.go                the metering destination
+├── gateway.go                  the connection through the gateway, key on every call
 ├── decider.go                  asking governance whether a call may proceed
 ├── decider_cache.go            verdicts reused from memory
 ├── decider_grpc.go             the governance destination
@@ -138,6 +153,8 @@ recorder/
 The proto package names inside them are `techbridge.ap.metering.v1` and `techbridge.ap.governance.v1`. Go's protobuf runtime allows one registration per proto name in a binary, so a program must not import these alongside the same contracts from another module path. A TechBridge service that already depends on `alis.build/techbridge/ap/metering` takes its metering types from here instead.
 
 ## Before changing it
+
+**A missing setting fails at startup, never later.** `Dial` refuses an empty address or key, and `NewGRPCSink` refuses an empty organisation. Anything else would be every record rejected and counted for the life of the process, which is the one kind of failure nobody is watching for.
 
 **The queue cannot be made unbounded.** An unbounded queue turns a slow destination into the host agent's memory leak, so there is no option for it.
 

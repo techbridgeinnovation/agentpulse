@@ -3,6 +3,7 @@ package recorder
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc"
 
@@ -20,7 +21,17 @@ type GRPCSink struct {
 // The connection is the caller's, because an agent already has one to the
 // platform and dialling a second would double the sockets for no reason. The
 // recorder never closes it.
+//
+// An empty organisation is refused with a panic, at construction and never
+// later. Every record this sink sends is filed under the organisation, and
+// with none named metering rejects them all, which the recorder would count
+// quietly for the life of the process. A setting that is missing should stop
+// the process where a person is watching it start, not drop records where
+// nobody is.
 func NewGRPCSink(conn grpc.ClientConnInterface, organisation string) *GRPCSink {
+	if strings.TrimSpace(organisation) == "" {
+		panic("recorder: NewGRPCSink needs the organisation the records are filed under")
+	}
 	return &GRPCSink{
 		client: pb.NewActivitiesServiceClient(conn),
 		parent: organisation,
