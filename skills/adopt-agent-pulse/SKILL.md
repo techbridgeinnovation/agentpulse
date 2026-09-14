@@ -11,10 +11,14 @@ The whole adoption is one dependency and a few lines. Do not build anything arou
 
 ## Before you start
 
-Ask for, or find in the environment, two names. Do not invent either and do not fall back to a default.
+Ask for, or find in the environment, four settings. Do not invent any of them and do not fall back to a default.
 
+- **Gateway**: the address an agent sends records to, shown on the console's Connect page. For this organisation it is `<gateway address>`.
+- **API key**: issued on the console's API keys page for the organisation, shown once, and kept as a secret. One key serves every agent in the organisation.
 - **Organisation**: `organisations/<id>`, created in the Agent Pulse console by its administrator.
 - **Agent**: `organisations/<id>/agents/<name>`, a name of the team's choosing. Nothing registers it; the first record that carries it is what makes it appear.
+
+The key belongs to one organisation. A record naming a different organisation, or an agent outside it, is refused at the gateway, never filed elsewhere.
 
 Confirm which of the two paths applies:
 
@@ -35,23 +39,27 @@ go get github.com/techbridgeinnovation/agentpulse/recorder/adkv2hooks
 
 Every dependency is public. No registry credential is involved.
 
-## Step 2: the names, from the environment
+## Step 2: the settings, from the environment
 
-Read both at startup and refuse to start without them. A default would file spend under somebody else's organisation, and metering would refuse it silently.
+Read all four at startup and refuse to start without them. A default would file spend under somebody else's organisation, and the gateway would refuse it silently.
 
 ```go
 organisation := os.Getenv("AP_ORGANISATION") // organisations/<id>
 agent := os.Getenv("AP_AGENT")               // organisations/<id>/agents/<name>
-if organisation == "" || agent == "" {
-	log.Fatal("AP_ORGANISATION and AP_AGENT must both be set")
+
+conn, err := recorder.Dial(os.Getenv("AP_GATEWAY"), os.Getenv("AP_API_KEY"))
+if err != nil || organisation == "" || agent == "" {
+	log.Fatal("AP_GATEWAY, AP_API_KEY, AP_ORGANISATION and AP_AGENT must all be set")
 }
 ```
 
-Add both to the service's deployment configuration next to its other environment variables.
+`recorder.Dial` opens one TLS connection to the gateway with the key attached to every call. It is lazy: nothing is touched on the network until the first record is sent. The same connection serves every client below.
+
+Add all four to the service's deployment configuration next to its other environment variables. The key is a secret; put it where the service keeps secrets, never in a file that is committed.
 
 ## Step 3: construct the recorder once
 
-Where the service starts. The sink names the organisation the spend is filed under; `conn` is a gRPC connection to metering that presents the agent's own identity.
+Where the service starts. The sink names the organisation the spend is filed under and sends over the connection from step 2.
 
 ```go
 rec := recorder.New(recorder.Config{
@@ -164,7 +172,7 @@ log.Printf("recorded %d, delivered %d, dropped %d, rejected %d, sink panics %d",
 	s.Recorded, s.Delivered, s.Dropped, s.Failed, s.Panicked)
 ```
 
-`Delivered` rising after a deploy is the proof. `Rejected` rising with `Delivered` at zero means metering refused the identity: the organisation's administrator has to grant the agent's identity the recorder role. Ask for that; do not work around it.
+`Delivered` rising after a deploy is the proof. `Rejected` rising with `Delivered` at zero means the gateway refused the records, and the cause is one of the four settings: a key that is not this organisation's, an organisation or agent name that does not match the key, or a wrong gateway address. Check them against the console's Connect page; do not work around it.
 
 ## What you never write
 
@@ -174,7 +182,7 @@ log.Printf("recorded %d, delivered %d, dropped %d, rejected %d, sink panics %d",
 
 ## Done when
 
-- The two environment variables are set and the service refuses to start without them.
+- The four environment variables are set and the service refuses to start without them.
 - One recorder, constructed once, closed on shutdown.
 - Either the three callbacks are registered, or every model call reports through the reporter.
 - The stats line is logged on shutdown.
