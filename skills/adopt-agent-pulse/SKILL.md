@@ -186,6 +186,12 @@ log.Printf("recorded %d, delivered %d, dropped %d, rejected %d, sink panics %d",
 
 `Delivered` rising after a deploy is the proof. `Rejected` rising with `Delivered` at zero means the gateway refused the records, and the cause is one of the four settings: a key that is not this organisation's, an organisation or agent name that does not match the key, or a wrong gateway address. Check them against the console's Connect page; do not work around it.
 
+## Reading it back
+
+Recording and reading are separate keys. The `AP_API_KEY` this skill wires in records and cannot read; a dashboard of the team's own needs a second key, issued on the console's API keys page as **Reads**, and asks the gateway directly over HTTPS. Nothing in the agent changes for it.
+
+Point the team at [`docs/reading.md`](../../docs/reading.md) and stop there — building their dashboard is not part of adopting the recorder.
+
 ## What you never write
 
 - **A cost.** The service says what happened; the server prices it against the rate card in force. Never compute or send a price.
