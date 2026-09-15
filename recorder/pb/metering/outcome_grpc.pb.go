@@ -30,12 +30,35 @@ const (
 // OutcomesServiceClient is the client API for OutcomesService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// OutcomesService records units of business work, so that cost can be
+// expressed per outcome rather than per million tokens.
+//
+// An outcome attaches to a request, not to an individual activity. One request
+// may make many model calls; the shortlist it produced is one outcome, and
+// dividing the request's activities by the outcome gives the cost of producing
+// it. Attaching the count to each activity instead would multiply it by however
+// many model calls that run happened to make.
+//
+// Only the product knows what a unit of work is, which is why the definition is
+// declared by the product rather than shipped with the service.
+//
+// Recorded outcomes are append-only, for the same reason activities are: a
+// cost-per-outcome figure that can be edited after the fact is not evidence of
+// anything. Definitions can be updated, since renaming what a unit is called
+// does not change what was counted.
 type OutcomesServiceClient interface {
+	// Declares a kind of business outcome, e.g. a shortlist or a finished report.
 	CreateOutcomeDefinition(ctx context.Context, in *CreateOutcomeDefinitionRequest, opts ...grpc.CallOption) (*OutcomeDefinition, error)
+	// Returns a single outcome definition by resource name.
 	GetOutcomeDefinition(ctx context.Context, in *GetOutcomeDefinitionRequest, opts ...grpc.CallOption) (*OutcomeDefinition, error)
+	// Updates an outcome definition.
 	UpdateOutcomeDefinition(ctx context.Context, in *UpdateOutcomeDefinitionRequest, opts ...grpc.CallOption) (*OutcomeDefinition, error)
+	// Lists the outcome definitions declared by an organisation.
 	ListOutcomeDefinitions(ctx context.Context, in *ListOutcomeDefinitionsRequest, opts ...grpc.CallOption) (*ListOutcomeDefinitionsResponse, error)
+	// Records that a request produced some number of outcomes.
 	CreateOutcome(ctx context.Context, in *CreateOutcomeRequest, opts ...grpc.CallOption) (*Outcome, error)
+	// Lists recorded outcomes.
 	ListOutcomes(ctx context.Context, in *ListOutcomesRequest, opts ...grpc.CallOption) (*ListOutcomesResponse, error)
 }
 
@@ -110,12 +133,35 @@ func (c *outcomesServiceClient) ListOutcomes(ctx context.Context, in *ListOutcom
 // OutcomesServiceServer is the server API for OutcomesService service.
 // All implementations must embed UnimplementedOutcomesServiceServer
 // for forward compatibility.
+//
+// OutcomesService records units of business work, so that cost can be
+// expressed per outcome rather than per million tokens.
+//
+// An outcome attaches to a request, not to an individual activity. One request
+// may make many model calls; the shortlist it produced is one outcome, and
+// dividing the request's activities by the outcome gives the cost of producing
+// it. Attaching the count to each activity instead would multiply it by however
+// many model calls that run happened to make.
+//
+// Only the product knows what a unit of work is, which is why the definition is
+// declared by the product rather than shipped with the service.
+//
+// Recorded outcomes are append-only, for the same reason activities are: a
+// cost-per-outcome figure that can be edited after the fact is not evidence of
+// anything. Definitions can be updated, since renaming what a unit is called
+// does not change what was counted.
 type OutcomesServiceServer interface {
+	// Declares a kind of business outcome, e.g. a shortlist or a finished report.
 	CreateOutcomeDefinition(context.Context, *CreateOutcomeDefinitionRequest) (*OutcomeDefinition, error)
+	// Returns a single outcome definition by resource name.
 	GetOutcomeDefinition(context.Context, *GetOutcomeDefinitionRequest) (*OutcomeDefinition, error)
+	// Updates an outcome definition.
 	UpdateOutcomeDefinition(context.Context, *UpdateOutcomeDefinitionRequest) (*OutcomeDefinition, error)
+	// Lists the outcome definitions declared by an organisation.
 	ListOutcomeDefinitions(context.Context, *ListOutcomeDefinitionsRequest) (*ListOutcomeDefinitionsResponse, error)
+	// Records that a request produced some number of outcomes.
 	CreateOutcome(context.Context, *CreateOutcomeRequest) (*Outcome, error)
+	// Lists recorded outcomes.
 	ListOutcomes(context.Context, *ListOutcomesRequest) (*ListOutcomesResponse, error)
 	mustEmbedUnimplementedOutcomesServiceServer()
 }

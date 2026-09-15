@@ -40,7 +40,7 @@ func reported(t *testing.T, ctx context.Context, record func(*Reporter)) *pb.Act
 }
 
 func TestAServiceReportsWithoutNamingWhatItAlreadyToldUs(t *testing.T) {
-	ctx := WithSession(WithUser(WithRequest(context.Background(), "requests/abc"), "users/7"), "sessions/9")
+	ctx := WithSession(WithUser(WithRequest(context.Background(), "requests/abc"), User{ID: "7"}), "sessions/9")
 
 	got := reported(t, ctx, func(rp *Reporter) {
 		rp.ModelCall(ctx, ModelCall{Model: "gemini-2.5-pro", Component: "asset_summary"})
@@ -53,7 +53,7 @@ func TestAServiceReportsWithoutNamingWhatItAlreadyToldUs(t *testing.T) {
 		"model":     {got.GetModel(), "gemini-2.5-pro"},
 		"component": {got.GetCallerComponent(), "asset_summary"},
 		"request":   {got.GetRequest(), "requests/abc"},
-		"user":      {got.GetUser(), "users/7"},
+		"user":      {got.GetUser(), "7"},
 		"session":   {got.GetSession(), "sessions/9"},
 	} {
 		if pair[0] != pair[1] {

@@ -30,12 +30,52 @@ const (
 // ActivitiesServiceClient is the client API for ActivitiesService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ActivitiesService records and reads what agents spent.
+//
+// An `Activity` is one priced unit of agent work — typically a single model
+// call, but also a tool call or any other charge an agent incurs. The service
+// is the system of record for spend: recorders write activities as work
+// happens, a nightly reconciliation corrects the cost against the real
+// invoice, and dashboards read aggregates back.
+//
+// Activities never carry content. Prompt text, completions, tool arguments and
+// exception messages are deliberately absent from this contract, because
+// exception messages in particular tend to embed prompt fragments. Only
+// counts, identifiers, timings and status codes are recorded.
+//
+// Activities are append-only. There is deliberately no delete or update
+// method: the record is what spend was reported, and correcting it would
+// destroy the audit trail. Reconciliation adds the billed figure server-side,
+// and retention is handled by a time-to-live policy rather than by callers.
 type ActivitiesServiceClient interface {
+	// Creates a single activity.
+	//
+	// The server prices the activity from the rate card in force at
+	// `occurred_at` and populates `estimated_cost_micros`; a client-supplied
+	// cost is ignored. Callers are recorders embedded in agents, so this method
+	// is expected to be called at high volume and to be cheap.
 	CreateActivity(ctx context.Context, in *CreateActivityRequest, opts ...grpc.CallOption) (*Activity, error)
+	// Creates several activities in one call.
+	//
+	// The normal path for a recorder that batches. The whole batch is priced and
+	// written together; if any activity is invalid the entire batch is rejected
+	// so a caller never has to reason about partial writes.
 	BatchCreateActivities(ctx context.Context, in *BatchCreateActivitiesRequest, opts ...grpc.CallOption) (*BatchCreateActivitiesResponse, error)
+	// Returns a single activity by resource name.
 	GetActivity(ctx context.Context, in *GetActivityRequest, opts ...grpc.CallOption) (*Activity, error)
+	// Lists activities under an organisation, most recent first by default.
 	ListActivities(ctx context.Context, in *ListActivitiesRequest, opts ...grpc.CallOption) (*ListActivitiesResponse, error)
+	// Returns spend grouped by one or more dimensions.
+	//
+	// This is what cost dashboards read. Results are always confined to the
+	// organisation named in `parent`; the organisation is never taken from
+	// `filter`, so a caller cannot widen its own scope.
 	AggregateActivities(ctx context.Context, in *AggregateActivitiesRequest, opts ...grpc.CallOption) (*AggregateActivitiesResponse, error)
+	// Streams activities under an organisation.
+	//
+	// For exports and backfills, where a paginated list would require the caller
+	// to hold a cursor across a long run.
 	StreamListActivities(ctx context.Context, in *StreamListActivitiesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Activity], error)
 }
 
@@ -119,12 +159,52 @@ type ActivitiesService_StreamListActivitiesClient = grpc.ServerStreamingClient[A
 // ActivitiesServiceServer is the server API for ActivitiesService service.
 // All implementations must embed UnimplementedActivitiesServiceServer
 // for forward compatibility.
+//
+// ActivitiesService records and reads what agents spent.
+//
+// An `Activity` is one priced unit of agent work — typically a single model
+// call, but also a tool call or any other charge an agent incurs. The service
+// is the system of record for spend: recorders write activities as work
+// happens, a nightly reconciliation corrects the cost against the real
+// invoice, and dashboards read aggregates back.
+//
+// Activities never carry content. Prompt text, completions, tool arguments and
+// exception messages are deliberately absent from this contract, because
+// exception messages in particular tend to embed prompt fragments. Only
+// counts, identifiers, timings and status codes are recorded.
+//
+// Activities are append-only. There is deliberately no delete or update
+// method: the record is what spend was reported, and correcting it would
+// destroy the audit trail. Reconciliation adds the billed figure server-side,
+// and retention is handled by a time-to-live policy rather than by callers.
 type ActivitiesServiceServer interface {
+	// Creates a single activity.
+	//
+	// The server prices the activity from the rate card in force at
+	// `occurred_at` and populates `estimated_cost_micros`; a client-supplied
+	// cost is ignored. Callers are recorders embedded in agents, so this method
+	// is expected to be called at high volume and to be cheap.
 	CreateActivity(context.Context, *CreateActivityRequest) (*Activity, error)
+	// Creates several activities in one call.
+	//
+	// The normal path for a recorder that batches. The whole batch is priced and
+	// written together; if any activity is invalid the entire batch is rejected
+	// so a caller never has to reason about partial writes.
 	BatchCreateActivities(context.Context, *BatchCreateActivitiesRequest) (*BatchCreateActivitiesResponse, error)
+	// Returns a single activity by resource name.
 	GetActivity(context.Context, *GetActivityRequest) (*Activity, error)
+	// Lists activities under an organisation, most recent first by default.
 	ListActivities(context.Context, *ListActivitiesRequest) (*ListActivitiesResponse, error)
+	// Returns spend grouped by one or more dimensions.
+	//
+	// This is what cost dashboards read. Results are always confined to the
+	// organisation named in `parent`; the organisation is never taken from
+	// `filter`, so a caller cannot widen its own scope.
 	AggregateActivities(context.Context, *AggregateActivitiesRequest) (*AggregateActivitiesResponse, error)
+	// Streams activities under an organisation.
+	//
+	// For exports and backfills, where a paginated list would require the caller
+	// to hold a cursor across a long run.
 	StreamListActivities(*StreamListActivitiesRequest, grpc.ServerStreamingServer[Activity]) error
 	mustEmbedUnimplementedActivitiesServiceServer()
 }

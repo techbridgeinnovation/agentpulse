@@ -14,6 +14,11 @@ type Recorder struct {
 	config Config
 	queue  chan *pb.Activity
 
+	// names carries people to name, apart from the records so a burst of
+	// either cannot crowd out the other, and seen is what was last sent.
+	names chan User
+	seen  *seenNames
+
 	counters Counters
 	totals   *runningTotals
 	rates    *rateCache
@@ -50,6 +55,19 @@ type Counters struct {
 	//
 	// Above zero and still climbing means the running total is being priced against a card that is going stale, or against no card at all if none ever arrived. Both read as an agent spending nothing, which is exactly the shape of silence this counter exists to break.
 	RateFetchErrors atomic.Int64
+
+	// Named counts every person queued for the directory: once per person
+	// per process, and again when their name changes.
+	Named atomic.Int64
+
+	// NamesDropped counts people not queued because the queue was full.
+	// They are tried again the next time they act.
+	NamesDropped atomic.Int64
+
+	// NamesFailed counts people a sink could not name, and identifiers that
+	// cannot be named at all because they hold a slash. Above zero means a
+	// report is showing an identifier where a name was given.
+	NamesFailed atomic.Int64
 }
 
 // Stats is a snapshot of the counters.
@@ -76,6 +94,12 @@ type Stats struct {
 	RateFetchErrors int64
 	// TotalsEvicted is how many running totals were dropped because more requests were in flight at once than the recorder keeps totals for. Above zero means SpentOn is an undercount for some request that is still running.
 	TotalsEvicted int64
+	// Named is how many people were queued for the directory. See Counters.Named.
+	Named int64
+	// NamesDropped is how many people were not queued because the queue was full.
+	NamesDropped int64
+	// NamesFailed is how many people could not be named. See Counters.NamesFailed.
+	NamesFailed int64
 }
 
 // New starts a recorder. It never returns an error: a recorder that cannot be
@@ -85,6 +109,8 @@ func New(config Config) *Recorder {
 	r := &Recorder{
 		config:  config,
 		queue:   make(chan *pb.Activity, config.QueueSize),
+		names:   make(chan User, config.QueueSize),
+		seen:    newSeenNames(),
 		totals:  newRunningTotals(),
 		done:    make(chan struct{}),
 		stopped: make(chan struct{}),
@@ -135,6 +161,9 @@ func (r *Recorder) Stats() Stats {
 		DecisionErrors:  r.counters.DecisionErrors.Load(),
 		RateFetchErrors: r.counters.RateFetchErrors.Load(),
 		TotalsEvicted:   r.totals.evictedCount(),
+		Named:           r.counters.Named.Load(),
+		NamesDropped:    r.counters.NamesDropped.Load(),
+		NamesFailed:     r.counters.NamesFailed.Load(),
 	}
 }
 
@@ -194,6 +223,7 @@ func (r *Recorder) run() {
 	defer ticker.Stop()
 
 	batch := make([]*pb.Activity, 0, r.config.BatchSize)
+	people := make([]User, 0, r.config.BatchSize)
 
 	for {
 		select {
@@ -204,10 +234,21 @@ func (r *Recorder) run() {
 				batch = batch[:0]
 			}
 
+		case user := <-r.names:
+			people = append(people, user)
+			if len(people) >= r.config.BatchSize {
+				r.deliverNames(people)
+				people = people[:0]
+			}
+
 		case <-ticker.C:
 			if len(batch) > 0 {
 				r.deliver(batch)
 				batch = batch[:0]
+			}
+			if len(people) > 0 {
+				r.deliverNames(people)
+				people = people[:0]
 			}
 
 		case <-r.done:
@@ -221,12 +262,22 @@ func (r *Recorder) run() {
 						batch = batch[:0]
 					}
 					continue
+				case user := <-r.names:
+					people = append(people, user)
+					if len(people) >= r.config.BatchSize {
+						r.deliverNames(people)
+						people = people[:0]
+					}
+					continue
 				default:
 				}
 				break
 			}
 			if len(batch) > 0 {
 				r.deliver(batch)
+			}
+			if len(people) > 0 {
+				r.deliverNames(people)
 			}
 			return
 		}

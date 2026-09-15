@@ -92,6 +92,14 @@ agentConfig := llmagent.Config{
 
 `Model` is named because a streamed answer arrives in pieces the framework assembles into one summary that carries token counts but not the model. Pricing looks a rate up by model.
 
+The framework's own user id is an identifier and nothing more. To have a cost report say who spent what by name, set the person on the context before the runner is invoked, where the sign-in has been checked; it wins over the framework's id, and the name goes once to the directory rather than on every record:
+
+```go
+ctx = recorder.WithUser(ctx, recorder.User{ID: claims.Subject, Name: claims.Name, Email: claims.Email})
+```
+
+`ID` is the bare identifier the sign-in issued — `8c21e0b4`, not `users/8c21e0b4` — because it becomes the last segment of the directory row's name. `Name` and `Email` are optional; with only `ID` the person is recorded and not named.
+
 On ADK v1 the same three functions live in `recorder/adkhooks` with `adkhooks.Options`.
 
 ## Step 4b: reporter path (no framework)
@@ -106,10 +114,14 @@ reporter := rec.For(recorder.Attribution{
 })
 ```
 
-Once per request, where the request arrives, so everything recorded under it groups together:
+Once per request, where the request arrives and the sign-in has been checked, so everything recorded under it groups together and the person can be named:
 
 ```go
-ctx = recorder.WithUser(recorder.WithRequest(ctx, requestID), userID)
+ctx = recorder.WithUser(recorder.WithRequest(ctx, requestID), recorder.User{
+	ID:    claims.Subject, // bare identifier, no users/ prefix
+	Name:  claims.Name,    // optional
+	Email: claims.Email,   // optional
+})
 ```
 
 At each model call:

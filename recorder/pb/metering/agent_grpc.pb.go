@@ -28,10 +28,20 @@ const (
 // AgentsServiceClient is the client API for AgentsService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// AgentsService registers the agents whose spend is recorded.
+//
+// An agent is a registered resource rather than a free string on an activity,
+// so that every figure in a cost report attributes to something with a known
+// owner. Registration happens once per agent, not per call.
 type AgentsServiceClient interface {
+	// Registers a new agent.
 	CreateAgent(ctx context.Context, in *CreateAgentRequest, opts ...grpc.CallOption) (*Agent, error)
+	// Returns a single agent by resource name.
 	GetAgent(ctx context.Context, in *GetAgentRequest, opts ...grpc.CallOption) (*Agent, error)
+	// Updates an agent, typically to add a component or change its owner.
 	UpdateAgent(ctx context.Context, in *UpdateAgentRequest, opts ...grpc.CallOption) (*Agent, error)
+	// Lists the agents registered to an organisation.
 	ListAgents(ctx context.Context, in *ListAgentsRequest, opts ...grpc.CallOption) (*ListAgentsResponse, error)
 }
 
@@ -86,10 +96,20 @@ func (c *agentsServiceClient) ListAgents(ctx context.Context, in *ListAgentsRequ
 // AgentsServiceServer is the server API for AgentsService service.
 // All implementations must embed UnimplementedAgentsServiceServer
 // for forward compatibility.
+//
+// AgentsService registers the agents whose spend is recorded.
+//
+// An agent is a registered resource rather than a free string on an activity,
+// so that every figure in a cost report attributes to something with a known
+// owner. Registration happens once per agent, not per call.
 type AgentsServiceServer interface {
+	// Registers a new agent.
 	CreateAgent(context.Context, *CreateAgentRequest) (*Agent, error)
+	// Returns a single agent by resource name.
 	GetAgent(context.Context, *GetAgentRequest) (*Agent, error)
+	// Updates an agent, typically to add a component or change its owner.
 	UpdateAgent(context.Context, *UpdateAgentRequest) (*Agent, error)
+	// Lists the agents registered to an organisation.
 	ListAgents(context.Context, *ListAgentsRequest) (*ListAgentsResponse, error)
 	mustEmbedUnimplementedAgentsServiceServer()
 }

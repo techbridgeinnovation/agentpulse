@@ -3,17 +3,17 @@
 // Source: techbridge/ap/metering/v1/priceable_unit.proto
 // Plugin version: v0.0.1
 //
-// Generated on: 2026-09-03 14:32:42 UTC
+// Generated on: 2026-09-15 11:20:12 UTC
 
 package metering
 
 const (
 	// PriceableUnitsService_CreatePriceableUnit_FullMethodDescription returns the description of the techbridge.ap.metering.v1.PriceableUnitsService.CreatePriceableUnit method.
-	PriceableUnitsService_CreatePriceableUnit_FullMethodDescription = ""
+	PriceableUnitsService_CreatePriceableUnit_FullMethodDescription = "Adds a rate to the rate card."
 	// PriceableUnitsService_GetPriceableUnit_FullMethodDescription returns the description of the techbridge.ap.metering.v1.PriceableUnitsService.GetPriceableUnit method.
-	PriceableUnitsService_GetPriceableUnit_FullMethodDescription = ""
+	PriceableUnitsService_GetPriceableUnit_FullMethodDescription = "Returns a single priceable unit by resource name."
 	// PriceableUnitsService_UpdatePriceableUnit_FullMethodDescription returns the description of the techbridge.ap.metering.v1.PriceableUnitsService.UpdatePriceableUnit method.
-	PriceableUnitsService_UpdatePriceableUnit_FullMethodDescription = ""
+	PriceableUnitsService_UpdatePriceableUnit_FullMethodDescription = "Updates a priceable unit. Correcting a mistake is the intended use;\n a price change should be a new unit with a later `effective_from`."
 	// PriceableUnitsService_ListPriceableUnits_FullMethodDescription returns the description of the techbridge.ap.metering.v1.PriceableUnitsService.ListPriceableUnits method.
-	PriceableUnitsService_ListPriceableUnits_FullMethodDescription = ""
+	PriceableUnitsService_ListPriceableUnits_FullMethodDescription = "Lists the rate card."
 )

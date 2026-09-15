@@ -24,14 +24,26 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// A kind of business outcome an organisation counts.
 type OutcomeDefinition struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	Unit          string                 `protobuf:"bytes,4,opt,name=unit,proto3" json:"unit,omitempty"`
-	Etag          string                 `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
-	CreateTime    *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the outcome definition.
+	// Format: `organisations/{organisation}/outcomeDefinitions/{outcome_definition}`
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Human-readable name, e.g. `Candidate shortlist`.
+	DisplayName string `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// What one of these is, in the product's own words. Read by whoever
+	// interprets a cost-per-outcome figure, so it should say plainly what was
+	// counted.
+	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	// The singular noun for one unit, used when a figure is displayed,
+	// e.g. `shortlist` renders as `cost per shortlist`.
+	Unit string `protobuf:"bytes,4,opt,name=unit,proto3" json:"unit,omitempty"`
+	// Entity tag.
+	Etag string `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
+	// When this definition was created.
+	CreateTime *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
+	// When this definition was last updated.
 	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,99,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -116,18 +128,33 @@ func (x *OutcomeDefinition) GetUpdateTime() *timestamppb.Timestamp {
 	return nil
 }
 
+// A count of business outcomes produced by one request.
 type Outcome struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Name              string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	OutcomeDefinition string                 `protobuf:"bytes,2,opt,name=outcome_definition,json=outcomeDefinition,proto3" json:"outcome_definition,omitempty"`
-	Request           string                 `protobuf:"bytes,3,opt,name=request,proto3" json:"request,omitempty"`
-	Quantity          int64                  `protobuf:"varint,4,opt,name=quantity,proto3" json:"quantity,omitempty"`
-	OccurredAt        *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
-	Etag              string                 `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
-	CreateTime        *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
-	UpdateTime        *timestamppb.Timestamp `protobuf:"bytes,99,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the outcome.
+	// Format: `organisations/{organisation}/outcomes/{outcome}`
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The kind of outcome being counted.
+	// Format: `organisations/{organisation}/outcomeDefinitions/{outcome_definition}`
+	OutcomeDefinition string `protobuf:"bytes,2,opt,name=outcome_definition,json=outcomeDefinition,proto3" json:"outcome_definition,omitempty"`
+	// The request that produced it, matching `Activity.request`.
+	//
+	// The join between work done and money spent. A request with no outcome
+	// recorded simply has no cost-per-outcome figure; it is not an error.
+	Request string `protobuf:"bytes,3,opt,name=request,proto3" json:"request,omitempty"`
+	// How many were produced, e.g. `12` candidates on one shortlist. Zero is
+	// meaningful: it records a request that produced nothing.
+	Quantity int64 `protobuf:"varint,4,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	// When the outcome was produced.
+	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	// Entity tag.
+	Etag string `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
+	// When this outcome was recorded.
+	CreateTime *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
+	// When this outcome was last updated.
+	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,99,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Outcome) Reset() {
@@ -216,11 +243,17 @@ func (x *Outcome) GetUpdateTime() *timestamppb.Timestamp {
 	return nil
 }
 
+// Request for [OutcomesService.CreateOutcomeDefinition].
 type CreateOutcomeDefinitionRequest struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Parent              string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	OutcomeDefinition   *OutcomeDefinition     `protobuf:"bytes,2,opt,name=outcome_definition,json=outcomeDefinition,proto3" json:"outcome_definition,omitempty"`
-	OutcomeDefinitionId string                 `protobuf:"bytes,3,opt,name=outcome_definition_id,json=outcomeDefinitionId,proto3" json:"outcome_definition_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation to declare the definition under.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// The definition to create.
+	OutcomeDefinition *OutcomeDefinition `protobuf:"bytes,2,opt,name=outcome_definition,json=outcomeDefinition,proto3" json:"outcome_definition,omitempty"`
+	// Optional caller-chosen identifier, used as the last segment of the
+	// resource name. Assigned by the server when omitted.
+	OutcomeDefinitionId string `protobuf:"bytes,3,opt,name=outcome_definition_id,json=outcomeDefinitionId,proto3" json:"outcome_definition_id,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -276,9 +309,12 @@ func (x *CreateOutcomeDefinitionRequest) GetOutcomeDefinitionId() string {
 	return ""
 }
 
+// Request for [OutcomesService.GetOutcomeDefinition].
 type GetOutcomeDefinitionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the definition to retrieve.
+	// Format: `organisations/{organisation}/outcomeDefinitions/{outcome_definition}`
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -320,12 +356,15 @@ func (x *GetOutcomeDefinitionRequest) GetName() string {
 	return ""
 }
 
+// Request for [OutcomesService.UpdateOutcomeDefinition].
 type UpdateOutcomeDefinitionRequest struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	OutcomeDefinition *OutcomeDefinition     `protobuf:"bytes,1,opt,name=outcome_definition,json=outcomeDefinition,proto3" json:"outcome_definition,omitempty"`
-	UpdateMask        *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The definition to update.
+	OutcomeDefinition *OutcomeDefinition `protobuf:"bytes,1,opt,name=outcome_definition,json=outcomeDefinition,proto3" json:"outcome_definition,omitempty"`
+	// The fields to update.
+	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateOutcomeDefinitionRequest) Reset() {
@@ -372,11 +411,16 @@ func (x *UpdateOutcomeDefinitionRequest) GetUpdateMask() *fieldmaskpb.FieldMask 
 	return nil
 }
 
+// Request for [OutcomesService.ListOutcomeDefinitions].
 type ListOutcomeDefinitionsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation whose definitions to list.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// Maximum definitions to return. Defaults to `100`, capped at `1000`.
+	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// A page token from a previous response, to retrieve the next page.
+	PageToken     string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -432,12 +476,15 @@ func (x *ListOutcomeDefinitionsRequest) GetPageToken() string {
 	return ""
 }
 
+// Response for [OutcomesService.ListOutcomeDefinitions].
 type ListOutcomeDefinitionsResponse struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	OutcomeDefinitions []*OutcomeDefinition   `protobuf:"bytes,1,rep,name=outcome_definitions,json=outcomeDefinitions,proto3" json:"outcome_definitions,omitempty"`
-	NextPageToken      string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The definitions in this page.
+	OutcomeDefinitions []*OutcomeDefinition `protobuf:"bytes,1,rep,name=outcome_definitions,json=outcomeDefinitions,proto3" json:"outcome_definitions,omitempty"`
+	// Token to retrieve the next page, empty when there are no more.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListOutcomeDefinitionsResponse) Reset() {
@@ -484,11 +531,17 @@ func (x *ListOutcomeDefinitionsResponse) GetNextPageToken() string {
 	return ""
 }
 
+// Request for [OutcomesService.CreateOutcome].
 type CreateOutcomeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	Outcome       *Outcome               `protobuf:"bytes,2,opt,name=outcome,proto3" json:"outcome,omitempty"`
-	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation the outcome belongs to.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// The outcome to record.
+	Outcome *Outcome `protobuf:"bytes,2,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	// Optional caller-supplied identifier that makes the write idempotent, so a
+	// retried call does not count the same outcome twice.
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -544,12 +597,21 @@ func (x *CreateOutcomeRequest) GetRequestId() string {
 	return ""
 }
 
+// Request for [OutcomesService.ListOutcomes].
 type ListOutcomesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
-	Filter        string                 `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation whose outcomes to list.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// Maximum outcomes to return. Defaults to `100`, capped at `1000`.
+	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// A page token from a previous response, to retrieve the next page.
+	PageToken string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// Optional filter over the fields of `Outcome`, e.g.
+	// `outcome_definition = "organisations/acme/outcomeDefinitions/shortlist"`.
+	//
+	// Cannot widen the organisation: scope always comes from `parent`.
+	Filter        string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -612,10 +674,13 @@ func (x *ListOutcomesRequest) GetFilter() string {
 	return ""
 }
 
+// Response for [OutcomesService.ListOutcomes].
 type ListOutcomesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Outcomes      []*Outcome             `protobuf:"bytes,1,rep,name=outcomes,proto3" json:"outcomes,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The outcomes in this page.
+	Outcomes []*Outcome `protobuf:"bytes,1,rep,name=outcomes,proto3" json:"outcomes,omitempty"`
+	// Token to retrieve the next page, empty when there are no more.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

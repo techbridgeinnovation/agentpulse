@@ -24,16 +24,24 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// What a rate is charged against.
 type PriceableUnit_Kind int32
 
 const (
-	PriceableUnit_KIND_UNSPECIFIED   PriceableUnit_Kind = 0
-	PriceableUnit_PROMPT_TOKENS      PriceableUnit_Kind = 1
-	PriceableUnit_CANDIDATE_TOKENS   PriceableUnit_Kind = 2
-	PriceableUnit_CACHED_TOKENS      PriceableUnit_Kind = 3
+	// Kind not specified.
+	PriceableUnit_KIND_UNSPECIFIED PriceableUnit_Kind = 0
+	// Tokens in the prompt.
+	PriceableUnit_PROMPT_TOKENS PriceableUnit_Kind = 1
+	// Tokens the model generated.
+	PriceableUnit_CANDIDATE_TOKENS PriceableUnit_Kind = 2
+	// Prompt tokens served from the provider's cache.
+	PriceableUnit_CACHED_TOKENS PriceableUnit_Kind = 3
+	// Prompt tokens written to the provider's cache.
 	PriceableUnit_CACHE_WRITE_TOKENS PriceableUnit_Kind = 4
-	PriceableUnit_REASONING_TOKENS   PriceableUnit_Kind = 5
-	PriceableUnit_REQUEST            PriceableUnit_Kind = 6
+	// Tokens the model spent reasoning.
+	PriceableUnit_REASONING_TOKENS PriceableUnit_Kind = 5
+	// A whole request, e.g. one web search.
+	PriceableUnit_REQUEST PriceableUnit_Kind = 6
 )
 
 // Enum value maps for PriceableUnit_Kind.
@@ -85,25 +93,55 @@ func (PriceableUnit_Kind) EnumDescriptor() ([]byte, []int) {
 	return file_techbridge_ap_metering_v1_priceable_unit_proto_rawDescGZIP(), []int{0, 0}
 }
 
+// One line of the rate card.
 type PriceableUnit struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Provider    string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
-	Model       string                 `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
-	Kind        PriceableUnit_Kind     `protobuf:"varint,5,opt,name=kind,proto3,enum=techbridge.ap.metering.v1.PriceableUnit_Kind" json:"kind,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the priceable unit.
+	// Format: `priceableUnits/{priceable_unit}`
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Human-readable name, e.g. `Gemini 2.5 Pro output tokens`.
+	DisplayName string `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// The provider that charges for it.
+	Provider string `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	// The model this rate applies to, where the charge is per model. Empty for a
+	// charge that is not model-specific, such as a web search.
+	Model string `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
+	// What is being counted.
+	Kind PriceableUnit_Kind `protobuf:"varint,5,opt,name=kind,proto3,enum=techbridge.ap.metering.v1.PriceableUnit_Kind" json:"kind,omitempty"`
+	// Deprecated: too coarse to hold a real rate. Use `unit_cost_nanos`.
+	//
+	// A single token often costs a fraction of one millionth of a dollar —
+	// Gemini input is 1.25 millionths — so a whole number of millionths cannot
+	// express it and rounds every such rate down. Left in place rather than
+	// removed, and never read.
+	//
 	// Deprecated: Marked as deprecated in techbridge/ap/metering/v1/priceable_unit.proto.
-	UnitCostMicros  int64                  `protobuf:"varint,6,opt,name=unit_cost_micros,json=unitCostMicros,proto3" json:"unit_cost_micros,omitempty"`
-	UnitCostNanos   int64                  `protobuf:"varint,11,opt,name=unit_cost_nanos,json=unitCostNanos,proto3" json:"unit_cost_nanos,omitempty"`
-	EffectiveFrom   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=effective_from,json=effectiveFrom,proto3" json:"effective_from,omitempty"`
-	EffectiveTo     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=effective_to,json=effectiveTo,proto3" json:"effective_to,omitempty"`
-	RateCardVersion string                 `protobuf:"bytes,9,opt,name=rate_card_version,json=rateCardVersion,proto3" json:"rate_card_version,omitempty"`
-	Source          string                 `protobuf:"bytes,10,opt,name=source,proto3" json:"source,omitempty"`
-	Etag            string                 `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
-	CreateTime      *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
-	UpdateTime      *timestamppb.Timestamp `protobuf:"bytes,99,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	UnitCostMicros int64 `protobuf:"varint,6,opt,name=unit_cost_micros,json=unitCostMicros,proto3" json:"unit_cost_micros,omitempty"`
+	// Cost of one unit, in billionths of a US dollar.
+	//
+	// Billionths rather than millionths because a per-token rate is routinely a
+	// fraction of a millionth, and rounding one to a whole millionth undercounts
+	// every token priced against it. An activity's cost is still stored in
+	// millionths; the extra precision belongs to the rate, not to the money.
+	UnitCostNanos int64 `protobuf:"varint,11,opt,name=unit_cost_nanos,json=unitCostNanos,proto3" json:"unit_cost_nanos,omitempty"`
+	// When this rate takes effect, inclusive.
+	EffectiveFrom *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=effective_from,json=effectiveFrom,proto3" json:"effective_from,omitempty"`
+	// When this rate stops applying, exclusive. Empty while it is current.
+	EffectiveTo *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=effective_to,json=effectiveTo,proto3" json:"effective_to,omitempty"`
+	// The rate card version this belongs to, recorded on every activity priced
+	// with it, e.g. `2026-09`.
+	RateCardVersion string `protobuf:"bytes,9,opt,name=rate_card_version,json=rateCardVersion,proto3" json:"rate_card_version,omitempty"`
+	// Where the rate came from, e.g. a link to the provider's public price list.
+	// Kept so a figure can be traced back to a published price.
+	Source string `protobuf:"bytes,10,opt,name=source,proto3" json:"source,omitempty"`
+	// Entity tag.
+	Etag string `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
+	// When this rate was created.
+	CreateTime *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
+	// When this rate was last updated.
+	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,99,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PriceableUnit) Reset() {
@@ -235,10 +273,14 @@ func (x *PriceableUnit) GetUpdateTime() *timestamppb.Timestamp {
 	return nil
 }
 
+// Request for [PriceableUnitsService.CreatePriceableUnit].
 type CreatePriceableUnitRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	PriceableUnit   *PriceableUnit         `protobuf:"bytes,1,opt,name=priceable_unit,json=priceableUnit,proto3" json:"priceable_unit,omitempty"`
-	PriceableUnitId string                 `protobuf:"bytes,2,opt,name=priceable_unit_id,json=priceableUnitId,proto3" json:"priceable_unit_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The priceable unit to create.
+	PriceableUnit *PriceableUnit `protobuf:"bytes,1,opt,name=priceable_unit,json=priceableUnit,proto3" json:"priceable_unit,omitempty"`
+	// Optional caller-chosen identifier, used as the last segment of the
+	// resource name. Assigned by the server when omitted.
+	PriceableUnitId string `protobuf:"bytes,2,opt,name=priceable_unit_id,json=priceableUnitId,proto3" json:"priceable_unit_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -287,9 +329,12 @@ func (x *CreatePriceableUnitRequest) GetPriceableUnitId() string {
 	return ""
 }
 
+// Request for [PriceableUnitsService.GetPriceableUnit].
 type GetPriceableUnitRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the priceable unit to retrieve.
+	// Format: `priceableUnits/{priceable_unit}`
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -331,9 +376,12 @@ func (x *GetPriceableUnitRequest) GetName() string {
 	return ""
 }
 
+// Request for [PriceableUnitsService.UpdatePriceableUnit].
 type UpdatePriceableUnitRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PriceableUnit *PriceableUnit         `protobuf:"bytes,1,opt,name=priceable_unit,json=priceableUnit,proto3" json:"priceable_unit,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The priceable unit to update.
+	PriceableUnit *PriceableUnit `protobuf:"bytes,1,opt,name=priceable_unit,json=priceableUnit,proto3" json:"priceable_unit,omitempty"`
+	// The fields to update.
 	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -383,11 +431,16 @@ func (x *UpdatePriceableUnitRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
 	return nil
 }
 
+// Request for [PriceableUnitsService.ListPriceableUnits].
 type ListPriceableUnitsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PageSize      int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
-	Filter        string                 `protobuf:"bytes,3,opt,name=filter,proto3" json:"filter,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Maximum priceable units to return. Defaults to `100`, capped at `1000`.
+	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// A page token from a previous response, to retrieve the next page.
+	PageToken string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// Optional filter over the fields of `PriceableUnit`, e.g.
+	// `provider = "VERTEX_AI" AND kind = CANDIDATE_TOKENS`.
+	Filter        string `protobuf:"bytes,3,opt,name=filter,proto3" json:"filter,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -443,12 +496,15 @@ func (x *ListPriceableUnitsRequest) GetFilter() string {
 	return ""
 }
 
+// Response for [PriceableUnitsService.ListPriceableUnits].
 type ListPriceableUnitsResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	PriceableUnits []*PriceableUnit       `protobuf:"bytes,1,rep,name=priceable_units,json=priceableUnits,proto3" json:"priceable_units,omitempty"`
-	NextPageToken  string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The priceable units in this page.
+	PriceableUnits []*PriceableUnit `protobuf:"bytes,1,rep,name=priceable_units,json=priceableUnits,proto3" json:"priceable_units,omitempty"`
+	// Token to retrieve the next page, empty when there are no more.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListPriceableUnitsResponse) Reset() {

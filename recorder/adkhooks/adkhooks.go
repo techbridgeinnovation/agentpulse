@@ -29,9 +29,9 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -132,6 +132,25 @@ func requestOf(ctx agent.ReadonlyContext) string {
 	return ctx.InvocationID()
 }
 
+// userOf returns the person the turn is for, and names them.
+//
+// A user set explicitly on the context wins, for the same reason a request does: it is what the product's own sign-in check put there, name and all. Otherwise the framework's user id is used, which is an identifier and nothing more.
+func userOf(r *recorder.Recorder, ctx agent.ReadonlyContext) string {
+	if user := recorder.UserFrom(ctx); user.ID != "" {
+		r.NoteUser(user)
+		return user.ID
+	}
+	return ctx.UserID()
+}
+
+// userIDOf is userOf for the places that label or ask rather than record, where naming someone would be a side effect of the wrong call.
+func userIDOf(ctx agent.ReadonlyContext) string {
+	if user := recorder.UserFrom(ctx); user.ID != "" {
+		return user.ID
+	}
+	return ctx.UserID()
+}
+
 // AfterModel records one activity per model call.
 //
 // Per call rather than per turn: a turn makes as many calls as the loop needs,
@@ -158,7 +177,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			Agent:           opts.Agent,
 			Request:         requestOf(ctx),
 			Session:         ctx.SessionID(),
-			User:            ctx.UserID(),
+			User:            userOf(r, ctx),
 			CallerService:   opts.Service,
 			CallerComponent: componentOf(ctx),
 			Skill:           opts.Skill,
@@ -197,7 +216,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			Agent:           opts.Agent,
 			Request:         requestOf(ctx),
 			Session:         ctx.SessionID(),
-			User:            ctx.UserID(),
+			User:            userOf(r, ctx),
 			CallerService:   opts.Service,
 			CallerComponent: "tool:" + name,
 			Skill:           opts.Skill,
@@ -258,7 +277,7 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 		inFlight.requested(callKey(ctx), request.Model)
 
 		labels := map[string]string{}
-		if user := labelValue(ctx.UserID()); user != "" {
+		if user := labelValue(userIDOf(ctx)); user != "" {
 			labels["ap_user"] = user
 		}
 		if component := labelValue(componentOf(ctx)); component != "" {
@@ -315,7 +334,7 @@ func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decid
 		Parent:  organisation,
 		Agent:   opts.Agent,
 		Product: opts.Product,
-		User:    ctx.UserID(),
+		User:    userIDOf(ctx),
 	})
 	if err != nil {
 		r.NoteDecisionError()

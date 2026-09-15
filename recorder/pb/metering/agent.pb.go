@@ -24,16 +24,35 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// An agent whose spend is recorded.
 type Agent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Product       string                 `protobuf:"bytes,3,opt,name=product,proto3" json:"product,omitempty"`
-	Service       string                 `protobuf:"bytes,4,opt,name=service,proto3" json:"service,omitempty"`
-	Owner         string                 `protobuf:"bytes,5,opt,name=owner,proto3" json:"owner,omitempty"`
-	Components    []string               `protobuf:"bytes,6,rep,name=components,proto3" json:"components,omitempty"`
-	Etag          string                 `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
-	CreateTime    *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the agent.
+	// Format: `organisations/{organisation}/agents/{agent}`
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Human-readable name, e.g. `Atlas`.
+	DisplayName string `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// The product the agent belongs to, e.g. `rezco`, `dealade`, `voyage`.
+	Product string `protobuf:"bytes,3,opt,name=product,proto3" json:"product,omitempty"`
+	// The service the agent runs in, e.g. `atlas-agent`. Matches
+	// `Activity.caller_service` for activities this agent produces.
+	Service string `protobuf:"bytes,4,opt,name=service,proto3" json:"service,omitempty"`
+	// Who to ask about this agent's spend. A team name or a role, not a person,
+	// so it survives people changing jobs.
+	Owner string `protobuf:"bytes,5,opt,name=owner,proto3" json:"owner,omitempty"`
+	// The components this agent expects to report, e.g. `chat_turn`,
+	// `tool:web_search`.
+	//
+	// Advisory, not enforced. An activity naming a component that is not listed
+	// here is still recorded, and is counted in a drift report, so that a team
+	// adding a component never has a write rejected but a team whose components
+	// have quietly diverged can be told.
+	Components []string `protobuf:"bytes,6,rep,name=components,proto3" json:"components,omitempty"`
+	// Entity tag.
+	Etag string `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
+	// When this agent was registered.
+	CreateTime *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
+	// When this agent was last updated.
 	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,99,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -132,11 +151,17 @@ func (x *Agent) GetUpdateTime() *timestamppb.Timestamp {
 	return nil
 }
 
+// Request for [AgentsService.CreateAgent].
 type CreateAgentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	Agent         *Agent                 `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
-	AgentId       string                 `protobuf:"bytes,3,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation to register the agent under.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// The agent to register.
+	Agent *Agent `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
+	// Optional caller-chosen identifier for the agent, used as the last segment
+	// of its resource name. Assigned by the server when omitted.
+	AgentId       string `protobuf:"bytes,3,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -192,9 +217,12 @@ func (x *CreateAgentRequest) GetAgentId() string {
 	return ""
 }
 
+// Request for [AgentsService.GetAgent].
 type GetAgentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the agent to retrieve.
+	// Format: `organisations/{organisation}/agents/{agent}`
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -236,9 +264,12 @@ func (x *GetAgentRequest) GetName() string {
 	return ""
 }
 
+// Request for [AgentsService.UpdateAgent].
 type UpdateAgentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Agent         *Agent                 `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The agent to update.
+	Agent *Agent `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
+	// The fields to update.
 	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -288,11 +319,16 @@ func (x *UpdateAgentRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
 	return nil
 }
 
+// Request for [AgentsService.ListAgents].
 type ListAgentsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation whose agents to list.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// Maximum agents to return. Defaults to `100`, capped at `1000`.
+	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// A page token from a previous response, to retrieve the next page.
+	PageToken     string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -348,10 +384,13 @@ func (x *ListAgentsRequest) GetPageToken() string {
 	return ""
 }
 
+// Response for [AgentsService.ListAgents].
 type ListAgentsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Agents        []*Agent               `protobuf:"bytes,1,rep,name=agents,proto3" json:"agents,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The agents in this page.
+	Agents []*Agent `protobuf:"bytes,1,rep,name=agents,proto3" json:"agents,omitempty"`
+	// Token to retrieve the next page, empty when there are no more.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
