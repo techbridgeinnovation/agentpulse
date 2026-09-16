@@ -23,14 +23,21 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// The provider that billed for a call.
 type Activity_Provider int32
 
 const (
+	// Provider not specified.
 	Activity_PROVIDER_UNSPECIFIED Activity_Provider = 0
-	Activity_VERTEX_AI            Activity_Provider = 1
-	Activity_ANTHROPIC            Activity_Provider = 2
-	Activity_OPENAI               Activity_Provider = 3
-	Activity_PERPLEXITY           Activity_Provider = 4
+	// Google Vertex AI. The only provider whose charges can be reconciled
+	// against a Google invoice.
+	Activity_VERTEX_AI Activity_Provider = 1
+	// Anthropic, called directly rather than through Vertex AI.
+	Activity_ANTHROPIC Activity_Provider = 2
+	// OpenAI.
+	Activity_OPENAI Activity_Provider = 3
+	// Perplexity.
+	Activity_PERPLEXITY Activity_Provider = 4
 )
 
 // Enum value maps for Activity_Provider.
@@ -78,14 +85,24 @@ func (Activity_Provider) EnumDescriptor() ([]byte, []int) {
 	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{0, 0}
 }
 
+// How a call ended.
 type Activity_Status int32
 
 const (
+	// Status not specified.
 	Activity_STATUS_UNSPECIFIED Activity_Status = 0
-	Activity_OK                 Activity_Status = 1
-	Activity_FAILED             Activity_Status = 2
-	Activity_DENIED             Activity_Status = 3
-	Activity_TRUNCATED          Activity_Status = 4
+	// The call completed.
+	Activity_OK Activity_Status = 1
+	// The call failed. Cost is still recorded, because a provider charges for
+	// work done before a failure.
+	Activity_FAILED Activity_Status = 2
+	// The call was refused before it reached the provider, by a spend limit or
+	// a guardrail. Usually costs nothing, but is recorded so that refusals are
+	// countable.
+	Activity_DENIED Activity_Status = 3
+	// The call was cut short, by a token limit or a deadline. Partial work was
+	// done and is charged for.
+	Activity_TRUNCATED Activity_Status = 4
 )
 
 // Enum value maps for Activity_Status.
@@ -133,37 +150,128 @@ func (Activity_Status) EnumDescriptor() ([]byte, []int) {
 	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{0, 1}
 }
 
+// One priced unit of agent work.
 type Activity struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Name                string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Agent               string                 `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
-	Request             string                 `protobuf:"bytes,3,opt,name=request,proto3" json:"request,omitempty"`
-	Session             string                 `protobuf:"bytes,4,opt,name=session,proto3" json:"session,omitempty"`
-	User                string                 `protobuf:"bytes,5,opt,name=user,proto3" json:"user,omitempty"`
-	CallerService       string                 `protobuf:"bytes,6,opt,name=caller_service,json=callerService,proto3" json:"caller_service,omitempty"`
-	CallerComponent     string                 `protobuf:"bytes,7,opt,name=caller_component,json=callerComponent,proto3" json:"caller_component,omitempty"`
-	Skill               string                 `protobuf:"bytes,8,opt,name=skill,proto3" json:"skill,omitempty"`
-	Model               string                 `protobuf:"bytes,9,opt,name=model,proto3" json:"model,omitempty"`
-	Provider            Activity_Provider      `protobuf:"varint,10,opt,name=provider,proto3,enum=techbridge.ap.metering.v1.Activity_Provider" json:"provider,omitempty"`
-	PromptTokens        int32                  `protobuf:"varint,11,opt,name=prompt_tokens,json=promptTokens,proto3" json:"prompt_tokens,omitempty"`
-	CandidateTokens     int32                  `protobuf:"varint,12,opt,name=candidate_tokens,json=candidateTokens,proto3" json:"candidate_tokens,omitempty"`
-	CachedTokens        int32                  `protobuf:"varint,13,opt,name=cached_tokens,json=cachedTokens,proto3" json:"cached_tokens,omitempty"`
-	CacheWriteTokens    int32                  `protobuf:"varint,14,opt,name=cache_write_tokens,json=cacheWriteTokens,proto3" json:"cache_write_tokens,omitempty"`
-	ReasoningTokens     int32                  `protobuf:"varint,15,opt,name=reasoning_tokens,json=reasoningTokens,proto3" json:"reasoning_tokens,omitempty"`
-	TotalTokens         int32                  `protobuf:"varint,16,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
-	EstimatedCostMicros int64                  `protobuf:"varint,17,opt,name=estimated_cost_micros,json=estimatedCostMicros,proto3" json:"estimated_cost_micros,omitempty"`
-	BilledCostMicros    int64                  `protobuf:"varint,18,opt,name=billed_cost_micros,json=billedCostMicros,proto3" json:"billed_cost_micros,omitempty"`
-	RateCardVersion     string                 `protobuf:"bytes,19,opt,name=rate_card_version,json=rateCardVersion,proto3" json:"rate_card_version,omitempty"`
-	Charges             []*Charge              `protobuf:"bytes,20,rep,name=charges,proto3" json:"charges,omitempty"`
-	DurationMs          int64                  `protobuf:"varint,21,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
-	Status              Activity_Status        `protobuf:"varint,22,opt,name=status,proto3,enum=techbridge.ap.metering.v1.Activity_Status" json:"status,omitempty"`
-	ErrorCode           string                 `protobuf:"bytes,23,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
-	OccurredAt          *timestamppb.Timestamp `protobuf:"bytes,24,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
-	Etag                string                 `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
-	CreateTime          *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
-	UpdateTime          *timestamppb.Timestamp `protobuf:"bytes,99,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the activity.
+	// Format: `organisations/{organisation}/activities/{activity}`
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The agent that performed the work.
+	// Format: `organisations/{organisation}/agents/{agent}`
+	//
+	// A registered resource rather than a free string, so that spend can always
+	// be attributed to something with a known owner.
+	Agent string `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
+	// Opaque identifier of the end-user request this activity belongs to.
+	//
+	// Every activity produced while serving one user request carries the same
+	// value, including across a handoff from one agent to another. This is what
+	// makes cost per unit of business work possible: outcomes attach to the
+	// request, and the request's activities sum to its cost.
+	Request string `protobuf:"bytes,3,opt,name=request,proto3" json:"request,omitempty"`
+	// Opaque identifier of the conversation or session, where the product has
+	// one. Empty for work that is not conversational.
+	Session string `protobuf:"bytes,4,opt,name=session,proto3" json:"session,omitempty"`
+	// Opaque identifier of the person the work was done for.
+	//
+	// An identifier, never an email or a name. Recorders take it from the
+	// verified request context rather than accepting it as an argument, so that
+	// one person's spend cannot be attributed to another.
+	//
+	// The name behind it, where the organisation supplies one, is held once at
+	// `organisations/{organisation}/users/{user}` with this value as the last
+	// segment, so it cannot contain `/`.
+	User string `protobuf:"bytes,5,opt,name=user,proto3" json:"user,omitempty"`
+	// The service that made the call, e.g. `atlas-agent`, `deep-research`.
+	CallerService string `protobuf:"bytes,6,opt,name=caller_service,json=callerService,proto3" json:"caller_service,omitempty"`
+	// The part of the calling service that spent the money, e.g. `chat_turn`,
+	// `tool:web_search`, `research_merger`.
+	//
+	// Derived by the recorder from the surrounding framework call, so adopting
+	// teams do not set it per call site. A free string on the wire: adding a new
+	// component never requires a contract change. Values an agent did not
+	// declare in `Agent.components` are still accepted, and reported, so that
+	// drift is visible rather than silent.
+	CallerComponent string `protobuf:"bytes,7,opt,name=caller_component,json=callerComponent,proto3" json:"caller_component,omitempty"`
+	// The area of the product the person was using, e.g. `canvas`,
+	// `doc_viewer`, `social`.
+	//
+	// Distinct from `caller_component`, which is a code path. This is a product
+	// concept the framework cannot infer, so it is set once on the request
+	// context by products that want to slice cost this way, and left empty
+	// otherwise.
+	Skill string `protobuf:"bytes,8,opt,name=skill,proto3" json:"skill,omitempty"`
+	// The model that was called, as the provider names it,
+	// e.g. `gemini-2.5-pro`.
+	Model string `protobuf:"bytes,9,opt,name=model,proto3" json:"model,omitempty"`
+	// The provider that billed for the call.
+	Provider Activity_Provider `protobuf:"varint,10,opt,name=provider,proto3,enum=techbridge.ap.metering.v1.Activity_Provider" json:"provider,omitempty"`
+	// Tokens in the prompt.
+	PromptTokens int32 `protobuf:"varint,11,opt,name=prompt_tokens,json=promptTokens,proto3" json:"prompt_tokens,omitempty"`
+	// Tokens the model generated.
+	CandidateTokens int32 `protobuf:"varint,12,opt,name=candidate_tokens,json=candidateTokens,proto3" json:"candidate_tokens,omitempty"`
+	// Prompt tokens served from the provider's cache, which are usually billed
+	// at a different rate from ordinary prompt tokens. Counted separately so the
+	// rate card can price them correctly.
+	CachedTokens int32 `protobuf:"varint,13,opt,name=cached_tokens,json=cachedTokens,proto3" json:"cached_tokens,omitempty"`
+	// Prompt tokens written to the provider's cache. Some providers bill a
+	// premium for this, so it is priced separately rather than folded into
+	// `prompt_tokens`.
+	CacheWriteTokens int32 `protobuf:"varint,14,opt,name=cache_write_tokens,json=cacheWriteTokens,proto3" json:"cache_write_tokens,omitempty"`
+	// Tokens the model spent reasoning, where the provider reports them apart
+	// from the visible response.
+	ReasoningTokens int32 `protobuf:"varint,15,opt,name=reasoning_tokens,json=reasoningTokens,proto3" json:"reasoning_tokens,omitempty"`
+	// Total tokens the provider reported for the call. Recorded as reported
+	// rather than summed locally, so the figure can be checked against the
+	// provider.
+	TotalTokens int32 `protobuf:"varint,16,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
+	// What the call is expected to cost, in millionths of a US dollar.
+	//
+	// Computed by the server from token counts, `charges` and the rate card in
+	// force at `occurred_at`. Available immediately, and approximate. Money is
+	// an integer count of millionths rather than a floating-point amount so that
+	// sums are exact.
+	EstimatedCostMicros int64 `protobuf:"varint,17,opt,name=estimated_cost_micros,json=estimatedCostMicros,proto3" json:"estimated_cost_micros,omitempty"`
+	// What the call was actually billed, in millionths of a US dollar.
+	//
+	// Written by the nightly reconciliation from the cloud billing export, and
+	// zero until that has run. Only populated for charges that appear on a
+	// Google invoice; a provider called directly is never reconciled, and this
+	// stays zero for those. Where both figures are present, this one is the
+	// truth and `estimated_cost_micros` is the estimate it corrected.
+	BilledCostMicros int64 `protobuf:"varint,18,opt,name=billed_cost_micros,json=billedCostMicros,proto3" json:"billed_cost_micros,omitempty"`
+	// The version of the rate card used to price this activity.
+	//
+	// Recorded so that a later change to provider pricing does not silently
+	// rewrite what history cost.
+	RateCardVersion string `protobuf:"bytes,19,opt,name=rate_card_version,json=rateCardVersion,proto3" json:"rate_card_version,omitempty"`
+	// Charges not measured in tokens, such as a per-request search fee.
+	//
+	// Repeated because one call can incur several. A token-only call has none.
+	Charges []*Charge `protobuf:"bytes,20,rep,name=charges,proto3" json:"charges,omitempty"`
+	// How long the call took, in milliseconds.
+	DurationMs int64 `protobuf:"varint,21,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	// How the call ended.
+	Status Activity_Status `protobuf:"varint,22,opt,name=status,proto3,enum=techbridge.ap.metering.v1.Activity_Status" json:"status,omitempty"`
+	// The provider or platform error code, where the call did not succeed.
+	//
+	// A code, never a message: provider exception messages can quote the prompt.
+	ErrorCode string `protobuf:"bytes,23,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	// When the work happened, as reported by the recorder.
+	//
+	// Preserved as supplied. The server falls back to its own clock only when
+	// this is omitted, so that a batch delayed in transit is still priced and
+	// reported against the time it actually occurred.
+	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,24,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	// Entity tag.
+	Etag string `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
+	// When this activity was created.
+	CreateTime *timestamppb.Timestamp `protobuf:"bytes,98,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
+	// When this activity was last updated, which for most activities is when
+	// reconciliation wrote `billed_cost_micros`.
+	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,99,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Activity) Reset() {
@@ -385,11 +493,17 @@ func (x *Activity) GetUpdateTime() *timestamppb.Timestamp {
 	return nil
 }
 
+// A charge that is not measured in tokens.
 type Charge struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	PriceableUnit       string                 `protobuf:"bytes,1,opt,name=priceable_unit,json=priceableUnit,proto3" json:"priceable_unit,omitempty"`
-	Quantity            int64                  `protobuf:"varint,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
-	EstimatedCostMicros int64                  `protobuf:"varint,3,opt,name=estimated_cost_micros,json=estimatedCostMicros,proto3" json:"estimated_cost_micros,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The priceable unit being charged for.
+	// Format: `priceableUnits/{priceable_unit}`
+	PriceableUnit string `protobuf:"bytes,1,opt,name=priceable_unit,json=priceableUnit,proto3" json:"priceable_unit,omitempty"`
+	// How many of the unit were consumed, e.g. `3` web searches.
+	Quantity int64 `protobuf:"varint,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	// What this charge is expected to cost, in millionths of a US dollar.
+	// Computed by the server from the rate card.
+	EstimatedCostMicros int64 `protobuf:"varint,3,opt,name=estimated_cost_micros,json=estimatedCostMicros,proto3" json:"estimated_cost_micros,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -445,11 +559,19 @@ func (x *Charge) GetEstimatedCostMicros() int64 {
 	return 0
 }
 
+// Request for [ActivitiesService.CreateActivity].
 type CreateActivityRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	Activity      *Activity              `protobuf:"bytes,2,opt,name=activity,proto3" json:"activity,omitempty"`
-	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation the activity belongs to.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// The activity to record. Its `name` is assigned by the server.
+	Activity *Activity `protobuf:"bytes,2,opt,name=activity,proto3" json:"activity,omitempty"`
+	// Optional caller-supplied identifier that makes the write idempotent.
+	//
+	// A recorder that retries after a timeout sends the same value, and the
+	// server returns the activity it already wrote rather than double counting.
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -505,11 +627,16 @@ func (x *CreateActivityRequest) GetRequestId() string {
 	return ""
 }
 
+// Request for [ActivitiesService.BatchCreateActivities].
 type BatchCreateActivitiesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	Activities    []*Activity            `protobuf:"bytes,2,rep,name=activities,proto3" json:"activities,omitempty"`
-	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation the activities belong to.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// The activities to record. Rejected as a whole if any one is invalid.
+	Activities []*Activity `protobuf:"bytes,2,rep,name=activities,proto3" json:"activities,omitempty"`
+	// Optional caller-supplied identifier that makes the batch idempotent.
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -565,9 +692,11 @@ func (x *BatchCreateActivitiesRequest) GetRequestId() string {
 	return ""
 }
 
+// Response for [ActivitiesService.BatchCreateActivities].
 type BatchCreateActivitiesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Activities    []*Activity            `protobuf:"bytes,1,rep,name=activities,proto3" json:"activities,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The activities that were recorded, in the order they were supplied.
+	Activities    []*Activity `protobuf:"bytes,1,rep,name=activities,proto3" json:"activities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -609,9 +738,12 @@ func (x *BatchCreateActivitiesResponse) GetActivities() []*Activity {
 	return nil
 }
 
+// Request for [ActivitiesService.GetActivity].
 type GetActivityRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The resource name of the activity to retrieve.
+	// Format: `organisations/{organisation}/activities/{activity}`
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -653,13 +785,24 @@ func (x *GetActivityRequest) GetName() string {
 	return ""
 }
 
+// Request for [ActivitiesService.ListActivities].
 type ListActivitiesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
-	Filter        string                 `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
-	OrderBy       string                 `protobuf:"bytes,5,opt,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation whose activities to list.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// Maximum activities to return. Defaults to `100`, capped at `1000`.
+	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// A page token from a previous response, to retrieve the next page.
+	PageToken string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// Optional filter over the fields of `Activity`, e.g.
+	// `agent = "organisations/acme/agents/atlas" AND status = OK`.
+	//
+	// Cannot widen the organisation: scope always comes from `parent`.
+	Filter string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
+	// Optional sort order, e.g. `occurred_at desc`. Defaults to
+	// `occurred_at desc`.
+	OrderBy       string `protobuf:"bytes,5,opt,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -729,10 +872,13 @@ func (x *ListActivitiesRequest) GetOrderBy() string {
 	return ""
 }
 
+// Response for [ActivitiesService.ListActivities].
 type ListActivitiesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Activities    []*Activity            `protobuf:"bytes,1,rep,name=activities,proto3" json:"activities,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The activities in this page.
+	Activities []*Activity `protobuf:"bytes,1,rep,name=activities,proto3" json:"activities,omitempty"`
+	// Token to retrieve the next page, empty when there are no more.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -781,10 +927,15 @@ func (x *ListActivitiesResponse) GetNextPageToken() string {
 	return ""
 }
 
+// Request for [ActivitiesService.StreamListActivities].
 type StreamListActivitiesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	Filter        string                 `protobuf:"bytes,2,opt,name=filter,proto3" json:"filter,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation whose activities to stream.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// Optional filter, with the same syntax as
+	// [ListActivitiesRequest.filter].
+	Filter        string `protobuf:"bytes,2,opt,name=filter,proto3" json:"filter,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -833,15 +984,32 @@ func (x *StreamListActivitiesRequest) GetFilter() string {
 	return ""
 }
 
+// Request for [ActivitiesService.AggregateActivities].
 type AggregateActivitiesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parent        string                 `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	GroupBy       []string               `protobuf:"bytes,2,rep,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"`
-	Filter        string                 `protobuf:"bytes,3,opt,name=filter,proto3" json:"filter,omitempty"`
-	StartTime     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
-	EndTime       *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
-	PageSize      int32                  `protobuf:"varint,6,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,7,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation whose spend to aggregate.
+	// Format: `organisations/{organisation}`
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// Dimensions to group by, e.g. `["agent", "model"]`.
+	//
+	// Valid dimensions are `agent`, `model`, `provider`, `user`,
+	// `caller_service`, `caller_component`, `skill` and `date`. An empty list
+	// returns a single total for the whole organisation.
+	GroupBy []string `protobuf:"bytes,2,rep,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"`
+	// Optional filter, with the same syntax as
+	// [ListActivitiesRequest.filter]. Cannot widen the organisation.
+	Filter string `protobuf:"bytes,3,opt,name=filter,proto3" json:"filter,omitempty"`
+	// Start of the window to aggregate, inclusive.
+	StartTime *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
+	// End of the window to aggregate, exclusive.
+	EndTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
+	// Maximum rows to return. Defaults to `100`, capped at `1000`.
+	//
+	// Grouping by several dimensions at once can produce a great many rows, so
+	// this method paginates like a list rather than returning everything.
+	PageSize int32 `protobuf:"varint,6,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// A page token from a previous response, to retrieve the next page.
+	PageToken     string `protobuf:"bytes,7,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -925,10 +1093,13 @@ func (x *AggregateActivitiesRequest) GetPageToken() string {
 	return ""
 }
 
+// Response for [ActivitiesService.AggregateActivities].
 type AggregateActivitiesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Rows          []*AggregateRow        `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One row per combination of the requested dimensions.
+	Rows []*AggregateRow `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
+	// Token to retrieve the next page, empty when there are no more.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -977,15 +1148,23 @@ func (x *AggregateActivitiesResponse) GetNextPageToken() string {
 	return ""
 }
 
+// Spend for one combination of grouping dimensions.
 type AggregateRow struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Dimensions          map[string]string      `protobuf:"bytes,1,rep,name=dimensions,proto3" json:"dimensions,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	EstimatedCostMicros int64                  `protobuf:"varint,2,opt,name=estimated_cost_micros,json=estimatedCostMicros,proto3" json:"estimated_cost_micros,omitempty"`
-	BilledCostMicros    int64                  `protobuf:"varint,3,opt,name=billed_cost_micros,json=billedCostMicros,proto3" json:"billed_cost_micros,omitempty"`
-	TotalTokens         int64                  `protobuf:"varint,4,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
-	ActivityCount       int64                  `protobuf:"varint,5,opt,name=activity_count,json=activityCount,proto3" json:"activity_count,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The dimension values for this row, keyed by dimension name, e.g.
+	// `{"agent": "organisations/acme/agents/atlas", "model": "gemini-2.5-pro"}`.
+	Dimensions map[string]string `protobuf:"bytes,1,rep,name=dimensions,proto3" json:"dimensions,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Sum of `estimated_cost_micros` over the matching activities.
+	EstimatedCostMicros int64 `protobuf:"varint,2,opt,name=estimated_cost_micros,json=estimatedCostMicros,proto3" json:"estimated_cost_micros,omitempty"`
+	// Sum of `billed_cost_micros` over the matching activities. Lower than the
+	// estimate where reconciliation has not yet run for part of the window.
+	BilledCostMicros int64 `protobuf:"varint,3,opt,name=billed_cost_micros,json=billedCostMicros,proto3" json:"billed_cost_micros,omitempty"`
+	// Sum of `total_tokens` over the matching activities.
+	TotalTokens int64 `protobuf:"varint,4,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
+	// How many activities the row covers.
+	ActivityCount int64 `protobuf:"varint,5,opt,name=activity_count,json=activityCount,proto3" json:"activity_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AggregateRow) Reset() {

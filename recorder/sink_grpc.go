@@ -10,9 +10,11 @@ import (
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
-// GRPCSink delivers records to the metering service.
+// GRPCSink delivers records, and the names behind them, to the metering
+// service.
 type GRPCSink struct {
 	client pb.ActivitiesServiceClient
+	users  pb.UsersServiceClient
 	parent string
 }
 
@@ -34,6 +36,7 @@ func NewGRPCSink(conn grpc.ClientConnInterface, organisation string) *GRPCSink {
 	}
 	return &GRPCSink{
 		client: pb.NewActivitiesServiceClient(conn),
+		users:  pb.NewUsersServiceClient(conn),
 		parent: organisation,
 	}
 }
@@ -58,6 +61,36 @@ func (s *GRPCSink) Send(ctx context.Context, activities []*pb.Activity) error {
 	})
 	if err != nil {
 		return fmt.Errorf("recording %d activities: %w", len(activities), err)
+	}
+	return nil
+}
+
+// SendUsers names a batch of people under the organisation, in one call.
+//
+// Each identifier becomes the last segment of the name, which is what makes
+// the directory row and the activities that carry it the same person. The
+// write replaces what the directory held, so what a product knows today is
+// what the report shows.
+func (s *GRPCSink) SendUsers(ctx context.Context, users []User) error {
+	if len(users) == 0 {
+		return nil
+	}
+
+	batch := make([]*pb.User, 0, len(users))
+	for _, u := range users {
+		batch = append(batch, &pb.User{
+			Name:        s.parent + "/users/" + u.ID,
+			DisplayName: u.Name,
+			Email:       u.Email,
+		})
+	}
+
+	_, err := s.users.BatchUpsertUsers(ctx, &pb.BatchUpsertUsersRequest{
+		Parent: s.parent,
+		Users:  batch,
+	})
+	if err != nil {
+		return fmt.Errorf("naming %d users: %w", len(users), err)
 	}
 	return nil
 }

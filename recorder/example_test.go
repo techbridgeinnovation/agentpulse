@@ -29,12 +29,14 @@ func Example() {
 		Provider: pb.Activity_VERTEX_AI,
 	})
 
-	// Once per request, where the request arrives. Everything recorded under
-	// this context groups together, so cost can be read per request rather than
-	// only per model call.
+	// Once per request, where the request arrives and the sign-in has been
+	// checked. Everything recorded under this context groups together, so cost
+	// can be read per request rather than only per model call. The identifier
+	// goes on every record; the name goes once to the directory, so a report
+	// can say who spent what.
 	ctx := recorder.WithUser(
 		recorder.WithRequest(context.Background(), "requests/7f3a"),
-		"users/8c21e0b4",
+		recorder.User{ID: "8c21e0b4", Name: "Ada Lovelace", Email: "ada@example.com"},
 	)
 
 	// At each model call. The counts come from what the provider reported, and

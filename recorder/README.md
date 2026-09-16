@@ -1,4 +1,4 @@
-# recorder
+# recorder/v1
 
 ## Service Overview
 
@@ -25,20 +25,6 @@ Dropped records are counted and the count is readable. That counter is the one t
 **Called by** each agent's own process, in line.
 
 **Publishes and listens to** nothing.
-
-## Installing it
-
-```bash
-go get github.com/techbridgeinnovation/agentpulse/recorder
-```
-
-Agents on Google ADK v2 also take the callbacks module, which is separate because the two ADK majors are unrelated types:
-
-```bash
-go get github.com/techbridgeinnovation/agentpulse/recorder/adkv2hooks
-```
-
-Every dependency is public. The metering and governance contracts the recorder speaks are checked in under `pb/` as generated Go, so no private registry is involved.
 
 ## Wiring it in
 
@@ -69,7 +55,7 @@ opts := adkhooks.Options{Agent: agentName, Service: "atlas-agent"}
 // register adkhooks.BeforeModel, adkhooks.AfterModel, adkhooks.AfterTool and adkhooks.AfterAgent on the agent
 ```
 
-Every field on the record comes from the framework's own callback context: which request, which user, which session, which agent, which model, how many tokens, whether it succeeded.
+Every field on the record comes from the framework's own callback context: which request, which user, which session, which agent, which model, how many tokens, whether it succeeded. A user set on the context with `recorder.WithUser` before the runner is invoked wins over the framework's own user id, name and all.
 
 `adkhooks` is the first major version of the framework and `adkv2hooks` the second. They are different libraries as far as Go is concerned, with unrelated types, so one package cannot serve both. The callbacks and everything they read are the same.
 
@@ -84,8 +70,12 @@ reporter := rec.For(recorder.Attribution{
     Provider: pb.Activity_VERTEX_AI,
 })
 
-// once per request
-ctx = recorder.WithUser(recorder.WithRequest(ctx, requestID), userID)
+// once per request, where the sign-in has been checked
+ctx = recorder.WithUser(recorder.WithRequest(ctx, requestID), recorder.User{
+    ID:    claims.Subject,
+    Name:  claims.Name,
+    Email: claims.Email,
+})
 
 // at each model call
 reporter.ModelCall(ctx, recorder.ModelCall{
@@ -106,7 +96,7 @@ A spend ceiling has to be readable before a model call, and a network call per m
 
 ```go
 rec := recorder.New(recorder.Config{
-    Sinks: []recorder.Sink{recorder.NewGRPCSink(conn, "organisations/techbridge")},
+    Sinks: []recorder.Sink{recorder.NewGRPCSink(conn, organisation)},
     Rates: recorder.NewGRPCRateSource(conn),
 })
 
@@ -121,14 +111,25 @@ The figure is exact for what this process did and blind to what another replica 
 
 `component` is asked for on this path rather than derived. Nothing can infer which part of a service made a call, and one bucket per service answers no question worth asking.
 
+## Who the work was for
+
+A record carries an identifier and nothing else about the person, because a record is one row per model call and a report over it is read by people who are not that person. The name behind the identifier goes to a directory instead, once per person, and a report is joined to it afterwards.
+
+`recorder.User` is where the two are given together. The identifier is whatever the product's own sign-in issued, bare — `8c21e0b4`, not `users/8c21e0b4` — because it becomes the last segment of the directory row's name and the exact value on every record, and that equality is the join. The name and email are optional; a product that gives only the identifier records exactly as before and names nobody.
+
+Naming takes the same path a record does: a bounded queue, a batch, a sink on the worker, dropped and counted when the queue is full. What is remembered is what was last sent, so a person seen again with the same name costs a map lookup. A changed name is sent again. A send that fails forgets the person, so the next call they make tries again rather than waiting for a restart. `Named`, `NamesDropped` and `NamesFailed` in `Stats` say what happened; `NamesFailed` above zero means a report is showing an identifier where a name was given, and an identifier with a slash in it lands there too.
+
+A sink takes names only if it implements `UserSink`. The metering sink does; a log or a collector has no directory to put a name in and is given none.
+
 ## Layout
 
 ```
-recorder/
+recorder/v1/
 ├── recorder.go                 the queue, the worker, the counters
 ├── config.go                   every field has a working default
 ├── report.go                   the way in for code that is not an agent
 ├── context.go                  who a piece of work is for, carried on the context
+├── names.go                    the name behind an identifier, sent once per person
 ├── sink.go                     where records go
 ├── sink_grpc.go                the metering destination
 ├── gateway.go                  the connection through the gateway, key on every call
@@ -142,15 +143,8 @@ recorder/
 ├── pricing.go                  tokens and charges into money
 ├── total.go                    per-request running total, no network call
 ├── adkhooks/                   the framework callbacks, first ADK major
-├── adkv2hooks/                 the same callbacks, second ADK major
-└── pb/                         the metering and governance contracts, generated
+└── adkv2hooks/                 the same callbacks, second ADK major
 ```
-
-## The contracts under pb/
-
-`pb/metering` and `pb/governance` are the generated Go for the two Agent Pulse contracts, copied in verbatim. `pb/VERSIONS` names the contract release each copy came from. `scripts/sync-contracts.sh` refreshes them from a machine that can resolve the private modules; nobody edits them by hand.
-
-The proto package names inside them are `techbridge.ap.metering.v1` and `techbridge.ap.governance.v1`. Go's protobuf runtime allows one registration per proto name in a binary, so a program must not import these alongside the same contracts from another module path. A TechBridge service that already depends on `alis.build/techbridge/ap/metering` takes its metering types from here instead.
 
 ## Before changing it
 

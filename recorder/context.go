@@ -28,17 +28,44 @@ func RequestFrom(ctx context.Context) string {
 	return request
 }
 
+// User is the person a piece of work is for.
+//
+// The identifier is what every record carries, and it is the whole of what a
+// report can group by. The name and email are what a person reading that
+// report needs to know who the identifier is, and they travel differently: not
+// on any record, but once per person to a directory the report is joined to.
+type User struct {
+	// ID is the identifier the product's own sign-in issued, exactly as that
+	// sign-in names it, without a `users/` prefix or any other path. It must
+	// not contain a slash: it becomes the last segment of a resource name.
+	ID string
+
+	// Name is the person's name as the product shows it. Optional.
+	Name string
+
+	// Email is the person's email address. Optional.
+	Email string
+}
+
+// named reports whether there is anything to say about the person beyond
+// the identifier.
+func (u User) named() bool {
+	return u.Name != "" || u.Email != ""
+}
+
 // WithUser marks a context as belonging to one person.
 //
-// An identifier, never an email and never a name. What reaches a record is what
-// reaches a report, and a report is read by people who are not that person.
-func WithUser(ctx context.Context, user string) context.Context {
+// Set it where the sign-in has been checked, which is the one place a product
+// has the identifier and the name in hand together. Only the identifier
+// reaches a record; a name given here is sent once to the directory and never
+// again until it changes.
+func WithUser(ctx context.Context, user User) context.Context {
 	return context.WithValue(ctx, userContextKey{}, user)
 }
 
 // UserFrom returns the user a context carries, if any.
-func UserFrom(ctx context.Context) string {
-	user, _ := ctx.Value(userContextKey{}).(string)
+func UserFrom(ctx context.Context) User {
+	user, _ := ctx.Value(userContextKey{}).(User)
 	return user
 }
 

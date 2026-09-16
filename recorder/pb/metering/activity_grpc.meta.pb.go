@@ -3,21 +3,21 @@
 // Source: techbridge/ap/metering/v1/activity.proto
 // Plugin version: v0.0.1
 //
-// Generated on: 2026-09-03 14:32:42 UTC
+// Generated on: 2026-09-15 11:20:12 UTC
 
 package metering
 
 const (
 	// ActivitiesService_CreateActivity_FullMethodDescription returns the description of the techbridge.ap.metering.v1.ActivitiesService.CreateActivity method.
-	ActivitiesService_CreateActivity_FullMethodDescription = ""
+	ActivitiesService_CreateActivity_FullMethodDescription = "Creates a single activity. The server prices the activity from the rate card in force at\n `occurred_at` and populates `estimated_cost_micros`; a client-supplied\n cost is ignored. Callers are recorders embedded in agents, so this method\n is expected to be called at high volume and to be cheap."
 	// ActivitiesService_BatchCreateActivities_FullMethodDescription returns the description of the techbridge.ap.metering.v1.ActivitiesService.BatchCreateActivities method.
-	ActivitiesService_BatchCreateActivities_FullMethodDescription = ""
+	ActivitiesService_BatchCreateActivities_FullMethodDescription = "Creates several activities in one call. The normal path for a recorder that batches. The whole batch is priced and\n written together; if any activity is invalid the entire batch is rejected\n so a caller never has to reason about partial writes."
 	// ActivitiesService_GetActivity_FullMethodDescription returns the description of the techbridge.ap.metering.v1.ActivitiesService.GetActivity method.
-	ActivitiesService_GetActivity_FullMethodDescription = ""
+	ActivitiesService_GetActivity_FullMethodDescription = "Returns a single activity by resource name."
 	// ActivitiesService_ListActivities_FullMethodDescription returns the description of the techbridge.ap.metering.v1.ActivitiesService.ListActivities method.
-	ActivitiesService_ListActivities_FullMethodDescription = ""
+	ActivitiesService_ListActivities_FullMethodDescription = "Lists activities under an organisation, most recent first by default."
 	// ActivitiesService_AggregateActivities_FullMethodDescription returns the description of the techbridge.ap.metering.v1.ActivitiesService.AggregateActivities method.
-	ActivitiesService_AggregateActivities_FullMethodDescription = ""
+	ActivitiesService_AggregateActivities_FullMethodDescription = "Returns spend grouped by one or more dimensions. This is what cost dashboards read. Results are always confined to the\n organisation named in `parent`; the organisation is never taken from\n `filter`, so a caller cannot widen its own scope."
 	// ActivitiesService_StreamListActivities_FullMethodDescription returns the description of the techbridge.ap.metering.v1.ActivitiesService.StreamListActivities method.
-	ActivitiesService_StreamListActivities_FullMethodDescription = ""
+	ActivitiesService_StreamListActivities_FullMethodDescription = "Streams activities under an organisation. For exports and backfills, where a paginated list would require the caller\n to hold a cursor across a long run."
 )

@@ -28,10 +28,22 @@ const (
 // PriceableUnitsServiceClient is the client API for PriceableUnitsService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PriceableUnitsService holds the rate card: what each billable thing costs.
+//
+// Rates are not organisation-specific, so priceable units sit outside the
+// organisation hierarchy. Each carries the window it applies to, and pricing an
+// activity uses the rate in force when the work happened. That way a provider
+// raising a price does not silently rewrite what last month cost.
 type PriceableUnitsServiceClient interface {
+	// Adds a rate to the rate card.
 	CreatePriceableUnit(ctx context.Context, in *CreatePriceableUnitRequest, opts ...grpc.CallOption) (*PriceableUnit, error)
+	// Returns a single priceable unit by resource name.
 	GetPriceableUnit(ctx context.Context, in *GetPriceableUnitRequest, opts ...grpc.CallOption) (*PriceableUnit, error)
+	// Updates a priceable unit. Correcting a mistake is the intended use;
+	// a price change should be a new unit with a later `effective_from`.
 	UpdatePriceableUnit(ctx context.Context, in *UpdatePriceableUnitRequest, opts ...grpc.CallOption) (*PriceableUnit, error)
+	// Lists the rate card.
 	ListPriceableUnits(ctx context.Context, in *ListPriceableUnitsRequest, opts ...grpc.CallOption) (*ListPriceableUnitsResponse, error)
 }
 
@@ -86,10 +98,22 @@ func (c *priceableUnitsServiceClient) ListPriceableUnits(ctx context.Context, in
 // PriceableUnitsServiceServer is the server API for PriceableUnitsService service.
 // All implementations must embed UnimplementedPriceableUnitsServiceServer
 // for forward compatibility.
+//
+// PriceableUnitsService holds the rate card: what each billable thing costs.
+//
+// Rates are not organisation-specific, so priceable units sit outside the
+// organisation hierarchy. Each carries the window it applies to, and pricing an
+// activity uses the rate in force when the work happened. That way a provider
+// raising a price does not silently rewrite what last month cost.
 type PriceableUnitsServiceServer interface {
+	// Adds a rate to the rate card.
 	CreatePriceableUnit(context.Context, *CreatePriceableUnitRequest) (*PriceableUnit, error)
+	// Returns a single priceable unit by resource name.
 	GetPriceableUnit(context.Context, *GetPriceableUnitRequest) (*PriceableUnit, error)
+	// Updates a priceable unit. Correcting a mistake is the intended use;
+	// a price change should be a new unit with a later `effective_from`.
 	UpdatePriceableUnit(context.Context, *UpdatePriceableUnitRequest) (*PriceableUnit, error)
+	// Lists the rate card.
 	ListPriceableUnits(context.Context, *ListPriceableUnitsRequest) (*ListPriceableUnitsResponse, error)
 	mustEmbedUnimplementedPriceableUnitsServiceServer()
 }

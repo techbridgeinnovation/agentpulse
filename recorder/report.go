@@ -204,11 +204,14 @@ func (rp *Reporter) FinishRequest(request string) {
 
 // activity fills in everything the two kinds of call have in common.
 func (rp *Reporter) activity(ctx context.Context, component string, duration time.Duration, err error, charges []Charge) *pb.Activity {
+	user := UserFrom(ctx)
+	rp.recorder.NoteUser(user)
+
 	activity := &pb.Activity{
 		Agent:           rp.attribution.Agent,
 		Request:         RequestFrom(ctx),
 		Session:         SessionFrom(ctx),
-		User:            UserFrom(ctx),
+		User:            user.ID,
 		CallerService:   rp.attribution.Service,
 		CallerComponent: component,
 		Skill:           rp.attribution.Skill,
