@@ -31,7 +31,7 @@ Four settings. None has a default, and the recorder refuses to start without the
 | Setting | What it is |
 | --- | --- |
 | `AP_GATEWAY` | the address shown on the Connect page |
-| `AP_API_KEY` | issued on the API keys page as **Records**, shown once |
+| `AP_API_KEY` | issued on the API keys page as a **write key**, shown once |
 | `AP_ORGANISATION` | `organisations/<id>` |
 | `AP_AGENT` | `organisations/<id>/agents/<name>`, a name of your choosing |
 

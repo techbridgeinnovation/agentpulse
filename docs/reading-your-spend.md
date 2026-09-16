@@ -39,7 +39,7 @@ If you find yourself paging `ListActivities` and adding the rows up, stop — th
 
 ## Getting a key
 
-On the **API keys** page, create a key and choose **Reads**.
+On the **API keys** page, create a key and choose **Read key**.
 
 A key does one thing or the other, never both. A key that records lives inside an agent's process, which is where a credential is most likely to leak, and one that could also read would hand over your whole organisation's spend.
 

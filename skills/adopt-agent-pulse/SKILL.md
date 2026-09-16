@@ -188,7 +188,7 @@ log.Printf("recorded %d, delivered %d, dropped %d, rejected %d, sink panics %d",
 
 ## Reading it back
 
-Recording and reading are separate keys. The `AP_API_KEY` this skill wires in records and cannot read; a dashboard of the team's own needs a second key, issued on the console's API keys page as **Reads**, and asks the gateway directly over HTTPS. Nothing in the agent changes for it.
+Recording and reading are separate keys. The `AP_API_KEY` this skill wires in records and cannot read; a dashboard of the team's own needs a second key, issued on the console's API keys page as a **read key**, and asks the gateway directly over HTTPS. Nothing in the agent changes for it.
 
 Point the team at [`docs/reading-your-spend.md`](../../docs/reading-your-spend.md) and stop there — building their dashboard is not part of adopting the recorder.
 
