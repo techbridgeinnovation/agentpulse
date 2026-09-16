@@ -50,15 +50,11 @@ The secret is shown once and is not recoverable. Keep it where you keep your oth
 Send the key as `x-api-key`, over TLS, to the gateway address shown on the Connect page. Every request names your organisation as `parent`.
 
 ```bash
-curl -s https://<gateway>/v1/organisations/<id>/activities:aggregate \
-  -H "x-api-key: $AP_API_KEY" \
-  -H "content-type: application/json" \
-  -d '{
-        "groupBy": ["agent", "model"],
-        "startTime": "2026-09-01T00:00:00Z",
-        "endTime":   "2026-10-01T00:00:00Z"
-      }'
+curl -s "https://<gateway>/v1/organisations/<id>/activities:aggregate?groupBy=agent&groupBy=model&startTime=2026-09-01T00:00:00Z&endTime=2026-10-01T00:00:00Z" \
+  -H "X-Api-Key: $AP_API_KEY"
 ```
+
+Every method is a GET. The question goes in the query string — a dimension repeated is a list, a timestamp is RFC 3339 — and a browser or a cache can treat the same question asked twice as one.
 
 ```json
 {
@@ -88,7 +84,18 @@ curl -s https://<gateway>/v1/organisations/<id>/activities:aggregate \
 
 `date` and `hour` are UTC. `kind` is `model`, `tool` or `call`. An empty `groupBy` returns a single total for the window.
 
-Group by as many at once as the panel needs: `["date", "model"]` is a stacked chart, `["user"]` is a cost-per-person table.
+Group by as many at once as the panel needs: `groupBy=date&groupBy=model` is a stacked chart, `groupBy=user` is a cost-per-person table.
+
+## Asking for exactly the rows a panel draws
+
+A `filter` confines the read: terms of `field = value` joined by `AND`, over the same fields you can group by, equality only.
+
+```
+filter=user = "8c21e0b4"        grouped by date   → one person's spend by day
+filter=agent = "organisations/acme/agents/atlas" AND status = FAILED   → that agent's failures
+```
+
+An unknown field, `OR`, or any operator but `=` is refused rather than ignored, because a term you wrote and did not get would draw the wrong figure without you knowing. The window is `startTime` and `endTime`, never a filter term.
 
 A tool call names no model, so a row grouped by `model` holds tool calls under an empty value rather than leaving them out. `modelCalls` and `toolCalls` need not sum to `activityCount` — a call that named no model, counted no tokens and ran no tool is neither.
 
@@ -108,6 +115,8 @@ The estimate is priced from tokens when the call was recorded, against the rate 
 | `ListUsers` | the names you have given the identifiers your activities carry |
 | `ListOutcomes` | units of business work counted against a request |
 | `ListPriceableUnits` | the rate card, which belongs to no organisation |
+
+Every method, parameter and field is in the [API reference](/docs/reference), generated from the contract, with the OpenAPI document to download.
 
 ## Showing names instead of identifiers
 

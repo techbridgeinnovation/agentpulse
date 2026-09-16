@@ -9,6 +9,7 @@ Metering, cost attribution and spend governance for AI agents. This repository h
 | `recorder/adkv2hooks/` | The same callbacks for Google ADK v2, as its own module because the two ADK majors are unrelated types. |
 | `recorder/pb/` | The generated Go for the metering and governance contracts the recorder speaks. |
 | `docs/` | What Agent Pulse records, how to record it, and how to read it back. The same pages the console serves. |
+| `docs/openapi/` | The read API as an OpenAPI document, generated from the contract. Import it into Postman or a client generator. |
 | `scripts/` | Maintainer tooling: syncing the contracts and the documentation from the private build. |
 
 ```bash

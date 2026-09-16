@@ -1,0 +1,1211 @@
+swagger: '2.0'
+info:
+  title: Agent Pulse read API
+  version: 1.5.0
+  description: 'Read what your organisation''s agents spent, for a dashboard of your
+    own. Every request carries a reading api key in the X-Api-Key header and names
+    your organisation in the path; a request naming any other is refused. Nothing
+    here writes: recording happens through the recorder library over gRPC.'
+tags:
+- name: Spend
+- name: People
+- name: Agents
+- name: Outcomes
+- name: Rate card
+consumes:
+- application/json
+produces:
+- application/json
+paths:
+  /v1/priceableUnits:
+    get:
+      summary: Lists the rate card.
+      operationId: PriceableUnitsService_ListPriceableUnits
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1ListPriceableUnitsResponse'
+        '400':
+          description: 'The request could not be read: a missing window, one that
+            ends before it starts, a groupBy or filter field not served, or a parameter
+            the method has no field for.'
+          schema:
+            $ref: '#/definitions/Error'
+        '401':
+          description: The key is missing, unknown or revoked. These are answered
+            identically, so probing learns nothing.
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          description: A recording key was used to read, or the request named an organisation
+            the key does not belong to.
+          schema:
+            $ref: '#/definitions/Error'
+        '429':
+          description: Over the plan's rate limit. Try again shortly.
+          schema:
+            $ref: '#/definitions/Error'
+      parameters:
+      - name: pageSize
+        description: Maximum priceable units to return. Defaults to `100`, capped
+          at `1000`.
+        in: query
+        required: false
+        type: integer
+        format: int32
+      - name: pageToken
+        description: A page token from a previous response, to retrieve the next page.
+        in: query
+        required: false
+        type: string
+      - name: filter
+        description: 'Optional filter over the fields of `PriceableUnit`, e.g.
+
+          `provider = "VERTEX_AI" AND kind = CANDIDATE_TOKENS`.'
+        in: query
+        required: false
+        type: string
+      tags:
+      - Rate card
+  /v1/{parent}/activities:
+    get:
+      summary: Lists activities under an organisation, most recent first by default.
+      operationId: ActivitiesService_ListActivities
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1ListActivitiesResponse'
+        '400':
+          description: 'The request could not be read: a missing window, one that
+            ends before it starts, a groupBy or filter field not served, or a parameter
+            the method has no field for.'
+          schema:
+            $ref: '#/definitions/Error'
+        '401':
+          description: The key is missing, unknown or revoked. These are answered
+            identically, so probing learns nothing.
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          description: A recording key was used to read, or the request named an organisation
+            the key does not belong to.
+          schema:
+            $ref: '#/definitions/Error'
+        '429':
+          description: Over the plan's rate limit. Try again shortly.
+          schema:
+            $ref: '#/definitions/Error'
+      parameters:
+      - name: parent
+        description: 'The organisation whose activities to list.
+
+          Format: `organisations/{organisation}`'
+        in: path
+        required: true
+        type: string
+        pattern: organisations/[^/]+
+      - name: pageSize
+        description: Maximum activities to return. Defaults to `100`, capped at `1000`.
+        in: query
+        required: false
+        type: integer
+        format: int32
+      - name: pageToken
+        description: A page token from a previous response, to retrieve the next page.
+        in: query
+        required: false
+        type: string
+      - name: filter
+        description: 'Optional filter, confining the page to activities matching every
+          term.
+
+
+          A filter is one or more terms joined by `AND`, each `field = value`,
+
+          e.g. `agent = "organisations/acme/agents/atlas" AND status = FAILED`.
+
+          A value may be quoted; it must be when it holds a space. The fields are
+
+          the ones activities can be grouped by: `agent`, `model`, `provider`,
+
+          `user`, `caller_service`, `caller_component`, `skill`, `status`,
+
+          `error_code` and `kind`. Only equality is served, and only `AND`; the
+
+          window is `start_time` and `end_time`, not a term. An unknown field or
+
+          any other operator is refused rather than ignored.
+
+
+          Cannot widen the organisation: scope always comes from `parent`, and a
+
+          term naming an agent outside it matches nothing.'
+        in: query
+        required: false
+        type: string
+      - name: orderBy
+        description: 'Optional sort order. The one order served is `occurred_at desc`,
+          which
+
+          is also the default, so a page is the most recent work first.'
+        in: query
+        required: false
+        type: string
+      - name: startTime
+        description: 'Start of the window to list, inclusive. With `end_time`, confines
+          the
+
+          page to when the work happened; without either, every activity under
+
+          `parent` is listed.'
+        in: query
+        required: false
+        type: string
+        format: date-time
+      - name: endTime
+        description: End of the window to list, exclusive.
+        in: query
+        required: false
+        type: string
+        format: date-time
+      tags:
+      - Spend
+  /v1/{parent}/activities:aggregate:
+    get:
+      summary: Returns spend grouped by one or more dimensions.
+      description: 'This is what cost dashboards read. Results are always confined
+        to the
+
+        organisation named in `parent`; the organisation is never taken from
+
+        `filter`, so a caller cannot widen its own scope.'
+      operationId: ActivitiesService_AggregateActivities
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1AggregateActivitiesResponse'
+        '400':
+          description: 'The request could not be read: a missing window, one that
+            ends before it starts, a groupBy or filter field not served, or a parameter
+            the method has no field for.'
+          schema:
+            $ref: '#/definitions/Error'
+        '401':
+          description: The key is missing, unknown or revoked. These are answered
+            identically, so probing learns nothing.
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          description: A recording key was used to read, or the request named an organisation
+            the key does not belong to.
+          schema:
+            $ref: '#/definitions/Error'
+        '429':
+          description: Over the plan's rate limit. Try again shortly.
+          schema:
+            $ref: '#/definitions/Error'
+      parameters:
+      - name: parent
+        description: 'The organisation whose spend to aggregate.
+
+          Format: `organisations/{organisation}`'
+        in: path
+        required: true
+        type: string
+        pattern: organisations/[^/]+
+      - name: groupBy
+        description: 'Dimensions to group by, e.g. `["agent", "model"]`.
+
+
+          Valid dimensions are `agent`, `model`, `provider`, `user`,
+
+          `caller_service`, `caller_component`, `skill`, `status`, `error_code`,
+
+          `kind`, `date` and `hour`. `kind` is `model`, `tool` or `call`: a tool
+
+          call is one recorded under a `tool:` component, a model call one that
+
+          names a model or counted tokens, and a call is anything else. `date` and
+
+          `hour` are UTC. An empty list returns a single total for the whole
+
+          organisation.'
+        in: query
+        required: false
+        type: array
+        items:
+          type: string
+        collectionFormat: multi
+      - name: filter
+        description: 'Optional filter, with the same terms as [ListActivitiesRequest.filter],
+
+          so a panel asks for exactly the rows it draws: `user = "8c21e0b4"` grouped
+
+          by `date` is one person''s spend by day, without the rest of the
+
+          organisation''s rows being read and discarded. Cannot widen the
+
+          organisation. `agent` below is the same as a filter term on `agent`,
+
+          kept for callers that only ever confine to one.'
+        in: query
+        required: false
+        type: string
+      - name: startTime
+        description: Start of the window to aggregate, inclusive.
+        in: query
+        required: true
+        type: string
+        format: date-time
+      - name: endTime
+        description: End of the window to aggregate, exclusive.
+        in: query
+        required: true
+        type: string
+        format: date-time
+      - name: pageSize
+        description: 'Maximum rows to return. Defaults to `100`, capped at `1000`.
+
+
+          Grouping by several dimensions at once can produce a great many rows, so
+
+          this method paginates like a list rather than returning everything.'
+        in: query
+        required: false
+        type: integer
+        format: int32
+      - name: pageToken
+        description: A page token from a previous response, to retrieve the next page.
+        in: query
+        required: false
+        type: string
+      - name: agent
+        description: 'Optional. Confines the aggregate to one agent''s activities.
+
+          Format: `organisations/{organisation}/agents/{agent}`; must sit under
+
+          `parent`.'
+        in: query
+        required: false
+        type: string
+      tags:
+      - Spend
+  /v1/{parent}/agents:
+    get:
+      summary: Lists the agents registered to an organisation.
+      operationId: AgentsService_ListAgents
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1ListAgentsResponse'
+        '400':
+          description: 'The request could not be read: a missing window, one that
+            ends before it starts, a groupBy or filter field not served, or a parameter
+            the method has no field for.'
+          schema:
+            $ref: '#/definitions/Error'
+        '401':
+          description: The key is missing, unknown or revoked. These are answered
+            identically, so probing learns nothing.
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          description: A recording key was used to read, or the request named an organisation
+            the key does not belong to.
+          schema:
+            $ref: '#/definitions/Error'
+        '429':
+          description: Over the plan's rate limit. Try again shortly.
+          schema:
+            $ref: '#/definitions/Error'
+      parameters:
+      - name: parent
+        description: 'The organisation whose agents to list.
+
+          Format: `organisations/{organisation}`'
+        in: path
+        required: true
+        type: string
+        pattern: organisations/[^/]+
+      - name: pageSize
+        description: Maximum agents to return. Defaults to `100`, capped at `1000`.
+        in: query
+        required: false
+        type: integer
+        format: int32
+      - name: pageToken
+        description: A page token from a previous response, to retrieve the next page.
+        in: query
+        required: false
+        type: string
+      tags:
+      - Agents
+  /v1/{parent}/outcomes:
+    get:
+      summary: Lists recorded outcomes.
+      operationId: OutcomesService_ListOutcomes
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1ListOutcomesResponse'
+        '400':
+          description: 'The request could not be read: a missing window, one that
+            ends before it starts, a groupBy or filter field not served, or a parameter
+            the method has no field for.'
+          schema:
+            $ref: '#/definitions/Error'
+        '401':
+          description: The key is missing, unknown or revoked. These are answered
+            identically, so probing learns nothing.
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          description: A recording key was used to read, or the request named an organisation
+            the key does not belong to.
+          schema:
+            $ref: '#/definitions/Error'
+        '429':
+          description: Over the plan's rate limit. Try again shortly.
+          schema:
+            $ref: '#/definitions/Error'
+      parameters:
+      - name: parent
+        description: 'The organisation whose outcomes to list.
+
+          Format: `organisations/{organisation}`'
+        in: path
+        required: true
+        type: string
+        pattern: organisations/[^/]+
+      - name: pageSize
+        description: Maximum outcomes to return. Defaults to `100`, capped at `1000`.
+        in: query
+        required: false
+        type: integer
+        format: int32
+      - name: pageToken
+        description: A page token from a previous response, to retrieve the next page.
+        in: query
+        required: false
+        type: string
+      - name: filter
+        description: 'Optional filter over the fields of `Outcome`, e.g.
+
+          `outcome_definition = "organisations/acme/outcomeDefinitions/shortlist"`.
+
+
+          Cannot widen the organisation: scope always comes from `parent`.'
+        in: query
+        required: false
+        type: string
+      tags:
+      - Outcomes
+  /v1/{parent}/users:
+    get:
+      summary: Lists the users an organisation has named.
+      operationId: UsersService_ListUsers
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1ListUsersResponse'
+        '400':
+          description: 'The request could not be read: a missing window, one that
+            ends before it starts, a groupBy or filter field not served, or a parameter
+            the method has no field for.'
+          schema:
+            $ref: '#/definitions/Error'
+        '401':
+          description: The key is missing, unknown or revoked. These are answered
+            identically, so probing learns nothing.
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          description: A recording key was used to read, or the request named an organisation
+            the key does not belong to.
+          schema:
+            $ref: '#/definitions/Error'
+        '429':
+          description: Over the plan's rate limit. Try again shortly.
+          schema:
+            $ref: '#/definitions/Error'
+      parameters:
+      - name: parent
+        description: 'The organisation whose users to list.
+
+          Format: `organisations/{organisation}`'
+        in: path
+        required: true
+        type: string
+        pattern: organisations/[^/]+
+      - name: pageSize
+        description: Maximum users to return. Defaults to `100`, capped at `1000`.
+        in: query
+        required: false
+        type: integer
+        format: int32
+      - name: pageToken
+        description: A page token from a previous response, to retrieve the next page.
+        in: query
+        required: false
+        type: string
+      tags:
+      - People
+definitions:
+  ActivityProvider:
+    type: string
+    enum:
+    - VERTEX_AI
+    - ANTHROPIC
+    - OPENAI
+    - PERPLEXITY
+    description: "The provider that billed for a call.\n\n - VERTEX_AI: Google Vertex\
+      \ AI. The only provider whose charges can be reconciled\nagainst a Google invoice.\n\
+      \ - ANTHROPIC: Anthropic, called directly rather than through Vertex AI.\n -\
+      \ OPENAI: OpenAI.\n - PERPLEXITY: Perplexity."
+  PriceableUnitKind:
+    type: string
+    enum:
+    - PROMPT_TOKENS
+    - CANDIDATE_TOKENS
+    - CACHED_TOKENS
+    - CACHE_WRITE_TOKENS
+    - REASONING_TOKENS
+    - REQUEST
+    description: "What a rate is charged against.\n\n - PROMPT_TOKENS: Tokens in the\
+      \ prompt.\n - CANDIDATE_TOKENS: Tokens the model generated.\n - CACHED_TOKENS:\
+      \ Prompt tokens served from the provider's cache.\n - CACHE_WRITE_TOKENS: Prompt\
+      \ tokens written to the provider's cache.\n - REASONING_TOKENS: Tokens the model\
+      \ spent reasoning.\n - REQUEST: A whole request, e.g. one web search."
+  v1Activity:
+    type: object
+    properties:
+      name:
+        type: string
+        title: 'The resource name of the activity.
+
+          Format: `organisations/{organisation}/activities/{activity}`'
+      agent:
+        type: string
+        description: 'A registered resource rather than a free string, so that spend
+          can always
+
+          be attributed to something with a known owner.'
+        title: 'The agent that performed the work.
+
+          Format: `organisations/{organisation}/agents/{agent}`'
+      request:
+        type: string
+        description: 'Opaque identifier of the end-user request this activity belongs
+          to.
+
+
+          Every activity produced while serving one user request carries the same
+
+          value, including across a handoff from one agent to another. This is what
+
+          makes cost per unit of business work possible: outcomes attach to the
+
+          request, and the request''s activities sum to its cost.'
+      session:
+        type: string
+        description: 'Opaque identifier of the conversation or session, where the
+          product has
+
+          one. Empty for work that is not conversational.'
+      user:
+        type: string
+        description: 'Opaque identifier of the person the work was done for.
+
+
+          An identifier, never an email or a name. Recorders take it from the
+
+          verified request context rather than accepting it as an argument, so that
+
+          one person''s spend cannot be attributed to another.
+
+
+          The name behind it, where the organisation supplies one, is held once at
+
+          `organisations/{organisation}/users/{user}` with this value as the last
+
+          segment, so it cannot contain `/`.'
+      callerService:
+        type: string
+        description: The service that made the call, e.g. `atlas-agent`, `deep-research`.
+      callerComponent:
+        type: string
+        description: 'The part of the calling service that spent the money, e.g. `chat_turn`,
+
+          `tool:web_search`, `research_merger`.
+
+
+          Derived by the recorder from the surrounding framework call, so adopting
+
+          teams do not set it per call site. A free string on the wire: adding a new
+
+          component never requires a contract change. Values an agent did not
+
+          declare in `Agent.components` are still accepted, and reported, so that
+
+          drift is visible rather than silent.'
+      skill:
+        type: string
+        description: 'The area of the product the person was using, e.g. `canvas`,
+
+          `doc_viewer`, `social`.
+
+
+          Distinct from `caller_component`, which is a code path. This is a product
+
+          concept the framework cannot infer, so it is set once on the request
+
+          context by products that want to slice cost this way, and left empty
+
+          otherwise.'
+      model:
+        type: string
+        description: 'The model that was called, as the provider names it,
+
+          e.g. `gemini-2.5-pro`.'
+      provider:
+        $ref: '#/definitions/ActivityProvider'
+        description: The provider that billed for the call.
+      promptTokens:
+        type: integer
+        format: int32
+        description: Tokens in the prompt.
+      candidateTokens:
+        type: integer
+        format: int32
+        description: Tokens the model generated.
+      cachedTokens:
+        type: integer
+        format: int32
+        description: 'Prompt tokens served from the provider''s cache, which are usually
+          billed
+
+          at a different rate from ordinary prompt tokens. Counted separately so the
+
+          rate card can price them correctly.'
+      cacheWriteTokens:
+        type: integer
+        format: int32
+        description: 'Prompt tokens written to the provider''s cache. Some providers
+          bill a
+
+          premium for this, so it is priced separately rather than folded into
+
+          `prompt_tokens`.'
+      reasoningTokens:
+        type: integer
+        format: int32
+        description: 'Tokens the model spent reasoning, where the provider reports
+          them apart
+
+          from the visible response.'
+      totalTokens:
+        type: integer
+        format: int32
+        description: 'Total tokens the provider reported for the call. Recorded as
+          reported
+
+          rather than summed locally, so the figure can be checked against the
+
+          provider.'
+      estimatedCostMicros:
+        type: string
+        format: int64
+        description: 'What the call is expected to cost, in millionths of a US dollar.
+
+
+          Computed by the server from token counts, `charges` and the rate card in
+
+          force at `occurred_at`. Available immediately, and approximate. Money is
+
+          an integer count of millionths rather than a floating-point amount so that
+
+          sums are exact.'
+        readOnly: true
+      billedCostMicros:
+        type: string
+        format: int64
+        description: 'What the call was actually billed, in millionths of a US dollar.
+
+
+          Written by the nightly reconciliation from the cloud billing export, and
+
+          zero until that has run. Only populated for charges that appear on a
+
+          Google invoice; a provider called directly is never reconciled, and this
+
+          stays zero for those. Where both figures are present, this one is the
+
+          truth and `estimated_cost_micros` is the estimate it corrected.'
+        readOnly: true
+      rateCardVersion:
+        type: string
+        description: 'The version of the rate card used to price this activity.
+
+
+          Recorded so that a later change to provider pricing does not silently
+
+          rewrite what history cost.'
+        readOnly: true
+      charges:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1Charge'
+        description: 'Charges not measured in tokens, such as a per-request search
+          fee.
+
+
+          Repeated because one call can incur several. A token-only call has none.'
+      durationMs:
+        type: string
+        format: int64
+        description: How long the call took, in milliseconds.
+      status:
+        $ref: '#/definitions/v1ActivityStatus'
+        description: How the call ended.
+      errorCode:
+        type: string
+        description: 'The provider or platform error code, where the call did not
+          succeed.
+
+
+          A code, never a message: provider exception messages can quote the prompt.'
+      occurredAt:
+        type: string
+        format: date-time
+        description: 'When the work happened, as reported by the recorder.
+
+
+          Preserved as supplied. The server falls back to its own clock only when
+
+          this is omitted, so that a batch delayed in transit is still priced and
+
+          reported against the time it actually occurred.'
+      etag:
+        type: string
+        description: Entity tag.
+        readOnly: true
+      createTime:
+        type: string
+        format: date-time
+        description: When this activity was created.
+        readOnly: true
+      updateTime:
+        type: string
+        format: date-time
+        description: 'When this activity was last updated, which for most activities
+          is when
+
+          reconciliation wrote `billed_cost_micros`.'
+        readOnly: true
+    description: One priced unit of agent work.
+    required:
+    - agent
+    - request
+  v1ActivityStatus:
+    type: string
+    enum:
+    - OK
+    - FAILED
+    - DENIED
+    - TRUNCATED
+    description: "How a call ended.\n\n - OK: The call completed.\n - FAILED: The\
+      \ call failed. Cost is still recorded, because a provider charges for\nwork\
+      \ done before a failure.\n - DENIED: The call was refused before it reached\
+      \ the provider, by a spend limit or\na guardrail. Usually costs nothing, but\
+      \ is recorded so that refusals are\ncountable.\n - TRUNCATED: The call was cut\
+      \ short, by a token limit or a deadline. Partial work was\ndone and is charged\
+      \ for."
+  v1Agent:
+    type: object
+    properties:
+      name:
+        type: string
+        title: 'The resource name of the agent.
+
+          Format: `organisations/{organisation}/agents/{agent}`'
+      displayName:
+        type: string
+        description: Human-readable name, e.g. `Atlas`.
+      product:
+        type: string
+        description: The product the agent belongs to, e.g. `rezco`, `dealade`, `voyage`.
+      service:
+        type: string
+        description: 'The service the agent runs in, e.g. `atlas-agent`. Matches
+
+          `Activity.caller_service` for activities this agent produces.'
+      owner:
+        type: string
+        description: 'Who to ask about this agent''s spend. A team name or a role,
+          not a person,
+
+          so it survives people changing jobs.'
+      components:
+        type: array
+        items:
+          type: string
+        description: 'The components this agent expects to report, e.g. `chat_turn`,
+
+          `tool:web_search`.
+
+
+          Advisory, not enforced. An activity naming a component that is not listed
+
+          here is still recorded, and is counted in a drift report, so that a team
+
+          adding a component never has a write rejected but a team whose components
+
+          have quietly diverged can be told.'
+      etag:
+        type: string
+        description: Entity tag.
+        readOnly: true
+      createTime:
+        type: string
+        format: date-time
+        description: When this agent was registered.
+        readOnly: true
+      updateTime:
+        type: string
+        format: date-time
+        description: When this agent was last updated.
+        readOnly: true
+    description: An agent whose spend is recorded.
+    required:
+    - displayName
+    - product
+    - owner
+  v1AggregateActivitiesResponse:
+    type: object
+    properties:
+      rows:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1AggregateRow'
+        description: One row per combination of the requested dimensions.
+      nextPageToken:
+        type: string
+        description: Token to retrieve the next page, empty when there are no more.
+    description: Response for [ActivitiesService.AggregateActivities].
+  v1AggregateRow:
+    type: object
+    properties:
+      dimensions:
+        type: object
+        additionalProperties:
+          type: string
+        description: 'The dimension values for this row, keyed by dimension name,
+          e.g.
+
+          `{"agent": "organisations/acme/agents/atlas", "model": "gemini-2.5-pro"}`.'
+      estimatedCostMicros:
+        type: string
+        format: int64
+        description: Sum of `estimated_cost_micros` over the matching activities.
+      billedCostMicros:
+        type: string
+        format: int64
+        description: 'Sum of `billed_cost_micros` over the matching activities. Lower
+          than the
+
+          estimate where reconciliation has not yet run for part of the window.'
+      totalTokens:
+        type: string
+        format: int64
+        description: Sum of `total_tokens` over the matching activities.
+      activityCount:
+        type: string
+        format: int64
+        description: How many activities the row covers.
+      promptTokens:
+        type: string
+        format: int64
+        description: 'Sums of each kind of token, kept apart because each is priced
+          at its own
+
+          rate and a total cannot be taken back apart once summed.'
+      candidateTokens:
+        type: string
+        format: int64
+      cachedTokens:
+        type: string
+        format: int64
+      cacheWriteTokens:
+        type: string
+        format: int64
+      reasoningTokens:
+        type: string
+        format: int64
+      failedCount:
+        type: string
+        format: int64
+        description: 'How many of the activities failed or were denied: neither produced
+          the
+
+          work the call was made for.'
+      truncatedCount:
+        type: string
+        format: int64
+        description: How many hit a limit and did partial work.
+      unpricedCount:
+        type: string
+        format: int64
+        description: 'How many model calls used tokens and were priced at nothing,
+          which is
+
+          what a call looks like when the rate card could not match its model.'
+      modelCalls:
+        type: string
+        format: int64
+        description: 'How many of the activities were model calls, and how many tool
+          calls,
+
+          by the same rule as the `kind` dimension. The two do not have to sum to
+
+          `activity_count`: a call that names no model, counted no tokens and ran
+
+          no tool is neither.
+
+
+          A tool call carries no model, so a row grouped by `model` holds the tool
+
+          calls under an empty value rather than leaving them out.'
+      toolCalls:
+        type: string
+        format: int64
+      distinctRequests:
+        type: string
+        format: int64
+        description: 'How many distinct requests and people the activities belong
+          to. Exact
+
+          for the window asked for, and not additive across windows: a person
+
+          active on two days is one person in a two-day window.'
+      distinctUsers:
+        type: string
+        format: int64
+      p50DurationMs:
+        type: string
+        format: int64
+        description: 'Duration at the 50th and 95th percentile, in milliseconds, over
+          the
+
+          activities that reported one. Approximate, and not additive across
+
+          windows.'
+      p95DurationMs:
+        type: string
+        format: int64
+      firstOccurredAt:
+        type: string
+        format: date-time
+        description: When the earliest and latest of the activities happened.
+      lastOccurredAt:
+        type: string
+        format: date-time
+    description: Spend for one combination of grouping dimensions.
+  v1Charge:
+    type: object
+    properties:
+      priceableUnit:
+        type: string
+        title: 'The priceable unit being charged for.
+
+          Format: `priceableUnits/{priceable_unit}`'
+      quantity:
+        type: string
+        format: int64
+        description: How many of the unit were consumed, e.g. `3` web searches.
+      estimatedCostMicros:
+        type: string
+        format: int64
+        description: 'What this charge is expected to cost, in millionths of a US
+          dollar.
+
+          Computed by the server from the rate card.'
+        readOnly: true
+    description: A charge that is not measured in tokens.
+    required:
+    - priceableUnit
+    - quantity
+  v1ListActivitiesResponse:
+    type: object
+    properties:
+      activities:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1Activity'
+        description: The activities in this page.
+      nextPageToken:
+        type: string
+        description: Token to retrieve the next page, empty when there are no more.
+    description: Response for [ActivitiesService.ListActivities].
+  v1ListAgentsResponse:
+    type: object
+    properties:
+      agents:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1Agent'
+        description: The agents in this page.
+      nextPageToken:
+        type: string
+        description: Token to retrieve the next page, empty when there are no more.
+    description: Response for [AgentsService.ListAgents].
+  v1ListOutcomesResponse:
+    type: object
+    properties:
+      outcomes:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1Outcome'
+        description: The outcomes in this page.
+      nextPageToken:
+        type: string
+        description: Token to retrieve the next page, empty when there are no more.
+    description: Response for [OutcomesService.ListOutcomes].
+  v1ListPriceableUnitsResponse:
+    type: object
+    properties:
+      priceableUnits:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1PriceableUnit'
+        description: The priceable units in this page.
+      nextPageToken:
+        type: string
+        description: Token to retrieve the next page, empty when there are no more.
+    description: Response for [PriceableUnitsService.ListPriceableUnits].
+  v1ListUsersResponse:
+    type: object
+    properties:
+      users:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1User'
+        description: The users in this page.
+      nextPageToken:
+        type: string
+        description: Token to retrieve the next page, empty when there are no more.
+    description: Response for [UsersService.ListUsers].
+  v1Outcome:
+    type: object
+    properties:
+      name:
+        type: string
+        title: 'The resource name of the outcome.
+
+          Format: `organisations/{organisation}/outcomes/{outcome}`'
+      outcomeDefinition:
+        type: string
+        title: 'The kind of outcome being counted.
+
+          Format: `organisations/{organisation}/outcomeDefinitions/{outcome_definition}`'
+      request:
+        type: string
+        description: 'The request that produced it, matching `Activity.request`.
+
+
+          The join between work done and money spent. A request with no outcome
+
+          recorded simply has no cost-per-outcome figure; it is not an error.'
+      quantity:
+        type: string
+        format: int64
+        description: 'How many were produced, e.g. `12` candidates on one shortlist.
+          Zero is
+
+          meaningful: it records a request that produced nothing.'
+      occurredAt:
+        type: string
+        format: date-time
+        description: When the outcome was produced.
+      etag:
+        type: string
+        description: Entity tag.
+        readOnly: true
+      createTime:
+        type: string
+        format: date-time
+        description: When this outcome was recorded.
+        readOnly: true
+      updateTime:
+        type: string
+        format: date-time
+        description: When this outcome was last updated.
+        readOnly: true
+    description: A count of business outcomes produced by one request.
+    required:
+    - outcomeDefinition
+    - request
+    - quantity
+  v1PriceableUnit:
+    type: object
+    properties:
+      name:
+        type: string
+        title: 'The resource name of the priceable unit.
+
+          Format: `priceableUnits/{priceable_unit}`'
+      displayName:
+        type: string
+        description: Human-readable name, e.g. `Gemini 2.5 Pro output tokens`.
+      provider:
+        type: string
+        description: The provider that charges for it.
+      model:
+        type: string
+        description: 'The model this rate applies to, where the charge is per model.
+          Empty for a
+
+          charge that is not model-specific, such as a web search.'
+      kind:
+        $ref: '#/definitions/PriceableUnitKind'
+        description: What is being counted.
+      unitCostMicros:
+        type: string
+        format: int64
+        description: 'Deprecated: too coarse to hold a real rate. Use `unit_cost_nanos`.
+
+
+          A single token often costs a fraction of one millionth of a dollar —
+
+          Gemini input is 1.25 millionths — so a whole number of millionths cannot
+
+          express it and rounds every such rate down. Left in place rather than
+
+          removed, and never read.'
+      unitCostNanos:
+        type: string
+        format: int64
+        description: 'Cost of one unit, in billionths of a US dollar.
+
+
+          Billionths rather than millionths because a per-token rate is routinely
+          a
+
+          fraction of a millionth, and rounding one to a whole millionth undercounts
+
+          every token priced against it. An activity''s cost is still stored in
+
+          millionths; the extra precision belongs to the rate, not to the money.'
+      effectiveFrom:
+        type: string
+        format: date-time
+        description: When this rate takes effect, inclusive.
+      effectiveTo:
+        type: string
+        format: date-time
+        description: When this rate stops applying, exclusive. Empty while it is current.
+      rateCardVersion:
+        type: string
+        description: 'The rate card version this belongs to, recorded on every activity
+          priced
+
+          with it, e.g. `2026-09`.'
+      source:
+        type: string
+        description: 'Where the rate came from, e.g. a link to the provider''s public
+          price list.
+
+          Kept so a figure can be traced back to a published price.'
+      etag:
+        type: string
+        description: Entity tag.
+        readOnly: true
+      createTime:
+        type: string
+        format: date-time
+        description: When this rate was created.
+        readOnly: true
+      updateTime:
+        type: string
+        format: date-time
+        description: When this rate was last updated.
+        readOnly: true
+    description: One line of the rate card.
+    required:
+    - displayName
+    - provider
+    - kind
+    - unitCostNanos
+    - effectiveFrom
+    - rateCardVersion
+  v1User:
+    type: object
+    properties:
+      name:
+        type: string
+        description: '`{user}` is the identifier exactly as the organisation''s agents
+          stamp it
+
+          on `Activity.user`; that equality is the whole join. It is the bare
+
+          identifier the organisation''s sign-in issued, never an email, and it
+
+          cannot contain `/`.'
+        title: 'The resource name of the user.
+
+          Format: `organisations/{organisation}/users/{user}`'
+      displayName:
+        type: string
+        description: The person's name as the organisation would show it, e.g. `Ada
+          Lovelace`.
+      email:
+        type: string
+        description: The person's email address, where the organisation chooses to
+          send it.
+      createTime:
+        type: string
+        format: date-time
+        description: When this user was first named.
+        readOnly: true
+      updateTime:
+        type: string
+        format: date-time
+        description: When this user was last written.
+        readOnly: true
+    description: A person an organisation's agents do work for, named.
+  Error:
+    type: object
+    description: How a refusal is answered. The code is the gRPC status by name; the
+      message says what to change.
+    properties:
+      error:
+        type: object
+        properties:
+          code:
+            type: string
+            example: PermissionDenied
+          message:
+            type: string
+schemes:
+- https
+securityDefinitions:
+  ApiKey:
+    type: apiKey
+    in: header
+    name: X-Api-Key
+    description: A key issued on the console's API keys page as Reads. A key issued
+      as Records is refused here.
+security:
+- ApiKey: []

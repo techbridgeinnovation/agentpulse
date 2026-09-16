@@ -12,8 +12,14 @@ if [ ! -d "$AP" ]; then
   exit 1
 fi
 
-rm -f "$ROOT/docs"/*.md
+rm -f "$ROOT/docs"/*.md "$ROOT/docs/openapi"/*
+mkdir -p "$ROOT/docs/openapi"
 for page in "$AP"/*.md; do
   cp "$page" "$ROOT/docs/"
   echo "$(basename "$page")"
+done
+# The OpenAPI document the console serves, generated from the contract by the build's scripts/openapi.sh.
+for spec in "$AP"/openapi/agentpulse.*; do
+  cp "$spec" "$ROOT/docs/openapi/"
+  echo "openapi/$(basename "$spec")"
 done
