@@ -16,11 +16,13 @@ Activities are append-only. There is no update and no delete, because the record
 
 | | |
 | --- | --- |
+| its name | which organisation, and which workspace within it, the work is filed under; a product with one tenant has one workspace, `default`, and never names it |
 | `agent` | which agent did the work, under your organisation |
 | `request` | the end-user request it belongs to — every call made while serving one request shares it, across a handoff from one agent to another |
 | `session` | the conversation, where there is one |
 | `user` | the identifier of the person the work was for |
 | `caller_service`, `caller_component`, `skill` | which part of your product spent it |
+| `project` | which unit of work inside the workspace it served, where your product has one; a label, never a boundary |
 | `model`, `provider` | what was called and who bills for it |
 | token counts | prompt, candidate, cached, cache-write, reasoning, and the total the provider reported |
 | `duration_ms`, `status`, `error_code` | how long, whether it worked, and why not |

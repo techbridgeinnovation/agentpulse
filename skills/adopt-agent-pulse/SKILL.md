@@ -41,21 +41,24 @@ Every dependency is public. No registry credential is involved.
 
 ## Step 2: the settings, from the environment
 
-Read all four at startup and refuse to start without them. A default would file spend under somebody else's organisation, and the gateway would refuse it silently.
+Read all three at startup and refuse to start without them. A default would file spend under somebody else's organisation, and the gateway would refuse it silently.
 
 ```go
-organisation := os.Getenv("AP_ORGANISATION") // organisations/<id>
-agent := os.Getenv("AP_AGENT")               // organisations/<id>/agents/<name>
+key := os.Getenv("AP_API_KEY")
+organisation := recorder.OrganisationOfKey(key) // organisations/<id>, read off the key
+agent := os.Getenv("AP_AGENT")                  // organisations/<id>/agents/<name>
 
-conn, err := recorder.Dial(os.Getenv("AP_GATEWAY"), os.Getenv("AP_API_KEY"))
+conn, err := recorder.Dial(os.Getenv("AP_GATEWAY"), key)
 if err != nil || organisation == "" || agent == "" {
-	log.Fatal("AP_GATEWAY, AP_API_KEY, AP_ORGANISATION and AP_AGENT must all be set")
+	log.Fatal("AP_GATEWAY, AP_API_KEY and AP_AGENT must all be set")
 }
 ```
 
+The key carries the organisation it was issued for, so the organisation is not a separate setting. A key issued before keys carried it reads back empty from `OrganisationOfKey`; in that one case fall back to an `AP_ORGANISATION` setting. The gateway holds every request to the organisation it resolves the whole key to, so the prefix is a convenience and never a check.
+
 `recorder.Dial` opens one TLS connection to the gateway with the key attached to every call. It is lazy: nothing is touched on the network until the first record is sent. The same connection serves every client below.
 
-Add all four to the service's deployment configuration next to its other environment variables. The key is a secret; put it where the service keeps secrets, never in a file that is committed.
+Add all three to the service's deployment configuration next to its other environment variables. The key is a secret; put it where the service keeps secrets, never in a file that is committed.
 
 ## Step 3: construct the recorder once
 
@@ -99,6 +102,16 @@ ctx = recorder.WithUser(ctx, recorder.User{ID: claims.Subject, Name: claims.Name
 ```
 
 `ID` is the bare identifier the sign-in issued — `8c21e0b4`, not `users/8c21e0b4` — because it becomes the last segment of the directory row's name. `Name` and `Email` are optional; with only `ID` the person is recorded and not named.
+
+**If the product has customers of its own**, set the customer on the same context, at the same place, and the unit of work inside it if the product tracks one:
+
+```go
+ctx = recorder.WithProject(recorder.WithWorkspace(ctx, tenantID), projectID)
+```
+
+`tenantID` is the bare identifier of the customer, `acme`, not a resource name; the library builds the name under the organisation the key carries. Create the workspace once when the customer signs up, from the code that creates the customer's own record, with `WorkspacesService.CreateWorkspace` under the organisation. A product with one tenant sets neither: its records are filed under its default workspace and it never names it.
+
+Never pass the workspace or the project as an argument at a model call site. A value a call site can choose is a value that can attribute one customer's spend to another.
 
 On ADK v1 the same three functions live in `recorder/adkhooks` with `adkhooks.Options`.
 

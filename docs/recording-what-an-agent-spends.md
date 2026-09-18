@@ -26,18 +26,35 @@ Counts, identifiers, timings and status codes. That is the whole of it.
 
 ## What you need first
 
-Four settings. None has a default, and the recorder refuses to start without them rather than dropping records quietly.
+Three settings. None has a default, and the recorder refuses to start without them rather than dropping records quietly.
 
 | Setting | What it is |
 | --- | --- |
 | `AP_GATEWAY` | the address shown on the Connect page |
-| `AP_API_KEY` | issued on the API keys page as **Records**, shown once |
-| `AP_ORGANISATION` | `organisations/<id>` |
+| `AP_API_KEY` | issued on the API keys page as a **write key**, shown once |
 | `AP_AGENT` | `organisations/<id>/agents/<name>`, a name of your choosing |
 
-One key serves every agent in the organisation. A record naming a different organisation, or an agent outside it, is refused at the gateway rather than filed somewhere else.
+The key carries the organisation it was issued for, and `recorder.OrganisationOfKey` reads it back, so the organisation is not a fourth setting. A key issued before keys carried it reads back empty; set `AP_ORGANISATION` beside it in that one case.
+
+One key serves every agent in the organisation. A record naming a different organisation, or an agent outside it, is refused at the gateway rather than filed somewhere else. The gateway decides that from the key it resolved, never from what the key's prefix claims.
 
 Nothing registers an agent. The first record carrying its name is what makes it appear.
+
+## Which customer the work was for
+
+An organisation is who holds the plan. A workspace is whose the spend is: one per customer of a product that has customers, or one called `default` that a single-tenant product never names.
+
+If your product has one tenant, set nothing. Every record is filed under your default workspace and every read of your organisation sees it.
+
+If your product has customers of its own, set the workspace on the request in the same place you set the user, and the project if you track one:
+
+```go
+ctx = recorder.WithProject(recorder.WithWorkspace(ctx, "acme"), "matter-1183")
+```
+
+The workspace is the bare identifier, `acme`, not a full resource name. Create it once when the customer signs up, from the same code that creates the customer's own record. From then on every call in that request is filed under it, a read of `organisations/<id>/workspaces/acme` sees only that customer, and a read of `organisations/<id>` grouped by `workspace` is one row per customer.
+
+Neither is an argument at a model call site. A value a call site can choose is a value that can attribute one customer's spend to another.
 
 ## Which path applies
 
