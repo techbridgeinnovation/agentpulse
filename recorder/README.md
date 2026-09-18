@@ -28,17 +28,20 @@ Dropped records are counted and the count is readable. That counter is the one t
 
 ## Wiring it in
 
-Three settings, read from the environment and refused at startup when missing. The organisation is the one the spend is filed under, the agent is a name of the team's choosing under it, and the key is issued for that organisation in the console. A default for any of them would file a stranger's spend under the wrong organisation, and metering would refuse it quietly.
+Three settings, read from the environment and refused at startup when missing. The key is issued in the console for the organisation the spend is filed under, and carries that organisation in the clear, so the organisation is read off the key. The agent is a name of the team's choosing under it. A default for any of them would file a stranger's spend under the wrong organisation, and metering would refuse it quietly.
 
 ```go
-organisation := os.Getenv("AP_ORGANISATION") // organisations/<id>
-agent := os.Getenv("AP_AGENT")               // organisations/<id>/agents/<name>
+key := os.Getenv("AP_API_KEY")
+organisation := recorder.OrganisationOfKey(key) // organisations/<id>, from the key
+agent := os.Getenv("AP_AGENT")                  // organisations/<id>/agents/<name>
 
-conn, err := recorder.Dial(os.Getenv("AP_GATEWAY"), os.Getenv("AP_API_KEY"))
+conn, err := recorder.Dial(os.Getenv("AP_GATEWAY"), key)
 if err != nil || organisation == "" || agent == "" {
-    log.Fatal("AP_GATEWAY, AP_API_KEY, AP_ORGANISATION and AP_AGENT must all be set")
+    log.Fatal("AP_GATEWAY, AP_API_KEY and AP_AGENT must all be set")
 }
 ```
+
+A key issued before it carried its organisation reads back empty from `OrganisationOfKey`, and the organisation is set beside it as `AP_ORGANISATION`. Nothing about scope rests on the prefix: the gateway holds every request to the organisation it resolves the whole key to, so an edited prefix is refused rather than believed.
 
 `Dial` opens one TLS connection to the gateway with the key attached to every call, and it is lazy: nothing is touched on the network until the first record is sent. The same connection serves the sink, the rate source and the decider.
 
