@@ -22,7 +22,8 @@ for contract in metering governance; do
   target="$ROOT/recorder/pb/$contract"
   rm -f "$target"/*.go
   for stem in ${FILES[$contract]}; do
-    cp "$dir/$stem".*.go "$target/"
+    # Named one by one rather than globbed: the message file and the two grpc stubs share a stem but not a separator, and a glob on the stem alone would also take any other file that happens to start the same way.
+    cp "$dir/$stem.pb.go" "$dir/${stem}_grpc.pb.go" "$dir/${stem}_grpc.meta.pb.go" "$target/"
   done
   chmod u+w "$target"/*.go
   echo "$contract $version"
