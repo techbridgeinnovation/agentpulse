@@ -26,17 +26,18 @@ Counts, identifiers, timings and status codes. That is the whole of it.
 
 ## What you need first
 
-Three settings. None has a default, and the recorder refuses to start without them rather than dropping records quietly.
+Four settings. None has a default, and the recorder refuses to start without them rather than dropping records quietly.
 
 | Setting | What it is |
 | --- | --- |
 | `AP_GATEWAY` | the address shown on the Connect page |
-| `AP_API_KEY` | issued on the API keys page as a **write key**, shown once |
+| `AP_API_KEY` | the key's name, `organisations/<id>/apiKeys/<id>`, shown on the API keys page |
+| `AP_API_SECRET` | issued with the key as a **write key**, shown once |
 | `AP_AGENT` | `organisations/<id>/agents/<name>`, a name of your choosing |
 
-The key carries the organisation it was issued for, and `recorder.OrganisationOfKey` reads it back, so the organisation is not a fourth setting. A key issued before keys carried it reads back empty; set `AP_ORGANISATION` beside it in that one case.
+The key is public and names the organisation it belongs to, so `recorder.OrganisationOfKey` reads the organisation off it and it is not a separate setting. The secret is the part that authenticates. The two are presented together and resolve only together.
 
-One key serves every agent in the organisation. A record naming a different organisation, or an agent outside it, is refused at the gateway rather than filed somewhere else. The gateway decides that from the key it resolved, never from what the key's prefix claims.
+One key serves every agent in the organisation. A record naming a different organisation, or an agent outside it, is refused at the gateway rather than filed somewhere else. The gateway decides that from what the pair resolves to, never from what the key's name claims.
 
 Nothing registers an agent. The first record carrying its name is what makes it appear.
 

@@ -43,17 +43,17 @@ On the **API keys** page, create a key and choose **Read key**.
 
 A key does one thing or the other, never both. A key that records lives inside an agent's process, which is where a credential is most likely to leak, and one that could also read would hand over your whole organisation's spend.
 
-The secret is shown once and is not recoverable. Keep it where you keep your others.
+A key is two values. The key itself is its name, `organisations/<id>/apiKeys/<id>`, which is public and stays on the page. The secret is shown once and is not recoverable; keep it where you keep your others. Both are presented on every request, and they resolve only as a pair.
 
 ## Asking a question
 
-Send the key as `x-api-key`, over TLS, to the gateway address shown on the Connect page. Every request names its `parent`: your organisation, or one workspace within it.
+Send the key as `X-Api-Key` and the secret as `X-Api-Secret`, over TLS, to the gateway address shown on the Connect page. Every request names its `parent`: your organisation, or one workspace within it.
 
 An organisation reads every workspace under it. A workspace reads only its own. The two are a different address rather than the same read with a filter, because which one you may ask for is the whole of the access decision: a key confined to a workspace reaches that workspace's address and is refused the organisation's.
 
 ```bash
 curl -s "https://<gateway>/v1/organisations/<id>/activities:aggregate?groupBy=agent&groupBy=model&startTime=2026-09-01T00:00:00Z&endTime=2026-10-01T00:00:00Z" \
-  -H "X-Api-Key: $AP_API_KEY"
+  -H "X-Api-Key: $AP_API_KEY" -H "X-Api-Secret: $AP_API_SECRET"
 ```
 
 Every method is a GET. The question goes in the query string — a dimension repeated is a list, a timestamp is RFC 3339 — and a browser or a cache can treat the same question asked twice as one.
@@ -92,7 +92,7 @@ For a product with customers of its own, `groupBy=workspace` at the organisation
 
 ```bash
 curl -s "https://<gateway>/v1/organisations/<id>/workspaces/acme/activities:aggregate?groupBy=project&groupBy=user&startTime=2026-09-01T00:00:00Z&endTime=2026-10-01T00:00:00Z" \
-  -H "X-Api-Key: $AP_API_KEY"
+  -H "X-Api-Key: $AP_API_KEY" -H "X-Api-Secret: $AP_API_SECRET"
 ```
 
 ## Asking for exactly the rows a panel draws

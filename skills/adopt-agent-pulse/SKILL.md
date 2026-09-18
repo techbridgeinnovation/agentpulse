@@ -41,24 +41,24 @@ Every dependency is public. No registry credential is involved.
 
 ## Step 2: the settings, from the environment
 
-Read all three at startup and refuse to start without them. A default would file spend under somebody else's organisation, and the gateway would refuse it silently.
+Read all four at startup and refuse to start without them. A default would file spend under somebody else's organisation, and the gateway would refuse it silently.
 
 ```go
-key := os.Getenv("AP_API_KEY")
+key := os.Getenv("AP_API_KEY")                  // organisations/<id>/apiKeys/<id>, public
 organisation := recorder.OrganisationOfKey(key) // organisations/<id>, read off the key
 agent := os.Getenv("AP_AGENT")                  // organisations/<id>/agents/<name>
 
-conn, err := recorder.Dial(os.Getenv("AP_GATEWAY"), key)
+conn, err := recorder.DialWithKey(os.Getenv("AP_GATEWAY"), key, os.Getenv("AP_API_SECRET"))
 if err != nil || organisation == "" || agent == "" {
-	log.Fatal("AP_GATEWAY, AP_API_KEY and AP_AGENT must all be set")
+	log.Fatal("AP_GATEWAY, AP_API_KEY, AP_API_SECRET and AP_AGENT must all be set")
 }
 ```
 
-The key carries the organisation it was issued for, so the organisation is not a separate setting. A key issued before keys carried it reads back empty from `OrganisationOfKey`; in that one case fall back to an `AP_ORGANISATION` setting. The gateway holds every request to the organisation it resolves the whole key to, so the prefix is a convenience and never a check.
+The key is its name and is public; it carries the organisation, so the organisation is not a separate setting. The secret is the value shown once when the key was issued and is the part that authenticates. The two travel as a pair and resolve only together. The gateway holds every request to the organisation the pair resolves to, so a key name is never a check on its own.
 
-`recorder.Dial` opens one TLS connection to the gateway with the key attached to every call. It is lazy: nothing is touched on the network until the first record is sent. The same connection serves every client below.
+`recorder.DialWithKey` opens one TLS connection to the gateway with the pair attached to every call. It is lazy: nothing is touched on the network until the first record is sent. The same connection serves every client below.
 
-Add all three to the service's deployment configuration next to its other environment variables. The key is a secret; put it where the service keeps secrets, never in a file that is committed.
+Add all four to the service's deployment configuration next to its other environment variables. The secret is a secret; put it where the service keeps secrets, never in a file that is committed. The key is not, and may sit beside the gateway address.
 
 ## Step 3: construct the recorder once
 
