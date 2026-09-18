@@ -10,6 +10,8 @@
 // model response, so an adopting team adds the callbacks and changes no other
 // code.
 //
+// Which tenant the turn is for, and which unit of work inside it, are the two the framework cannot know. They are read from the callback context where the product put them, at its sign-in, and never asked for here — see recorder.WithWorkspace.
+//
 // Kept in its own package so that service code which does not use ADK can take
 // the recorder without taking the framework with it. That code reports through
 // the reporter in the parent package instead, because there are no callbacks to
@@ -29,9 +31,9 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -137,7 +139,7 @@ func requestOf(ctx agent.ReadonlyContext) string {
 // A user set explicitly on the context wins, for the same reason a request does: it is what the product's own sign-in check put there, name and all. Otherwise the framework's user id is used, which is an identifier and nothing more.
 func userOf(r *recorder.Recorder, ctx agent.ReadonlyContext) string {
 	if user := recorder.UserFrom(ctx); user.ID != "" {
-		r.NoteUser(user)
+		r.NoteUserIn(ctx, user)
 		return user.ID
 	}
 	return ctx.UserID()
@@ -181,6 +183,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			CallerService:   opts.Service,
 			CallerComponent: componentOf(ctx),
 			Skill:           opts.Skill,
+			Project:         recorder.ProjectFrom(ctx),
 			Model:           modelOf(response, known),
 			Provider:        opts.provider(),
 			Status:          statusOf(response, callErr),
@@ -189,7 +192,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 		}
 		applyUsage(activity, response.UsageMetadata)
 
-		r.Record(activity)
+		r.RecordIn(ctx, activity)
 		return nil, nil
 	}
 }
@@ -212,7 +215,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			status = pb.Activity_FAILED
 		}
 
-		r.Record(&pb.Activity{
+		r.RecordIn(ctx, &pb.Activity{
 			Agent:           opts.Agent,
 			Request:         requestOf(ctx),
 			Session:         ctx.SessionID(),
@@ -220,6 +223,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			CallerService:   opts.Service,
 			CallerComponent: "tool:" + name,
 			Skill:           opts.Skill,
+			Project:         recorder.ProjectFrom(ctx),
 			Provider:        opts.provider(),
 			Status:          status,
 			OccurredAt:      timestamppb.Now(),
@@ -316,6 +320,8 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 // than outliving it. A malformed opts.Agent, a Decide error, or a NOTIFY
 // verdict are all handled without ever stopping the model call — see
 // BeforeModel's own doc for why.
+//
+// The workspace and the project are asked about because a budget can be narrowed to either, and a call is only held to a budget that names the tenant it is for. A turn that names no workspace asks about the organisation's default, which is what the same call spends against.
 func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decider recorder.Decider) {
 	if decider == nil {
 		return
@@ -331,10 +337,12 @@ func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decid
 	defer cancel()
 
 	resp, err := decider.Decide(dctx, &governancepb.DecideRequest{
-		Parent:  organisation,
-		Agent:   opts.Agent,
-		Product: opts.Product,
-		User:    userIDOf(ctx),
+		Parent:    organisation,
+		Agent:     opts.Agent,
+		Product:   opts.Product,
+		User:      userIDOf(ctx),
+		Workspace: recorder.WorkspaceName(organisation, recorder.WorkspaceFrom(ctx)),
+		Project:   recorder.ProjectFrom(ctx),
 	})
 	if err != nil {
 		r.NoteDecisionError()

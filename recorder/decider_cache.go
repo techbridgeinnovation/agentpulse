@@ -12,16 +12,26 @@ var _ Decider = (*CachingDecider)(nil)
 
 // decisionCacheKey is the full decision context a governance verdict was
 // reached for. A cached response is only ever reused for another call with
-// exactly this same (organisation, product, user, agent) tuple.
+// exactly this same (organisation, workspace, project, product, user, agent)
+// tuple.
+//
+// The workspace and the project are part of it because a budget can be narrowed to either, so two calls that differ only in which tenant they are for are two questions with two answers. Leaving them out would let one tenant's verdict answer another's call for as long as the entry lived, which is the whole of what a workspace exists to prevent.
 type decisionCacheKey struct {
-	parent  string
-	product string
-	user    string
-	agent   string
+	parent    string
+	workspace string
+	project   string
+	product   string
+	user      string
+	agent     string
 }
 
-func decisionCacheKeyOf(parent, product, user, agent string) decisionCacheKey {
-	return decisionCacheKey{parent: parent, product: product, user: user, agent: agent}
+func decisionCacheKeyOf(parent, workspace, project, product, user, agent string) decisionCacheKey {
+	return decisionCacheKey{parent: parent, workspace: workspace, project: project, product: product, user: user, agent: agent}
+}
+
+// decisionCacheKeyFor is the key a request's own decision context makes.
+func decisionCacheKeyFor(req *governancepb.DecideRequest) decisionCacheKey {
+	return decisionCacheKeyOf(req.GetParent(), req.GetWorkspace(), req.GetProject(), req.GetProduct(), req.GetUser(), req.GetAgent())
 }
 
 // cacheEntry is one cached verdict and when it stops being usable.
@@ -88,7 +98,7 @@ func newCachingDecider(inner Decider, ttl time.Duration, now func() time.Time) *
 // exact decision context, otherwise asks the wrapped Decider and caches a
 // successful result.
 func (c *CachingDecider) Decide(ctx context.Context, req *governancepb.DecideRequest) (*governancepb.DecideResponse, error) {
-	if resp, ok := c.Get(req.GetParent(), req.GetProduct(), req.GetUser(), req.GetAgent()); ok {
+	if resp, ok := c.get(decisionCacheKeyFor(req)); ok {
 		return resp, nil
 	}
 	return c.resolve(ctx, req)
@@ -101,7 +111,7 @@ func (c *CachingDecider) Decide(ctx context.Context, req *governancepb.DecideReq
 // ctx: it selects on that call finishing or its own ctx being done, rather
 // than blocking unconditionally on another call's deadline.
 func (c *CachingDecider) resolve(ctx context.Context, req *governancepb.DecideRequest) (*governancepb.DecideResponse, error) {
-	key := decisionCacheKeyOf(req.GetParent(), req.GetProduct(), req.GetUser(), req.GetAgent())
+	key := decisionCacheKeyFor(req)
 
 	c.inflightMu.Lock()
 	if call, ok := c.inflight[key]; ok {
@@ -119,7 +129,7 @@ func (c *CachingDecider) resolve(ctx context.Context, req *governancepb.DecideRe
 
 	resp, err := c.inner.Decide(ctx, req)
 	if err == nil {
-		c.Store(req.GetParent(), req.GetProduct(), req.GetUser(), req.GetAgent(), resp)
+		c.store(key, resp)
 	}
 	call.resp, call.err = resp, err
 
@@ -133,9 +143,14 @@ func (c *CachingDecider) resolve(ctx context.Context, req *governancepb.DecideRe
 
 // Get reads a cached verdict for the given decision context, if one is
 // cached and not expired.
+//
+// The decision context it reads is the one naming no workspace and no
+// project, which is what an agent serving a single tenant asks with.
 func (c *CachingDecider) Get(parent, product, user, agent string) (*governancepb.DecideResponse, bool) {
-	key := decisionCacheKeyOf(parent, product, user, agent)
+	return c.get(decisionCacheKeyOf(parent, "", "", product, user, agent))
+}
 
+func (c *CachingDecider) get(key decisionCacheKey) (*governancepb.DecideResponse, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -165,12 +180,17 @@ func (c *CachingDecider) Get(parent, product, user, agent string) (*governancepb
 //
 // Exported so a later streaming mechanism can seed or refresh a verdict
 // governance pushed, without going through the wrapped Decider at all.
+//
+// The decision context it writes, like Get's, is the one naming no workspace
+// and no project.
 func (c *CachingDecider) Store(parent, product, user, agent string, resp *governancepb.DecideResponse) {
+	c.store(decisionCacheKeyOf(parent, "", "", product, user, agent), resp)
+}
+
+func (c *CachingDecider) store(key decisionCacheKey, resp *governancepb.DecideResponse) {
 	if c.ttl <= 0 || resp == nil {
 		return
 	}
-
-	key := decisionCacheKeyOf(parent, product, user, agent)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -181,8 +201,11 @@ func (c *CachingDecider) Store(parent, product, user, agent string, resp *govern
 //
 // Exported for the same reason as Store: a later streaming mechanism needs
 // to drop a verdict governance has told this agent is no longer current.
+//
+// The decision context it drops, like Get's and Store's, is the one naming no
+// workspace and no project. InvalidateScope is what reaches the rest.
 func (c *CachingDecider) Invalidate(parent, product, user, agent string) {
-	key := decisionCacheKeyOf(parent, product, user, agent)
+	key := decisionCacheKeyOf(parent, "", "", product, user, agent)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -201,6 +224,8 @@ func (c *CachingDecider) Invalidate(parent, product, user, agent string) {
 // changed, but has no way to know which exact (parent, product, user,
 // agent) tuples a given recorder happens to have cached — only this cache
 // does.
+//
+// The workspace and the project a verdict was reached for are not filters here, so a scope clears every tenant's verdict within it rather than one tenant's. That errs towards asking governance again, which costs a call; the other way round would be keeping a verdict governance has said is stale, which costs money.
 func (c *CachingDecider) InvalidateScope(parent, product, user, agent string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

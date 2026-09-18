@@ -3,6 +3,7 @@ package recorder
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -213,6 +214,8 @@ func TestARecorderWithNoConfigurationIsInertRatherThanBroken(t *testing.T) {
 func TestANilRecorderIsSafeToUse(t *testing.T) {
 	var r *Recorder
 	r.Record(activity("a"))
+	r.RecordIn(WithWorkspace(context.Background(), "acme"), activity("b"))
+	r.NoteUserIn(WithWorkspace(context.Background(), "acme"), ada)
 	r.Close(context.Background())
 	if s := r.Stats(); s.Recorded != 0 {
 		t.Fatalf("recorded = %d, want 0", s.Recorded)
@@ -242,5 +245,137 @@ func TestRecordingFromManyGoroutinesAtOnceIsSafe(t *testing.T) {
 	s := r.Stats()
 	if s.Recorded+s.Dropped != 1000 {
 		t.Fatalf("recorded %d plus dropped %d, want 1000 accounted for", s.Recorded, s.Dropped)
+	}
+}
+
+// groupingSink keeps each call whole, with the workspace the batch was
+// delivered under, so a test can see how a flush was split rather than only
+// what survived it.
+type groupingSink struct {
+	mu     sync.Mutex
+	calls  []deliveredBatch
+	refuse string
+}
+
+// deliveredBatch is one call to a sink: the workspace it was made under and
+// the records it carried.
+type deliveredBatch struct {
+	workspace string
+	names     []string
+}
+
+func (g *groupingSink) Send(ctx context.Context, activities []*pb.Activity) error {
+	workspace := WorkspaceFrom(ctx)
+
+	names := make([]string, 0, len(activities))
+	for _, a := range activities {
+		names = append(names, a.GetName())
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, deliveredBatch{workspace: workspace, names: names})
+	if g.refuse != "" && workspace == g.refuse {
+		return errors.New("this workspace is refused")
+	}
+	return nil
+}
+
+func (g *groupingSink) Name() string { return "grouping" }
+
+func (g *groupingSink) delivered() []deliveredBatch {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]deliveredBatch(nil), g.calls...)
+}
+
+// find returns the call made under workspace, and whether one was made at all.
+func (g *groupingSink) find(workspace string) (deliveredBatch, bool) {
+	for _, call := range g.delivered() {
+		if call.workspace == workspace {
+			return call, true
+		}
+	}
+	return deliveredBatch{}, false
+}
+
+// The compatibility case, and the one that matters most: a recorder that knows
+// nothing about workspaces hands over records that name none, and they are
+// delivered as one batch naming none. Nothing about them is refused on the way.
+func TestRecordsNamingNoWorkspaceAreDeliveredAsOneBatchNamingNone(t *testing.T) {
+	sink := &groupingSink{}
+	r := New(Config{Sinks: []Sink{sink}, FlushEvery: time.Hour})
+
+	r.Record(activity("a"))
+	// A context with nothing on it says the same thing as no context at all.
+	r.RecordIn(context.Background(), activity("b"))
+	closeSoon(t, r)
+
+	calls := sink.delivered()
+	if len(calls) != 1 {
+		t.Fatalf("sink was called %d times, want once for one workspace: %+v", len(calls), calls)
+	}
+	if calls[0].workspace != "" {
+		t.Fatalf("batch delivered under workspace %q, want none", calls[0].workspace)
+	}
+	if len(calls[0].names) != 2 {
+		t.Fatalf("batch carried %v, want both records", calls[0].names)
+	}
+	if s := r.Stats(); s.Delivered != 2 || s.Failed != 0 {
+		t.Fatalf("stats = %+v, want both delivered and none failed", s)
+	}
+}
+
+func TestAFlushIsSplitIntoOneBatchPerWorkspace(t *testing.T) {
+	sink := &groupingSink{}
+	r := New(Config{Sinks: []Sink{sink}, FlushEvery: time.Hour})
+
+	r.RecordIn(WithWorkspace(context.Background(), "acme"), activity("a"))
+	r.RecordIn(WithWorkspace(context.Background(), "globex"), activity("b"))
+	r.RecordIn(WithWorkspace(context.Background(), "acme"), activity("c"))
+	r.Record(activity("d"))
+	closeSoon(t, r)
+
+	calls := sink.delivered()
+	if len(calls) != 3 {
+		t.Fatalf("sink was called %d times, want one per workspace: %+v", len(calls), calls)
+	}
+
+	for workspace, want := range map[string][]string{
+		"acme":   {"a", "c"},
+		"globex": {"b"},
+		"":       {"d"},
+	} {
+		got, ok := sink.find(workspace)
+		if !ok {
+			t.Fatalf("no batch was delivered under workspace %q", workspace)
+		}
+		if !slices.Equal(got.names, want) {
+			t.Errorf("workspace %q was sent %v, want %v", workspace, got.names, want)
+		}
+	}
+}
+
+// One tenant's records being refused says nothing about another's, so the
+// others are still sent and the counters still count records rather than
+// batches.
+func TestAWorkspaceThatFailsDoesNotLoseAnother(t *testing.T) {
+	sink := &groupingSink{refuse: "acme"}
+	r := New(Config{Sinks: []Sink{sink}, FlushEvery: time.Hour})
+
+	r.RecordIn(WithWorkspace(context.Background(), "acme"), activity("a"))
+	r.RecordIn(WithWorkspace(context.Background(), "globex"), activity("b"))
+	r.RecordIn(WithWorkspace(context.Background(), "globex"), activity("c"))
+	closeSoon(t, r)
+
+	got, ok := sink.find("globex")
+	if !ok {
+		t.Fatal("globex was never sent, although only acme was refused")
+	}
+	if !slices.Equal(got.names, []string{"b", "c"}) {
+		t.Fatalf("globex was sent %v, want both of its records", got.names)
+	}
+	if s := r.Stats(); s.Delivered != 2 || s.Failed != 1 {
+		t.Fatalf("stats = %+v, want globex's two delivered and acme's one failed", s)
 	}
 }

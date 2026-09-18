@@ -3,7 +3,7 @@
 // Source: techbridge/ap/metering/v1/user.proto
 // Plugin version: v0.0.1
 //
-// Generated on: 2026-09-15 11:20:12 UTC
+// Generated on: 2026-09-18 12:06:42 UTC
 
 package metering
 
@@ -13,7 +13,7 @@ const (
 	// UsersService_ListUsers_FullMethodDescription returns the description of the techbridge.ap.metering.v1.UsersService.ListUsers method.
 	UsersService_ListUsers_FullMethodDescription = "Lists the users an organisation has named."
 	// UsersService_BatchUpsertUsers_FullMethodDescription returns the description of the techbridge.ap.metering.v1.UsersService.BatchUpsertUsers method.
-	UsersService_BatchUpsertUsers_FullMethodDescription = "Creates or replaces users in one call. A user is written whole: the name and email supplied replace whatever\n was held, and a field left empty clears it. The organisation's sign-in\n is the system of record and this is its copy, so there is no concurrent\n edit to protect and no etag to check."
+	UsersService_BatchUpsertUsers_FullMethodDescription = "Creates or replaces users in one call. A user is written whole: the name and email supplied replace whatever was held, and a field left empty clears it. The organisation's sign-in is the system of record and this is its copy, so there is no concurrent edit to protect and no etag to check."
 	// UsersService_DeleteUser_FullMethodDescription returns the description of the techbridge.ap.metering.v1.UsersService.DeleteUser method.
-	UsersService_DeleteUser_FullMethodDescription = "Removes a user's name and email. Activities carrying the identifier are untouched and keep reporting\n under it, unnamed. This is how an organisation honours a request to be\n forgotten without the telemetry being rewritten."
+	UsersService_DeleteUser_FullMethodDescription = "Removes a user's name and email. Activities carrying the identifier are untouched and keep reporting under it, unnamed. This is how an organisation honours a request to be forgotten without the telemetry being rewritten."
 )

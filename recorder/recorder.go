@@ -9,14 +9,22 @@ import (
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
+// record is one activity and the workspace whose spend it is.
+//
+// The workspace travels beside the activity rather than on it because it is not a field of one: an activity's tenant is the parent its batch was written under, so that a record can never state a tenant that disagrees with where it was filed. Carrying it here is what lets the worker keep a flush's records apart by tenant on the way out.
+type record struct {
+	activity  *pb.Activity
+	workspace string
+}
+
 // Recorder accepts records from an agent and delivers them in the background.
 type Recorder struct {
 	config Config
-	queue  chan *pb.Activity
+	queue  chan record
 
 	// names carries people to name, apart from the records so a burst of
 	// either cannot crowd out the other, and seen is what was last sent.
-	names chan User
+	names chan person
 	seen  *seenNames
 
 	counters Counters
@@ -108,8 +116,8 @@ func New(config Config) *Recorder {
 	config = config.withDefaults()
 	r := &Recorder{
 		config:  config,
-		queue:   make(chan *pb.Activity, config.QueueSize),
-		names:   make(chan User, config.QueueSize),
+		queue:   make(chan record, config.QueueSize),
+		names:   make(chan person, config.QueueSize),
 		seen:    newSeenNames(),
 		totals:  newRunningTotals(),
 		done:    make(chan struct{}),
@@ -129,17 +137,32 @@ func New(config Config) *Recorder {
 // It never blocks, never returns an error and never panics. If the queue is
 // full the record is dropped and counted — losing a record is always preferable
 // to delaying the work the agent was actually asked to do.
+//
+// The record names no workspace and is filed under the organisation. A product
+// with one tenant has nothing more to say; a product serving several says which
+// on the context and hands the record over with RecordIn.
 func (r *Recorder) Record(activity *pb.Activity) {
-	if r == nil || activity == nil {
+	r.enqueue(record{activity: activity})
+}
+
+// RecordIn hands over one record produced under ctx, and returns immediately.
+//
+// The same contract as Record in every respect. What ctx adds is the workspace the work was for, read from it here rather than asked for at the call site, so that the tenant a record is filed under is the one the request was authenticated for and not one a call site chose.
+func (r *Recorder) RecordIn(ctx context.Context, activity *pb.Activity) {
+	r.enqueue(record{activity: activity, workspace: WorkspaceFrom(ctx)})
+}
+
+func (r *Recorder) enqueue(entry record) {
+	if r == nil || entry.activity == nil {
 		return
 	}
 	// The running total is kept whether or not the record survives the queue.
 	// A dropped record still cost money, and a spend decision that ignored it
 	// would be wrong in the one direction that matters.
-	r.totals.add(activity.GetRequest(), r.estimate(activity))
+	r.totals.add(entry.activity.GetRequest(), r.estimate(entry.activity))
 
 	select {
-	case r.queue <- activity:
+	case r.queue <- entry:
 		r.counters.Recorded.Add(1)
 	default:
 		r.counters.Dropped.Add(1)
@@ -222,13 +245,13 @@ func (r *Recorder) run() {
 	ticker := time.NewTicker(r.config.FlushEvery)
 	defer ticker.Stop()
 
-	batch := make([]*pb.Activity, 0, r.config.BatchSize)
-	people := make([]User, 0, r.config.BatchSize)
+	batch := make([]record, 0, r.config.BatchSize)
+	people := make([]person, 0, r.config.BatchSize)
 
 	for {
 		select {
-		case activity := <-r.queue:
-			batch = append(batch, activity)
+		case entry := <-r.queue:
+			batch = append(batch, entry)
 			if len(batch) >= r.config.BatchSize {
 				r.deliver(batch)
 				batch = batch[:0]
@@ -255,8 +278,8 @@ func (r *Recorder) run() {
 			// Drain what is already queued, then deliver and stop.
 			for {
 				select {
-				case activity := <-r.queue:
-					batch = append(batch, activity)
+				case entry := <-r.queue:
+					batch = append(batch, entry)
 					if len(batch) >= r.config.BatchSize {
 						r.deliver(batch)
 						batch = batch[:0]
@@ -323,40 +346,66 @@ func (r *Recorder) fetchRates() {
 	}
 }
 
-// deliver sends one batch to every sink, each isolated from the others.
+// workspaceBatch is the part of one flush that belongs to one workspace.
+type workspaceBatch struct {
+	workspace  string
+	activities []*pb.Activity
+}
+
+// groupByWorkspace splits a flush into one batch per workspace, in the order the workspaces were first seen.
+//
+// A destination that files records under a parent can only file one batch under one parent, so a flush that covers several tenants is several batches however it is delivered. Splitting it here, rather than leaving each sink to do it, is what keeps a failure for one tenant from touching another's records and keeps Delivered and Failed counting what they always counted: records that reached a destination and records that did not.
+//
+// Each group holds its own slice, so the worker is free to reuse the flush it passed in.
+func groupByWorkspace(batch []record) []workspaceBatch {
+	groups := make([]workspaceBatch, 0, 1)
+	at := make(map[string]int, 1)
+
+	for _, entry := range batch {
+		position, held := at[entry.workspace]
+		if !held {
+			position = len(groups)
+			at[entry.workspace] = position
+			groups = append(groups, workspaceBatch{workspace: entry.workspace})
+		}
+		groups[position].activities = append(groups[position].activities, entry.activity)
+	}
+	return groups
+}
+
+// deliver sends one batch per workspace to every sink, each isolated from the others.
 //
 // Sinks run concurrently so a slow one does not delay the rest, and each is
 // wrapped so a panic inside a sink is counted rather than taking down the
 // process it is embedded in.
-func (r *Recorder) deliver(batch []*pb.Activity) {
-	sent := make([]*pb.Activity, len(batch))
-	copy(sent, batch)
-
+func (r *Recorder) deliver(batch []record) {
 	var wg sync.WaitGroup
-	for _, sink := range r.config.Sinks {
-		wg.Add(1)
-		go func(s Sink) {
-			defer wg.Done()
-			r.sendTo(s, sent)
-		}(sink)
+	for _, group := range groupByWorkspace(batch) {
+		for _, sink := range r.config.Sinks {
+			wg.Add(1)
+			go func(s Sink, g workspaceBatch) {
+				defer wg.Done()
+				r.sendTo(s, g)
+			}(sink, group)
+		}
 	}
 	wg.Wait()
 }
 
-func (r *Recorder) sendTo(sink Sink, batch []*pb.Activity) {
+func (r *Recorder) sendTo(sink Sink, group workspaceBatch) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			r.counters.Panicked.Add(1)
-			r.counters.Failed.Add(int64(len(batch)))
+			r.counters.Failed.Add(int64(len(group.activities)))
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), r.config.SendTimeout)
+	ctx, cancel := context.WithTimeout(WithWorkspace(context.Background(), group.workspace), r.config.SendTimeout)
 	defer cancel()
 
-	if err := sink.Send(ctx, batch); err != nil {
-		r.counters.Failed.Add(int64(len(batch)))
+	if err := sink.Send(ctx, group.activities); err != nil {
+		r.counters.Failed.Add(int64(len(group.activities)))
 		return
 	}
-	r.counters.Delivered.Add(int64(len(batch)))
+	r.counters.Delivered.Add(int64(len(group.activities)))
 }

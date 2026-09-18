@@ -103,7 +103,17 @@ type DecideRequest struct {
 	Product string `protobuf:"bytes,3,opt,name=product,proto3" json:"product,omitempty"`
 	// The user the call would be attributed to, matching `Activity.user`.
 	// Checked against that user's cap within the product, where one exists.
-	User          string `protobuf:"bytes,4,opt,name=user,proto3" json:"user,omitempty"`
+	User string `protobuf:"bytes,4,opt,name=user,proto3" json:"user,omitempty"`
+	// The workspace the call would be billed to, the tenant it is for.
+	// Format: `organisations/{organisation}/workspaces/{workspace}`
+	//
+	// Empty means the organisation's default workspace, which is what a
+	// recorder written before workspaces existed asks with. A budget narrowed
+	// to a workspace applies only to calls naming that one.
+	Workspace string `protobuf:"bytes,5,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	// The project the call would be attributed to, matching `Activity.project`.
+	// Empty where the product has no such concept.
+	Project       string `protobuf:"bytes,6,opt,name=project,proto3" json:"project,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -162,6 +172,20 @@ func (x *DecideRequest) GetProduct() string {
 func (x *DecideRequest) GetUser() string {
 	if x != nil {
 		return x.User
+	}
+	return ""
+}
+
+func (x *DecideRequest) GetWorkspace() string {
+	if x != nil {
+		return x.Workspace
+	}
+	return ""
+}
+
+func (x *DecideRequest) GetProject() string {
+	if x != nil {
+		return x.Project
 	}
 	return ""
 }
@@ -297,7 +321,12 @@ type DecisionInvalidation struct {
 	User string `protobuf:"bytes,3,opt,name=user,proto3" json:"user,omitempty"`
 	// The agent whose budget changed, if the change was scoped to one.
 	// Format: `organisations/{organisation}/agents/{agent}`
-	Agent         string `protobuf:"bytes,4,opt,name=agent,proto3" json:"agent,omitempty"`
+	Agent string `protobuf:"bytes,4,opt,name=agent,proto3" json:"agent,omitempty"`
+	// The workspace whose budget changed, if the change was scoped to one.
+	// Format: `organisations/{organisation}/workspaces/{workspace}`
+	Workspace string `protobuf:"bytes,5,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	// The project whose budget changed, if the change was scoped to one.
+	Project       string `protobuf:"bytes,6,opt,name=project,proto3" json:"project,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -360,16 +389,32 @@ func (x *DecisionInvalidation) GetAgent() string {
 	return ""
 }
 
+func (x *DecisionInvalidation) GetWorkspace() string {
+	if x != nil {
+		return x.Workspace
+	}
+	return ""
+}
+
+func (x *DecisionInvalidation) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
 var File_techbridge_ap_governance_v1_decision_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_governance_v1_decision_proto_rawDesc = "" +
 	"\n" +
-	"*techbridge/ap/governance/v1/decision.proto\x12\x1btechbridge.ap.governance.v1\x1a\x1fgoogle/api/field_behavior.proto\"}\n" +
+	"*techbridge/ap/governance/v1/decision.proto\x12\x1btechbridge.ap.governance.v1\x1a\x1fgoogle/api/field_behavior.proto\"\xb5\x01\n" +
 	"\rDecideRequest\x12\x1c\n" +
 	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\x12\x1a\n" +
 	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x1e\n" +
 	"\aproduct\x18\x03 \x01(\tB\x04\xe2A\x01\x02R\aproduct\x12\x12\n" +
-	"\x04user\x18\x04 \x01(\tR\x04user\"\xf7\x01\n" +
+	"\x04user\x18\x04 \x01(\tR\x04user\x12\x1c\n" +
+	"\tworkspace\x18\x05 \x01(\tR\tworkspace\x12\x18\n" +
+	"\aproject\x18\x06 \x01(\tR\aproject\"\xf7\x01\n" +
 	"\x0eDecideResponse\x12P\n" +
 	"\bdecision\x18\x01 \x01(\x0e24.techbridge.ap.governance.v1.DecideResponse.DecisionR\bdecision\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12%\n" +
@@ -382,12 +427,14 @@ const file_techbridge_ap_governance_v1_decision_proto_rawDesc = "" +
 	"\tDOWNGRADE\x10\x03\x12\b\n" +
 	"\x04DENY\x10\x04\"B\n" +
 	"\"StreamDecisionInvalidationsRequest\x12\x1c\n" +
-	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\"x\n" +
+	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\"\xb0\x01\n" +
 	"\x14DecisionInvalidation\x12\x1c\n" +
 	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\x12\x18\n" +
 	"\aproduct\x18\x02 \x01(\tR\aproduct\x12\x12\n" +
 	"\x04user\x18\x03 \x01(\tR\x04user\x12\x14\n" +
-	"\x05agent\x18\x04 \x01(\tR\x05agent2\x8f\x02\n" +
+	"\x05agent\x18\x04 \x01(\tR\x05agent\x12\x1c\n" +
+	"\tworkspace\x18\x05 \x01(\tR\tworkspace\x12\x18\n" +
+	"\aproject\x18\x06 \x01(\tR\aproject2\x8f\x02\n" +
 	"\x10DecisionsService\x12c\n" +
 	"\x06Decide\x12*.techbridge.ap.governance.v1.DecideRequest\x1a+.techbridge.ap.governance.v1.DecideResponse\"\x00\x12\x95\x01\n" +
 	"\x1bStreamDecisionInvalidations\x12?.techbridge.ap.governance.v1.StreamDecisionInvalidationsRequest\x1a1.techbridge.ap.governance.v1.DecisionInvalidation\"\x000\x01B%Z#alis.build/techbridge/ap/governanceb\x06proto3"

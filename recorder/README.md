@@ -55,7 +55,7 @@ opts := adkhooks.Options{Agent: agentName, Service: "atlas-agent"}
 // register adkhooks.BeforeModel, adkhooks.AfterModel, adkhooks.AfterTool and adkhooks.AfterAgent on the agent
 ```
 
-Every field on the record comes from the framework's own callback context: which request, which user, which session, which agent, which model, how many tokens, whether it succeeded. A user set on the context with `recorder.WithUser` before the runner is invoked wins over the framework's own user id, name and all.
+Every field on the record comes from the framework's own callback context: which request, which user, which session, which agent, which model, how many tokens, whether it succeeded. A user set on the context with `recorder.WithUser` before the runner is invoked wins over the framework's own user id, name and all. Which tenant the turn is for, and which unit of work inside it, are read from the same context — the framework knows neither.
 
 `adkhooks` is the first major version of the framework and `adkv2hooks` the second. They are different libraries as far as Go is concerned, with unrelated types, so one package cannot serve both. The callbacks and everything they read are the same.
 
@@ -120,6 +120,23 @@ A record carries an identifier and nothing else about the person, because a reco
 Naming takes the same path a record does: a bounded queue, a batch, a sink on the worker, dropped and counted when the queue is full. What is remembered is what was last sent, so a person seen again with the same name costs a map lookup. A changed name is sent again. A send that fails forgets the person, so the next call they make tries again rather than waiting for a restart. `Named`, `NamesDropped` and `NamesFailed` in `Stats` say what happened; `NamesFailed` above zero means a report is showing an identifier where a name was given, and an identifier with a slash in it lands there too.
 
 A sink takes names only if it implements `UserSink`. The metering sink does; a log or a collector has no directory to put a name in and is given none.
+
+## Which tenant the work was for
+
+One process bills one organisation, and that is configured once where the sink is built. One process can serve many tenants of that organisation, so the tenant is per request rather than per process: it is set on the request context, beside the person, where the product checks its own sign-in.
+
+```go
+// once per request, in the same place the user is set
+ctx = recorder.WithProject(recorder.WithWorkspace(ctx, "acme"), "matter-1183")
+```
+
+The workspace is the bare identifier — `acme`, not `organisations/dealade/workspaces/acme` — because the organisation is already configured and the library builds the name. The project is a unit of work inside the workspace, a label on every record and nothing more: nothing is authorised against it, and everyone who can read the workspace can read every project in it.
+
+Neither is an argument at a model call site. A value a call site can choose is a value that can attribute one tenant's spend to another, and the resulting figure looks exactly like a correct one.
+
+A product with one tenant sets nothing. Its records name no workspace, they are filed under the organisation, and that is the whole of what it has to do.
+
+A flush that covers several tenants goes out as one batch each, because a record's tenant is the parent its batch was written under and one batch has one parent. The batches are independent: a refusal for one tenant leaves the others sent, and `Delivered` and `Failed` go on counting records rather than batches. The directory of names is split the same way, into the workspace whose records carry the identifier, since that equality is the join.
 
 ## Layout
 

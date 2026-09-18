@@ -10,8 +10,8 @@ import (
 	adkmodel "google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
-	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 	"github.com/techbridgeinnovation/agentpulse/recorder"
+	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
 // fakeContext stands in for what the framework hands a callback.
@@ -40,16 +40,26 @@ func newContext() *fakeContext {
 	}
 }
 
-// collector keeps what the recorder delivers.
-type collector struct{ seen []*pb.Activity }
+// collector keeps what the recorder delivers, and the workspace each batch was
+// delivered under.
+type collector struct {
+	seen       []*pb.Activity
+	workspaces []string
+}
 
-func (c *collector) Send(_ context.Context, activities []*pb.Activity) error {
+func (c *collector) Send(ctx context.Context, activities []*pb.Activity) error {
 	c.seen = append(c.seen, activities...)
+	c.workspaces = append(c.workspaces, recorder.WorkspaceFrom(ctx))
 	return nil
 }
 func (c *collector) Name() string { return "collector" }
 
 func record(t *testing.T, run func(*recorder.Recorder)) []*pb.Activity {
+	t.Helper()
+	return delivered(t, run).seen
+}
+
+func delivered(t *testing.T, run func(*recorder.Recorder)) *collector {
 	t.Helper()
 	sink := &collector{}
 	r := recorder.New(recorder.Config{Sinks: []recorder.Sink{sink}, FlushEvery: time.Hour})
@@ -57,7 +67,7 @@ func record(t *testing.T, run func(*recorder.Recorder)) []*pb.Activity {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	r.Close(ctx)
-	return sink.seen
+	return sink
 }
 
 func options() Options {
@@ -264,5 +274,45 @@ func TestAfterAgentReleasesTheRequestTheContextCarries(t *testing.T) {
 
 	if got := r.SpentOn("requests/7f3a"); got != 0 {
 		t.Fatalf("SpentOn after the turn ended = %d, want 0", got)
+	}
+}
+
+// Neither is asked for at a call site: both are read off the turn's own
+// context, where the product set them when it checked the sign-in. The same
+// two values the first major reads, off the one context type this one hands
+// every callback.
+func TestTheCallbacksTakeTheWorkspaceAndProjectFromTheContext(t *testing.T) {
+	ctx := newContext()
+	ctx.StrictContextMock = agent.NewStrictContextMock(
+		recorder.WithProject(recorder.WithWorkspace(context.Background(), "acme"), "matter-1183"),
+	)
+
+	sink := delivered(t, func(r *recorder.Recorder) {
+		AfterModel(r, options())(ctx, &adkmodel.LLMResponse{ModelVersion: "m"}, nil)
+	})
+
+	if len(sink.seen) != 1 {
+		t.Fatalf("recorded %d activities, want 1", len(sink.seen))
+	}
+	if got := sink.seen[0].GetProject(); got != "matter-1183" {
+		t.Fatalf("project = %q, want %q", got, "matter-1183")
+	}
+	// The workspace is not a field on the record: it is the batch the record
+	// was delivered in.
+	if got := sink.workspaces; len(got) != 1 || got[0] != "acme" {
+		t.Fatalf("delivered under %v, want one batch under acme", got)
+	}
+}
+
+func TestATurnThatNamesNoWorkspaceOrProjectRecordsNeither(t *testing.T) {
+	sink := delivered(t, func(r *recorder.Recorder) {
+		AfterModel(r, options())(newContext(), &adkmodel.LLMResponse{ModelVersion: "m"}, nil)
+	})
+
+	if got := sink.seen[0].GetProject(); got != "" {
+		t.Fatalf("project = %q, want none", got)
+	}
+	if got := sink.workspaces; len(got) != 1 || got[0] != "" {
+		t.Fatalf("delivered under %v, want one batch under no workspace", got)
 	}
 }

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 	"github.com/techbridgeinnovation/agentpulse/recorder"
+	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
 // A service that is not an agent on a framework reports for itself.

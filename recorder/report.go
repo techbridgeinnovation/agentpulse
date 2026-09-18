@@ -166,7 +166,7 @@ func (rp *Reporter) ModelCall(ctx context.Context, call ModelCall) {
 		activity.Status = pb.Activity_TRUNCATED
 	}
 
-	rp.recorder.Record(activity)
+	rp.recorder.RecordIn(ctx, activity)
 }
 
 // ToolCall records a finished tool call, and returns immediately.
@@ -176,7 +176,7 @@ func (rp *Reporter) ToolCall(ctx context.Context, call ToolCall) {
 	}
 
 	activity := rp.activity(ctx, "tool:"+call.Tool, call.Duration, call.Err, call.Charges)
-	rp.recorder.Record(activity)
+	rp.recorder.RecordIn(ctx, activity)
 }
 
 // SpentOn returns what a request has cost so far in this process, in millionths
@@ -205,13 +205,14 @@ func (rp *Reporter) FinishRequest(request string) {
 // activity fills in everything the two kinds of call have in common.
 func (rp *Reporter) activity(ctx context.Context, component string, duration time.Duration, err error, charges []Charge) *pb.Activity {
 	user := UserFrom(ctx)
-	rp.recorder.NoteUser(user)
+	rp.recorder.NoteUserIn(ctx, user)
 
 	activity := &pb.Activity{
 		Agent:           rp.attribution.Agent,
 		Request:         RequestFrom(ctx),
 		Session:         SessionFrom(ctx),
 		User:            user.ID,
+		Project:         ProjectFrom(ctx),
 		CallerService:   rp.attribution.Service,
 		CallerComponent: component,
 		Skill:           rp.attribution.Skill,

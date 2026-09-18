@@ -33,6 +33,8 @@ const (
 //
 // Exact and local: no network call, so the spend decision before a model call costs nothing. It only ever knows about this process, which is why it is half of the enforcement story and not the whole of it. The other half is the budget envelope governance hands out.
 //
+// Keyed by the request and by nothing else, including in a process serving many tenants. A request id identifies one end-user request, which belongs to one tenant, so the workspace adds nothing to the key that the id does not already carry — as long as the id is unique across the process. An id that is only unique within a tenant is what would break this, by summing two tenants' spend into one figure and releasing both when either finishes, and it breaks the grouping every record already relies on in the same way.
+//
 // It cannot grow without bound. An entry expires on its own after requestTotalTTL and the map never holds more than maxTrackedRequests of them, so a caller who never calls FinishRequest costs this process a bounded amount of memory rather than a leak. A library running inside someone else's agent does not get to depend on its adopter remembering something.
 type runningTotals struct {
 	max int

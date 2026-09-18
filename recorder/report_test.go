@@ -222,3 +222,51 @@ func TestAnErrorIsReducedToACodeWhateverKindItIs(t *testing.T) {
 		}
 	}
 }
+
+// The workspace and the project are set once where the sign-in is checked, so a
+// call site names neither and both reach the record all the same: the project
+// on the record, the workspace as the batch it is filed in.
+func TestTheReporterTakesTheWorkspaceAndProjectFromTheContext(t *testing.T) {
+	sink := &groupingSink{}
+	rec := New(Config{Sinks: []Sink{sink}, FlushEvery: time.Hour})
+
+	ctx := WithProject(WithWorkspace(WithRequest(context.Background(), "requests/abc"), "acme"), "matter-1183")
+	reporter := rec.For(Attribution{Agent: "organisations/techbridge/agents/sources", Service: "sources-service"})
+	reporter.ModelCall(ctx, ModelCall{Model: "gemini-2.5-pro", Component: "asset_summary"})
+	reporter.ToolCall(ctx, ToolCall{Tool: "web_search"})
+	closeSoon(t, rec)
+
+	calls := sink.delivered()
+	if len(calls) != 1 || calls[0].workspace != "acme" {
+		t.Fatalf("delivered %+v, want one batch under acme", calls)
+	}
+	if len(calls[0].names) != 2 {
+		t.Fatalf("batch carried %d records, want the model call and the tool call", len(calls[0].names))
+	}
+}
+
+func TestTheProjectIsOnTheRecordItself(t *testing.T) {
+	ctx := WithProject(WithRequest(context.Background(), "requests/abc"), "matter-1183")
+
+	got := reported(t, ctx, func(rp *Reporter) {
+		rp.ModelCall(ctx, ModelCall{Model: "gemini-2.5-pro", Component: "asset_summary"})
+	})
+
+	if got.GetProject() != "matter-1183" {
+		t.Fatalf("project = %q, want %q", got.GetProject(), "matter-1183")
+	}
+}
+
+// A context carrying no project says the record has none, which is what a
+// product with no such concept records.
+func TestARecordFromAContextWithNoProjectNamesNone(t *testing.T) {
+	ctx := WithRequest(context.Background(), "requests/abc")
+
+	got := reported(t, ctx, func(rp *Reporter) {
+		rp.ModelCall(ctx, ModelCall{Model: "gemini-2.5-pro"})
+	})
+
+	if got.GetProject() != "" {
+		t.Fatalf("project = %q, want none", got.GetProject())
+	}
+}

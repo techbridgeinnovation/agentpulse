@@ -8,8 +8,8 @@ import (
 	adkmodel "google.golang.org/adk/model"
 	"google.golang.org/genai"
 
-	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 	"github.com/techbridgeinnovation/agentpulse/recorder"
+	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
 // contextFor is newContext in its own invocation, so a test's calls never meet

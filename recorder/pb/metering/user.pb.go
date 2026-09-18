@@ -28,12 +28,11 @@ const (
 type User struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The resource name of the user.
-	// Format: `organisations/{organisation}/users/{user}`
+	// Format: `organisations/{organisation}/workspaces/{workspace}/users/{user}`
 	//
-	// `{user}` is the identifier exactly as the organisation's agents stamp it
-	// on `Activity.user`; that equality is the whole join. It is the bare
-	// identifier the organisation's sign-in issued, never an email, and it
-	// cannot contain `/`.
+	// The directory sits under the workspace because an identifier is only unique within the sign-in that issued it, and two tenants of the same organisation may each run their own. A person is looked up in the workspace their activities were recorded under, and nowhere else.
+	//
+	// `{user}` is the identifier exactly as the organisation's agents stamp it on `Activity.user`; that equality is the whole join. It is the bare identifier the organisation's sign-in issued, never an email, and it cannot contain `/`.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// The person's name as the organisation would show it, e.g. `Ada Lovelace`.
 	DisplayName string `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
@@ -116,7 +115,7 @@ func (x *User) GetUpdateTime() *timestamppb.Timestamp {
 type GetUserRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The resource name of the user to retrieve.
-	// Format: `organisations/{organisation}/users/{user}`
+	// Format: `organisations/{organisation}/workspaces/{workspace}/users/{user}`
 	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -162,8 +161,8 @@ func (x *GetUserRequest) GetName() string {
 // Request for [UsersService.ListUsers].
 type ListUsersRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The organisation whose users to list.
-	// Format: `organisations/{organisation}`
+	// The organisation, or the one workspace within it, whose users to list.
+	// Format: `organisations/{organisation}` or `organisations/{organisation}/workspaces/{workspace}`
 	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
 	// Maximum users to return. Defaults to `100`, capped at `1000`.
 	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
@@ -282,11 +281,12 @@ func (x *ListUsersResponse) GetNextPageToken() string {
 // Request for [UsersService.BatchUpsertUsers].
 type BatchUpsertUsersRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The organisation the users belong to.
-	// Format: `organisations/{organisation}`
+	// The workspace the users belong to.
+	// Format: `organisations/{organisation}/workspaces/{workspace}`
+	//
+	// An `organisations/{organisation}` on its own is accepted and writes into that organisation's default workspace, so a recorder written before workspaces existed keeps naming people correctly.
 	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
-	// The users to write. Every `name` must sit under `parent`. Rejected as a
-	// whole if any one is invalid.
+	// The users to write. Every `name` must sit under `parent`. Rejected as a whole if any one is invalid.
 	Users         []*User `protobuf:"bytes,2,rep,name=users,proto3" json:"users,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -386,7 +386,7 @@ func (x *BatchUpsertUsersResponse) GetUsers() []*User {
 type DeleteUserRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The resource name of the user to delete.
-	// Format: `organisations/{organisation}/users/{user}`
+	// Format: `organisations/{organisation}/workspaces/{workspace}/users/{user}`
 	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -433,7 +433,7 @@ var File_techbridge_ap_metering_v1_user_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_metering_v1_user_proto_rawDesc = "" +
 	"\n" +
-	"$techbridge/ap/metering/v1/user.proto\x12\x19techbridge.ap.metering.v1\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa6\x02\n" +
+	"$techbridge/ap/metering/v1/user.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbd\x02\n" +
 	"\x04User\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x14\n" +
@@ -441,8 +441,8 @@ const file_techbridge_ap_metering_v1_user_proto_rawDesc = "" +
 	"\vcreate_time\x18b \x01(\v2\x1a.google.protobuf.TimestampB\x04\xe2A\x01\x03R\n" +
 	"createTime\x12A\n" +
 	"\vupdate_time\x18c \x01(\v2\x1a.google.protobuf.TimestampB\x04\xe2A\x01\x03R\n" +
-	"updateTime:K\xeaAH\n" +
-	"\x1bmetering.ap.techbridge/User\x12)organisations/{organisation}/users/{user}\"*\n" +
+	"updateTime:b\xeaA_\n" +
+	"\x1bmetering.ap.techbridge/User\x12@organisations/{organisation}/workspaces/{workspace}/users/{user}\"*\n" +
 	"\x0eGetUserRequest\x12\x18\n" +
 	"\x04name\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x04name\"l\n" +
 	"\x10ListUsersRequest\x12\x1c\n" +
@@ -459,10 +459,10 @@ const file_techbridge_ap_metering_v1_user_proto_rawDesc = "" +
 	"\x18BatchUpsertUsersResponse\x125\n" +
 	"\x05users\x18\x01 \x03(\v2\x1f.techbridge.ap.metering.v1.UserR\x05users\"-\n" +
 	"\x11DeleteUserRequest\x12\x18\n" +
-	"\x04name\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x04name2\xa6\x03\n" +
+	"\x04name\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x04name2\x84\x04\n" +
 	"\fUsersService\x12W\n" +
-	"\aGetUser\x12).techbridge.ap.metering.v1.GetUserRequest\x1a\x1f.techbridge.ap.metering.v1.User\"\x00\x12h\n" +
-	"\tListUsers\x12+.techbridge.ap.metering.v1.ListUsersRequest\x1a,.techbridge.ap.metering.v1.ListUsersResponse\"\x00\x12}\n" +
+	"\aGetUser\x12).techbridge.ap.metering.v1.GetUserRequest\x1a\x1f.techbridge.ap.metering.v1.User\"\x00\x12\xc5\x01\n" +
+	"\tListUsers\x12+.techbridge.ap.metering.v1.ListUsersRequest\x1a,.techbridge.ap.metering.v1.ListUsersResponse\"]\x82\xd3\xe4\x93\x02WZ1\x12//v1/{parent=organisations/*/workspaces/*}/users\x12\"/v1/{parent=organisations/*}/users\x12}\n" +
 	"\x10BatchUpsertUsers\x122.techbridge.ap.metering.v1.BatchUpsertUsersRequest\x1a3.techbridge.ap.metering.v1.BatchUpsertUsersResponse\"\x00\x12T\n" +
 	"\n" +
 	"DeleteUser\x12,.techbridge.ap.metering.v1.DeleteUserRequest\x1a\x16.google.protobuf.Empty\"\x00B#Z!alis.build/techbridge/ap/meteringb\x06proto3"

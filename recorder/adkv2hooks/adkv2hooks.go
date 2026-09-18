@@ -4,6 +4,8 @@
 //
 // The four callbacks and everything they read are the same. The one difference the port turns on is that the first major hands a model callback a CallbackContext and a tool callback a ToolContext, while this one hands them all a single Context. Every field the record needs is on it either way.
 //
+// Which tenant the turn is for, and which unit of work inside it, are the two the framework cannot know. They are read from the callback context where the product put them, at its sign-in, and never asked for here — see recorder.WithWorkspace.
+//
 // Kept as its own package for the same reason adkhooks is: service code that uses no framework can take the recorder without taking a framework with it.
 package adkv2hooks
 
@@ -18,8 +20,8 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 	"github.com/techbridgeinnovation/agentpulse/recorder"
+	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
 // Options is what the framework cannot tell us.
@@ -65,7 +67,7 @@ func requestOf(ctx agent.ReadonlyContext) string {
 // A user set explicitly on the context wins, for the same reason a request does: it is what the product's own sign-in check put there, name and all. Otherwise the framework's user id is used, which is an identifier and nothing more.
 func userOf(r *recorder.Recorder, ctx agent.ReadonlyContext) string {
 	if user := recorder.UserFrom(ctx); user.ID != "" {
-		r.NoteUser(user)
+		r.NoteUserIn(ctx, user)
 		return user.ID
 	}
 	return ctx.UserID()
@@ -96,6 +98,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			CallerService:   opts.Service,
 			CallerComponent: componentOf(ctx),
 			Skill:           opts.Skill,
+			Project:         recorder.ProjectFrom(ctx),
 			Model:           modelOf(response, opts),
 			Provider:        opts.provider(),
 			Status:          statusOf(response, callErr),
@@ -104,7 +107,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 		}
 		applyUsage(activity, response.UsageMetadata)
 
-		r.Record(activity)
+		r.RecordIn(ctx, activity)
 		return nil, nil
 	}
 }
@@ -124,7 +127,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			status = pb.Activity_FAILED
 		}
 
-		r.Record(&pb.Activity{
+		r.RecordIn(ctx, &pb.Activity{
 			Agent:           opts.Agent,
 			Request:         requestOf(ctx),
 			Session:         ctx.SessionID(),
@@ -132,6 +135,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			CallerService:   opts.Service,
 			CallerComponent: "tool:" + name,
 			Skill:           opts.Skill,
+			Project:         recorder.ProjectFrom(ctx),
 			Provider:        opts.provider(),
 			Status:          status,
 			OccurredAt:      timestamppb.Now(),

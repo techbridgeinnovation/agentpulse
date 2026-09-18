@@ -555,7 +555,7 @@ var File_techbridge_ap_metering_v1_priceable_unit_proto protoreflect.FileDescrip
 
 const file_techbridge_ap_metering_v1_priceable_unit_proto_rawDesc = "" +
 	"\n" +
-	".techbridge/ap/metering/v1/priceable_unit.proto\x12\x19techbridge.ap.metering.v1\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xfd\x06\n" +
+	".techbridge/ap/metering/v1/priceable_unit.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xfd\x06\n" +
 	"\rPriceableUnit\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12'\n" +
 	"\fdisplay_name\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\vdisplayName\x12 \n" +
@@ -599,12 +599,12 @@ const file_techbridge_ap_metering_v1_priceable_unit_proto_rawDesc = "" +
 	"\x06filter\x18\x03 \x01(\tR\x06filter\"\x97\x01\n" +
 	"\x1aListPriceableUnitsResponse\x12Q\n" +
 	"\x0fpriceable_units\x18\x01 \x03(\v2(.techbridge.ap.metering.v1.PriceableUnitR\x0epriceableUnits\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\x85\x04\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\x9f\x04\n" +
 	"\x15PriceableUnitsService\x12x\n" +
 	"\x13CreatePriceableUnit\x125.techbridge.ap.metering.v1.CreatePriceableUnitRequest\x1a(.techbridge.ap.metering.v1.PriceableUnit\"\x00\x12r\n" +
 	"\x10GetPriceableUnit\x122.techbridge.ap.metering.v1.GetPriceableUnitRequest\x1a(.techbridge.ap.metering.v1.PriceableUnit\"\x00\x12x\n" +
-	"\x13UpdatePriceableUnit\x125.techbridge.ap.metering.v1.UpdatePriceableUnitRequest\x1a(.techbridge.ap.metering.v1.PriceableUnit\"\x00\x12\x83\x01\n" +
-	"\x12ListPriceableUnits\x124.techbridge.ap.metering.v1.ListPriceableUnitsRequest\x1a5.techbridge.ap.metering.v1.ListPriceableUnitsResponse\"\x00B#Z!alis.build/techbridge/ap/meteringb\x06proto3"
+	"\x13UpdatePriceableUnit\x125.techbridge.ap.metering.v1.UpdatePriceableUnitRequest\x1a(.techbridge.ap.metering.v1.PriceableUnit\"\x00\x12\x9d\x01\n" +
+	"\x12ListPriceableUnits\x124.techbridge.ap.metering.v1.ListPriceableUnitsRequest\x1a5.techbridge.ap.metering.v1.ListPriceableUnitsResponse\"\x1a\x82\xd3\xe4\x93\x02\x14\x12\x12/v1/priceableUnitsB#Z!alis.build/techbridge/ap/meteringb\x06proto3"
 
 var (
 	file_techbridge_ap_metering_v1_priceable_unit_proto_rawDescOnce sync.Once

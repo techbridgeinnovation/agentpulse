@@ -379,3 +379,54 @@ func TestCachingDeciderConcurrentMissesCoalesce(t *testing.T) {
 		t.Fatalf("wrapped Decider called %d times for %d concurrent callers on the same key, want 1", inner.callCount(), callers)
 	}
 }
+
+// A budget can be narrowed to a workspace or a project, so two calls that
+// differ only in which tenant they are for are two questions. Reusing one
+// answer for the other is one tenant's spend decided by another's budget.
+func TestACachedVerdictIsNotReusedForAnotherWorkspaceOrProject(t *testing.T) {
+	inner := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	clock := newFakeClock(time.Now())
+	cache := newCachingDecider(inner, time.Minute, clock.Now)
+
+	acme := testRequest()
+	acme.Workspace = "organisations/techbridge/workspaces/acme"
+
+	globex := testRequest()
+	globex.Workspace = "organisations/techbridge/workspaces/globex"
+
+	matter := testRequest()
+	matter.Workspace = acme.Workspace
+	matter.Project = "matter-1183"
+
+	for _, req := range []*governancepb.DecideRequest{acme, globex, matter, acme} {
+		if _, err := cache.Decide(context.Background(), req); err != nil {
+			t.Fatalf("Decide: %v", err)
+		}
+	}
+
+	if inner.callCount() != 3 {
+		t.Fatalf("wrapped Decider called %d times, want one per distinct tenant and project, and none for the repeat", inner.callCount())
+	}
+}
+
+// A scope from governance clears every tenant's verdict within it. That costs a
+// call to ask again; keeping one would cost money.
+func TestInvalidateScopeClearsAWorkspacesVerdictToo(t *testing.T) {
+	inner := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	cache := newCachingDecider(inner, time.Minute, time.Now)
+
+	req := testRequest()
+	req.Workspace = "organisations/techbridge/workspaces/acme"
+	if _, err := cache.Decide(context.Background(), req); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+
+	cache.InvalidateScope("organisations/techbridge", "", "", "")
+
+	if _, err := cache.Decide(context.Background(), req); err != nil {
+		t.Fatalf("Decide after InvalidateScope: %v", err)
+	}
+	if inner.callCount() != 2 {
+		t.Fatalf("wrapped Decider called %d times after an organisation-wide invalidation, want 2", inner.callCount())
+	}
+}

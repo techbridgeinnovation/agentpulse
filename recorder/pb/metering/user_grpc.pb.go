@@ -32,17 +32,9 @@ const (
 //
 // UsersService keeps the names behind the identifiers activities carry.
 //
-// An activity records who the work was done for as an identifier and nothing
-// else, because an activity is telemetry: one row per model call, kept for a
-// year, read in aggregate by people who are not that person. A name belongs
-// on one row per person instead, in a directory the organisation fills in
-// and can empty again, so that a cost report can say who spent what without
-// the identity travelling with every call.
+// An activity records who the work was done for as an identifier and nothing else, because an activity is telemetry: one row per model call, kept for a year, read in aggregate by people who are not that person. A name belongs on one row per person instead, in a directory the organisation fills in and can empty again, so that a cost report can say who spent what without the identity travelling with every call.
 //
-// The organisation is the only source. Agent Pulse never sees a sign-in and
-// cannot resolve an identifier itself; it holds what the organisation's own
-// code sends, from the one place that code has the identifier and the name in
-// hand at the same time, which is its own sign-in check.
+// The organisation is the only source. Agent Pulse never sees a sign-in and cannot resolve an identifier itself; it holds what the organisation's own code sends, from the one place that code has the identifier and the name in hand at the same time, which is its own sign-in check.
 type UsersServiceClient interface {
 	// Returns a single user by resource name.
 	GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*User, error)
@@ -50,16 +42,11 @@ type UsersServiceClient interface {
 	ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error)
 	// Creates or replaces users in one call.
 	//
-	// A user is written whole: the name and email supplied replace whatever
-	// was held, and a field left empty clears it. The organisation's sign-in
-	// is the system of record and this is its copy, so there is no concurrent
-	// edit to protect and no etag to check.
+	// A user is written whole: the name and email supplied replace whatever was held, and a field left empty clears it. The organisation's sign-in is the system of record and this is its copy, so there is no concurrent edit to protect and no etag to check.
 	BatchUpsertUsers(ctx context.Context, in *BatchUpsertUsersRequest, opts ...grpc.CallOption) (*BatchUpsertUsersResponse, error)
 	// Removes a user's name and email.
 	//
-	// Activities carrying the identifier are untouched and keep reporting
-	// under it, unnamed. This is how an organisation honours a request to be
-	// forgotten without the telemetry being rewritten.
+	// Activities carrying the identifier are untouched and keep reporting under it, unnamed. This is how an organisation honours a request to be forgotten without the telemetry being rewritten.
 	DeleteUser(ctx context.Context, in *DeleteUserRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
@@ -117,17 +104,9 @@ func (c *usersServiceClient) DeleteUser(ctx context.Context, in *DeleteUserReque
 //
 // UsersService keeps the names behind the identifiers activities carry.
 //
-// An activity records who the work was done for as an identifier and nothing
-// else, because an activity is telemetry: one row per model call, kept for a
-// year, read in aggregate by people who are not that person. A name belongs
-// on one row per person instead, in a directory the organisation fills in
-// and can empty again, so that a cost report can say who spent what without
-// the identity travelling with every call.
+// An activity records who the work was done for as an identifier and nothing else, because an activity is telemetry: one row per model call, kept for a year, read in aggregate by people who are not that person. A name belongs on one row per person instead, in a directory the organisation fills in and can empty again, so that a cost report can say who spent what without the identity travelling with every call.
 //
-// The organisation is the only source. Agent Pulse never sees a sign-in and
-// cannot resolve an identifier itself; it holds what the organisation's own
-// code sends, from the one place that code has the identifier and the name in
-// hand at the same time, which is its own sign-in check.
+// The organisation is the only source. Agent Pulse never sees a sign-in and cannot resolve an identifier itself; it holds what the organisation's own code sends, from the one place that code has the identifier and the name in hand at the same time, which is its own sign-in check.
 type UsersServiceServer interface {
 	// Returns a single user by resource name.
 	GetUser(context.Context, *GetUserRequest) (*User, error)
@@ -135,16 +114,11 @@ type UsersServiceServer interface {
 	ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error)
 	// Creates or replaces users in one call.
 	//
-	// A user is written whole: the name and email supplied replace whatever
-	// was held, and a field left empty clears it. The organisation's sign-in
-	// is the system of record and this is its copy, so there is no concurrent
-	// edit to protect and no etag to check.
+	// A user is written whole: the name and email supplied replace whatever was held, and a field left empty clears it. The organisation's sign-in is the system of record and this is its copy, so there is no concurrent edit to protect and no etag to check.
 	BatchUpsertUsers(context.Context, *BatchUpsertUsersRequest) (*BatchUpsertUsersResponse, error)
 	// Removes a user's name and email.
 	//
-	// Activities carrying the identifier are untouched and keep reporting
-	// under it, unnamed. This is how an organisation honours a request to be
-	// forgotten without the telemetry being rewritten.
+	// Activities carrying the identifier are untouched and keep reporting under it, unnamed. This is how an organisation honours a request to be forgotten without the telemetry being rewritten.
 	DeleteUser(context.Context, *DeleteUserRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedUsersServiceServer()
 }

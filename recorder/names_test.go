@@ -3,6 +3,7 @@ package recorder
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -14,10 +15,13 @@ import (
 type namingSink struct {
 	captureSink
 
-	mu    sync.Mutex
-	users []User
-	fail  error
-	block time.Duration
+	mu sync.Mutex
+	// users is every person named, flat, and workspaces is the workspace of
+	// each call, so a test can assert either what was named or where.
+	users      []User
+	workspaces []string
+	fail       error
+	block      time.Duration
 }
 
 func (n *namingSink) SendUsers(ctx context.Context, users []User) error {
@@ -31,7 +35,15 @@ func (n *namingSink) SendUsers(ctx context.Context, users []User) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.users = append(n.users, users...)
+	n.workspaces = append(n.workspaces, WorkspaceFrom(ctx))
 	return n.fail
+}
+
+// namedIn is the workspace of each call the sink was given.
+func (n *namingSink) namedIn() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.workspaces...)
 }
 
 func (n *namingSink) named() []User {
@@ -212,5 +224,64 @@ func TestCloseNamesWhoIsStillQueued(t *testing.T) {
 
 	if got := sink.named(); len(got) != 1 {
 		t.Fatalf("sink named %v, want %v", got, ada)
+	}
+}
+
+// A person named without a workspace is named under the organisation, which is
+// what a product with one tenant does and must keep being able to do.
+func TestAPersonNamedWithNoWorkspaceIsNamedUnderNone(t *testing.T) {
+	sink := &namingSink{}
+	r := New(Config{Sinks: []Sink{sink}, FlushEvery: 10 * time.Millisecond})
+
+	r.NoteUser(ada)
+	r.NoteUserIn(context.Background(), ada)
+	closeSoon(t, r)
+
+	if got := sink.namedIn(); len(got) != 1 || got[0] != "" {
+		t.Fatalf("names were sent under %v, want one call under no workspace", got)
+	}
+}
+
+// The same identifier in two workspaces is two people as far as a directory is
+// concerned, because the row a report joins to lives in the workspace the
+// records do.
+func TestAPersonIsNamedInEachWorkspaceTheyAreSeenIn(t *testing.T) {
+	sink := &namingSink{}
+	r := New(Config{Sinks: []Sink{sink}, FlushEvery: time.Hour})
+
+	acme := WithWorkspace(context.Background(), "acme")
+	globex := WithWorkspace(context.Background(), "globex")
+
+	r.NoteUserIn(acme, ada)
+	r.NoteUserIn(globex, ada)
+	// Neither is sent a second time.
+	r.NoteUserIn(acme, ada)
+	r.NoteUserIn(globex, ada)
+	closeSoon(t, r)
+
+	got := sink.namedIn()
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"acme", "globex"}) {
+		t.Fatalf("names were sent under %v, want one call for each workspace", got)
+	}
+	if named := sink.named(); len(named) != 2 {
+		t.Fatalf("the sink was given %d people, want the same person once per workspace", len(named))
+	}
+}
+
+// One workspace's directory being refused says nothing about another's.
+func TestAWorkspaceWhoseNamesAreRefusedDoesNotLoseAnother(t *testing.T) {
+	sink := &namingSink{fail: errors.New("metering unavailable")}
+	r := New(Config{Sinks: []Sink{sink}, FlushEvery: time.Hour})
+
+	r.NoteUserIn(WithWorkspace(context.Background(), "acme"), ada)
+	r.NoteUserIn(WithWorkspace(context.Background(), "globex"), ada)
+	closeSoon(t, r)
+
+	if got := len(sink.namedIn()); got != 2 {
+		t.Fatalf("the sink was called %d times, want one call per workspace even when one fails", got)
+	}
+	if s := r.Stats(); s.NamesFailed != 2 {
+		t.Fatalf("NamesFailed = %d, want one per refused person", s.NamesFailed)
 	}
 }
