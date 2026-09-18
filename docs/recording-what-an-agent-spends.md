@@ -32,7 +32,7 @@ Four settings. None has a default, and the recorder refuses to start without the
 | --- | --- |
 | `AP_GATEWAY` | the address shown on the Connect page |
 | `AP_API_KEY` | the key's name, `organisations/<id>/apiKeys/<id>`, shown on the API keys page |
-| `AP_API_SECRET` | issued with the key as a **write key**, shown once |
+| `AP_API_SECRET` | issued with the key, with **Write** ticked, shown once |
 | `AP_AGENT` | `organisations/<id>/agents/<name>`, a name of your choosing |
 
 The key is public and names the organisation it belongs to, so `recorder.OrganisationOfKey` reads the organisation off it and it is not a separate setting. The secret is the part that authenticates. The two are presented together and resolve only together.

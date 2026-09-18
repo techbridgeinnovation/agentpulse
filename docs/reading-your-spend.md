@@ -39,9 +39,9 @@ If you find yourself paging `ListActivities` and adding the rows up, stop — th
 
 ## Getting a key
 
-On the **API keys** page, create a key and choose **Read key**.
+On the **API keys** page, create a key and tick **Read**.
 
-A key does one thing or the other, never both. A key that records lives inside an agent's process, which is where a credential is most likely to leak, and one that could also read would hand over your whole organisation's spend.
+A key carries the least it needs. An agent only writes and a dashboard only reads, so one box is usually right, and a key that does both is something you choose rather than something you get by default. The two are not alike in what a misuse costs: a write key misused puts spend into your figures that nobody performed, which is visible and revocable; a read key misused discloses every person's spend in the organisation. Give a key both only to a process that genuinely does both.
 
 A key is two values. The key itself is its name, `organisations/<id>/apiKeys/<id>`, which is public and stays on the page. The secret is shown once and is not recoverable; keep it where you keep your others. Both are presented on every request, and they resolve only as a pair.
 
