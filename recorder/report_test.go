@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"google.golang.org/genai"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -215,13 +217,36 @@ func TestAnErrorIsReducedToACodeWhateverKindItIs(t *testing.T) {
 		{"a deadline", context.DeadlineExceeded, "DeadlineExceeded"},
 		{"a cancellation", context.Canceled, "Canceled"},
 		{"a wrapped deadline", errors.Join(errors.New("calling the model"), context.DeadlineExceeded), "DeadlineExceeded"},
+		{"no error at all", nil, ""},
 		{"anything else", errors.New("connection reset by peer"), "Unknown"},
+
+		// What a provider's own client returns. Reduced to Unknown, every one of
+		// these arrives in a report as the same word, and a rate limit cannot be
+		// told from a bad request or an outage.
+		{"a rate limit from the model", genai.APIError{Code: 429, Status: "RESOURCE_EXHAUSTED"}, "RESOURCE_EXHAUSTED"},
+		{"the same, returned by pointer", &genai.APIError{Code: 503, Status: "UNAVAILABLE"}, "UNAVAILABLE"},
+		{"the same, wrapped on the way up", fmt.Errorf("generating the section: %w", genai.APIError{Code: 400, Status: "INVALID_ARGUMENT"}), "INVALID_ARGUMENT"},
+		{"a provider that named no status", genai.APIError{Code: 502}, "HTTP_502"},
+		// The genai client puts Go's http reason phrase in the same field it
+		// puts a named status, whenever the body it got was not json. Stored as
+		// the code, one failure would reach the report under two different
+		// strings depending on what the provider happened to return.
+		{"a reason phrase where a status should be", genai.APIError{Code: 429, Status: "429 Too Many Requests"}, "HTTP_429"},
+		{"a timeout on the wire", timeoutError{}, "DeadlineExceeded"},
 	} {
-		if got := errorCode(c.err); got != c.want {
-			t.Errorf("%s: errorCode = %q, want %q", c.what, got, c.want)
+		if got := ErrorCode(c.err); got != c.want {
+			t.Errorf("%s: ErrorCode = %q, want %q", c.what, got, c.want)
 		}
 	}
 }
+
+// timeoutError is a network error that timed out, which is how a transport
+// reports a deadline it enforced itself rather than one the context carried.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "dial tcp: i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
 
 // The workspace and the project are set once where the sign-in is checked, so a
 // call site names neither and both reach the record all the same: the project
@@ -268,5 +293,55 @@ func TestARecordFromAContextWithNoProjectNamesNone(t *testing.T) {
 
 	if got.GetProject() != "" {
 		t.Fatalf("project = %q, want none", got.GetProject())
+	}
+}
+
+// The failure that costs the most and shows the least: a provider blocks the
+// call for safety, answers 200 with no error and no content, and bills for the
+// prompt. Read only for the error, it is recorded as a cheap success.
+func TestACallBlockedByTheProviderIsAFailureNotACheapSuccess(t *testing.T) {
+	for _, reason := range []string{"SAFETY", "PROHIBITED_CONTENT", "content_filter", "guardrail_intervened", "MALFORMED_FUNCTION_CALL", "OTHER"} {
+		got := reported(t, context.Background(), func(rp *Reporter) {
+			rp.ModelCall(context.Background(), ModelCall{
+				Model:        "gemini-2.5-pro",
+				Component:    "chat_turn",
+				Tokens:       Tokens{Prompt: 1200},
+				FinishReason: reason,
+			})
+		})
+		if got.GetStatus() != pb.Activity_FAILED {
+			t.Errorf("%s: status = %v, want FAILED", reason, got.GetStatus())
+		}
+		if got.GetErrorCode() != reason {
+			t.Errorf("%s: error code = %q, want the reason the provider gave", reason, got.GetErrorCode())
+		}
+	}
+}
+
+// A call cut short by a limit did the work it was paid for, which is a
+// different thing from one that was refused.
+func TestHittingALimitStaysTruncatedRatherThanBecomingAFailure(t *testing.T) {
+	for _, reason := range []string{"MAX_TOKENS", "length"} {
+		got := reported(t, context.Background(), func(rp *Reporter) {
+			rp.ModelCall(context.Background(), ModelCall{Model: "m", FinishReason: reason})
+		})
+		if got.GetStatus() != pb.Activity_TRUNCATED {
+			t.Errorf("%s: status = %v, want TRUNCATED", reason, got.GetStatus())
+		}
+	}
+}
+
+// A call that simply finished must not be dragged into the failure count.
+func TestAnOrdinaryFinishIsStillASuccess(t *testing.T) {
+	for _, reason := range []string{"STOP", "stop", "tool_calls", "end_turn", ""} {
+		got := reported(t, context.Background(), func(rp *Reporter) {
+			rp.ModelCall(context.Background(), ModelCall{Model: "m", FinishReason: reason})
+		})
+		if got.GetStatus() != pb.Activity_OK {
+			t.Errorf("%q: status = %v, want OK", reason, got.GetStatus())
+		}
+		if got.GetErrorCode() != "" {
+			t.Errorf("%q: error code = %q, want none", reason, got.GetErrorCode())
+		}
 	}
 }
