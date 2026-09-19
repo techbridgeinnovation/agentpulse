@@ -215,6 +215,124 @@ func TestAnErrorCodeIsKeptAndNoMessageIs(t *testing.T) {
 	}
 }
 
+// The framework reports a code on the response it built, and nothing at all on
+// a call that failed before there was one. Without the fallback, a call that
+// died on the way to the provider is recorded as failed with no reason.
+func TestAModelFailureWithNoResponseCodeIsStillNamed(t *testing.T) {
+	got := record(t, func(r *recorder.Recorder) {
+		AfterModel(r, options())(newContext(), &adkmodel.LLMResponse{ModelVersion: "m"},
+			genai.APIError{Code: 429, Status: "RESOURCE_EXHAUSTED"})
+	})
+
+	if got[0].GetStatus() != pb.Activity_FAILED {
+		t.Errorf("status = %v, want FAILED", got[0].GetStatus())
+	}
+	if got[0].GetErrorCode() != "RESOURCE_EXHAUSTED" {
+		t.Errorf("error code = %q, want RESOURCE_EXHAUSTED", got[0].GetErrorCode())
+	}
+}
+
+// A duration exists only between the two callbacks; the framework hands neither
+// of them one, and a report without it cannot tell a slow model from a broken
+// one.
+func TestAModelCallReportsHowLongItTook(t *testing.T) {
+	got := record(t, func(r *recorder.Recorder) {
+		ctx := newContext()
+		BeforeModel(r, options())(ctx, &adkmodel.LLMRequest{Model: "gemini-2.5-pro"})
+		time.Sleep(2 * time.Millisecond)
+		AfterModel(r, options())(ctx, &adkmodel.LLMResponse{ModelVersion: "gemini-2.5-pro"}, nil)
+	})
+
+	if got[0].GetDurationMs() < 1 {
+		t.Errorf("duration = %dms, want the time between the two callbacks", got[0].GetDurationMs())
+	}
+}
+
+// An agent that registers only the callback that records still records
+// everything else about its calls.
+func TestAModelCallWithoutTheCallbackThatTimesItIsStillRecorded(t *testing.T) {
+	got := record(t, func(r *recorder.Recorder) {
+		AfterModel(r, options())(newContext(), &adkmodel.LLMResponse{ModelVersion: "gemini-2.5-pro"}, nil)
+	})
+
+	if got[0].GetDurationMs() != 0 {
+		t.Errorf("duration = %dms, want 0 for a call nothing timed", got[0].GetDurationMs())
+	}
+	if got[0].GetModel() != "gemini-2.5-pro" {
+		t.Errorf("model = %q, want it recorded all the same", got[0].GetModel())
+	}
+}
+
+// The same blocked call through the framework path: 200, no error, no content,
+// a finish reason and a bill for the prompt.
+func TestAResponseBlockedBySafetyIsRecordedAsAFailure(t *testing.T) {
+	got := record(t, func(r *recorder.Recorder) {
+		AfterModel(r, options())(newContext(), &adkmodel.LLMResponse{
+			ModelVersion: "gemini-2.5-pro",
+			FinishReason: genai.FinishReasonSafety,
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+				PromptTokenCount: 1200,
+				TotalTokenCount:  1200,
+			},
+		}, nil)
+	})
+
+	if got[0].GetStatus() != pb.Activity_FAILED {
+		t.Errorf("status = %v, want FAILED", got[0].GetStatus())
+	}
+	if got[0].GetErrorCode() != "SAFETY" {
+		t.Errorf("error code = %q, want SAFETY", got[0].GetErrorCode())
+	}
+	// The prompt was still charged for, so the tokens stay on the record.
+	if got[0].GetPromptTokens() != 1200 {
+		t.Errorf("prompt tokens = %d, want the tokens the provider billed", got[0].GetPromptTokens())
+	}
+}
+
+// A malformed function call is a failure for the same reason: the turn got
+// nothing it could use, and the model was paid for producing it.
+func TestAMalformedFunctionCallIsRecordedAsAFailure(t *testing.T) {
+	got := record(t, func(r *recorder.Recorder) {
+		AfterModel(r, options())(newContext(), &adkmodel.LLMResponse{
+			ModelVersion: "m",
+			FinishReason: genai.FinishReasonMalformedFunctionCall,
+		}, nil)
+	})
+	if got[0].GetStatus() != pb.Activity_FAILED || got[0].GetErrorCode() != "MALFORMED_FUNCTION_CALL" {
+		t.Errorf("status = %v, code = %q", got[0].GetStatus(), got[0].GetErrorCode())
+	}
+}
+
+// The token ceiling is checked before the blocked reasons, so a truncated call
+// does not become a failure.
+func TestTheTokenCeilingIsStillTruncationNotFailure(t *testing.T) {
+	got := record(t, func(r *recorder.Recorder) {
+		AfterModel(r, options())(newContext(), &adkmodel.LLMResponse{
+			ModelVersion: "m",
+			FinishReason: genai.FinishReasonMaxTokens,
+		}, nil)
+	})
+	if got[0].GetStatus() != pb.Activity_TRUNCATED {
+		t.Errorf("status = %v, want TRUNCATED", got[0].GetStatus())
+	}
+	if got[0].GetErrorCode() != "" {
+		t.Errorf("error code = %q, want none: nothing failed", got[0].GetErrorCode())
+	}
+}
+
+// A normal answer must not be dragged into the failure count.
+func TestAnOrdinaryStopIsStillASuccess(t *testing.T) {
+	got := record(t, func(r *recorder.Recorder) {
+		AfterModel(r, options())(newContext(), &adkmodel.LLMResponse{
+			ModelVersion: "m",
+			FinishReason: genai.FinishReasonStop,
+		}, nil)
+	})
+	if got[0].GetStatus() != pb.Activity_OK || got[0].GetErrorCode() != "" {
+		t.Errorf("status = %v, code = %q", got[0].GetStatus(), got[0].GetErrorCode())
+	}
+}
+
 func TestBeforeModelLabelsTheRequestWithTheSanitisedIdentity(t *testing.T) {
 	request := &adkmodel.LLMRequest{}
 	BeforeModel(nil, options())(newContext(), request)

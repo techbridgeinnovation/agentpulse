@@ -3,8 +3,12 @@ package recorder
 import (
 	"context"
 	"errors"
+	"net"
+	"strconv"
+	"strings"
 	"time"
 
+	"google.golang.org/genai"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -109,6 +113,15 @@ type ModelCall struct {
 	// and a failed one may have been charged for nothing.
 	Truncated bool
 
+	// FinishReason is what the provider said ended the call, where it said
+	// anything at all, e.g. "SAFETY", "MAX_TOKENS", "content_filter".
+	//
+	// Worth reporting because the failures that cost the most are the ones a
+	// provider reports on a successful response: a call blocked for safety
+	// comes back 200 with no error, no content and a bill for the prompt, and
+	// a recorder that reads only Err files it as an ordinary success.
+	FinishReason string
+
 	// Charges are costs on this call that tokens do not describe.
 	Charges []Charge
 }
@@ -162,8 +175,14 @@ func (rp *Reporter) ModelCall(ctx context.Context, call ModelCall) {
 	activity.ReasoningTokens = call.Tokens.Reasoning
 	activity.TotalTokens = call.Tokens.total()
 
-	if call.Err == nil && call.Truncated {
+	switch {
+	case call.Err != nil:
+		// Already failed, with its code, in activity().
+	case call.Truncated, truncatedFinish(call.FinishReason):
 		activity.Status = pb.Activity_TRUNCATED
+	case BlockedFinish(call.FinishReason):
+		activity.Status = pb.Activity_FAILED
+		activity.ErrorCode = call.FinishReason
 	}
 
 	rp.recorder.RecordIn(ctx, activity)
@@ -224,7 +243,7 @@ func (rp *Reporter) activity(ctx context.Context, component string, duration tim
 
 	if err != nil {
 		activity.Status = pb.Activity_FAILED
-		activity.ErrorCode = errorCode(err)
+		activity.ErrorCode = ErrorCode(err)
 	}
 
 	for _, charge := range charges {
@@ -236,18 +255,163 @@ func (rp *Reporter) activity(ctx context.Context, component string, duration tim
 	return activity
 }
 
-// errorCode reduces an error to the one part of it that is safe to keep.
+// blockedFinishReasons are the reasons a provider gives for a call that ended
+// without producing what it was asked for.
+//
+// Every one of these arrives on a successful response — 200, no error, usually
+// no content and a bill for the prompt — so nothing that reads only the error
+// will ever see them. Held as a set of strings rather than a provider's own
+// enum so that one recorder can report Gemini's SAFETY, OpenAI's
+// content_filter and Bedrock's guardrail_intervened through the same field.
+//
+// MAX_TOKENS and its siblings are deliberately absent: a call cut short by a
+// limit did the work it was paid for, which is what TRUNCATED says.
+var blockedFinishReasons = map[string]bool{
+	"SAFETY":                   true,
+	"RECITATION":               true,
+	"BLOCKLIST":                true,
+	"PROHIBITED_CONTENT":       true,
+	"SPII":                     true,
+	"IMAGE_SAFETY":             true,
+	"IMAGE_PROHIBITED_CONTENT": true,
+	"IMAGE_RECITATION":         true,
+	"LANGUAGE":                 true,
+	"MALFORMED_FUNCTION_CALL":  true,
+	"UNEXPECTED_TOOL_CALL":     true,
+	"TOO_MANY_TOOL_CALLS":      true,
+	"NO_IMAGE":                 true,
+	"CONTENT_FILTER":           true,
+	"CONTENT_FILTERED":         true,
+	"GUARDRAIL_INTERVENED":     true,
+	"REFUSAL":                  true,
+	"ERROR_TOXIC":              true,
+	"MALFORMED_MODEL_OUTPUT":   true,
+	"MALFORMED_TOOL_USE":       true,
+	// A model that stopped for a reason it would not name did not answer
+	// either. Recorded as a failure under its own code, which classifies as
+	// unknown, so it is visible as something to look into rather than counted
+	// as a cheap success.
+	"OTHER":       true,
+	"IMAGE_OTHER": true,
+}
+
+// truncatedReasons are the reasons that mean a limit was reached, not a refusal.
+var truncatedReasons = map[string]bool{
+	"MAX_TOKENS":        true,
+	"LENGTH":            true,
+	"MAX_OUTPUT_TOKENS": true,
+}
+
+// BlockedFinish reports whether a provider's finish reason means the call
+// produced nothing usable, and should therefore be recorded as a failure
+// rather than as a success that happened to be cheap.
+//
+// Exported because a service calling a provider directly has to answer the
+// same question this library's framework hooks answer, and two answers to it
+// would put the same failure on two sides of a report.
+func BlockedFinish(reason string) bool {
+	return blockedFinishReasons[canonicalReason(reason)]
+}
+
+// truncatedFinish reports whether a finish reason means a limit was hit.
+func truncatedFinish(reason string) bool {
+	return truncatedReasons[canonicalReason(reason)]
+}
+
+// canonicalReason upper-cases a reason so that a provider writing
+// content_filter and one writing CONTENT_FILTER are read as the same thing.
+func canonicalReason(reason string) string {
+	return strings.ToUpper(strings.TrimSpace(reason))
+}
+
+// ErrorCode reduces an error to the one part of it that is safe to keep.
 //
 // A code says what went wrong in a way a report can group by. A message says the
 // same thing in prose and often quotes the prompt that caused it, which is the
 // one thing this library must never carry. Taking the error and returning only
 // its code is also what stops a caller reaching for err.Error() themselves.
-func errorCode(err error) string {
+//
+// The code is whatever the layer that failed calls it — a provider's own status,
+// the http status where that is all there is, or a grpc code — rather than a
+// taxonomy of our own. A deadline is read first whichever layer reported it, so
+// that the one failure a report is always asked about groups as one row.
+//
+// Exported because a service that records through something other than this
+// library's own hooks still has to reduce an error the same way, and the whole
+// point of doing it here is that it is done identically everywhere.
+func ErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return codes.DeadlineExceeded.String()
 	case errors.Is(err, context.Canceled):
 		return codes.Canceled.String()
 	}
+	if code := providerCode(err); code != "" {
+		return code
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return codes.DeadlineExceeded.String()
+	}
 	return status.Code(err).String()
+}
+
+// providerCode reads the code out of a provider sdk's own error.
+//
+// Without this, every failure that is not a grpc status reaches a report as
+// Unknown: a rate limit, a malformed request and an outage arrive as the same
+// word, and a failures panel built on it has nothing to say. The genai client
+// returns its error by value; the pointer is tried too because the type is
+// exported and a caller is free to wrap one.
+func providerCode(err error) string {
+	var byValue genai.APIError
+	if errors.As(err, &byValue) {
+		return apiErrorCode(byValue)
+	}
+	var byPointer *genai.APIError
+	if errors.As(err, &byPointer) && byPointer != nil {
+		return apiErrorCode(*byPointer)
+	}
+	return ""
+}
+
+// apiErrorCode prefers the status the provider named over the http status it
+// arrived with, because the status is what that provider's own documentation
+// calls the failure and therefore what someone reading the report will search
+// for.
+//
+// Only when that status is one. The genai client fills the same field with the
+// http reason phrase — `429 Too Many Requests` — whenever the body it got was
+// not json, which happens on whole classes of failure, and storing that as the
+// code would put a different string in the report for the same failure
+// depending on what the provider happened to return. The http status is the
+// honest answer in that case, and it is the one every provider agrees on.
+func apiErrorCode(err genai.APIError) string {
+	if canonicalStatus(err.Status) {
+		return err.Status
+	}
+	if err.Code != 0 {
+		return "HTTP_" + strconv.Itoa(err.Code)
+	}
+	return err.Status
+}
+
+// canonicalStatus reports whether a provider named the failure, as opposed to
+// handing back an http reason phrase. A named status is letters and
+// underscores — RESOURCE_EXHAUSTED, FAILED_PRECONDITION — and never carries
+// the digits or the spaces a phrase does.
+func canonicalStatus(status string) bool {
+	if status == "" {
+		return false
+	}
+	for _, r := range status {
+		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+			continue
+		}
+		return false
+	}
+	return true
 }

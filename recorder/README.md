@@ -57,7 +57,7 @@ rec := recorder.New(recorder.Config{
 })
 
 opts := adkhooks.Options{Agent: agentName, Service: "atlas-agent"}
-// register adkhooks.BeforeModel, adkhooks.AfterModel, adkhooks.AfterTool and adkhooks.AfterAgent on the agent
+// register adkhooks.BeforeModel, adkhooks.AfterModel, adkhooks.BeforeTool, adkhooks.AfterTool and adkhooks.AfterAgent on the agent
 ```
 
 Every field on the record comes from the framework's own callback context: which request, which user, which session, which agent, which model, how many tokens, whether it succeeded. A user set on the context with `recorder.WithUser` before the runner is invoked wins over the framework's own user id, name and all. Which tenant the turn is for, and which unit of work inside it, are read from the same context — the framework knows neither.

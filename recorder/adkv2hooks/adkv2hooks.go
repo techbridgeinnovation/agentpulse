@@ -102,7 +102,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			Model:           modelOf(response, opts),
 			Provider:        opts.provider(),
 			Status:          statusOf(response, callErr),
-			ErrorCode:       response.ErrorCode,
+			ErrorCode:       errorCodeOf(response, callErr),
 			OccurredAt:      timestamppb.Now(),
 		}
 		applyUsage(activity, response.UsageMetadata)
@@ -115,6 +115,8 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 // AfterTool records one activity per tool call.
 //
 // A tool call is a priced unit of work in its own right: a search or a lookup is charged per request, not per token, and those charges are invisible to anything that only counts tokens. Recorded on completion, so a tool that never ran is not counted.
+//
+// The error is read for its code, not its message, the same way a model call's is: a report that says a tool failed and not how it failed leaves a team to guess between a timeout, a bad argument and an outage.
 func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 	return func(ctx agent.Context, t tool.Tool, _, _ map[string]any, callErr error) (map[string]any, error) {
 		name := ""
@@ -138,6 +140,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			Project:         recorder.ProjectFrom(ctx),
 			Provider:        opts.provider(),
 			Status:          status,
+			ErrorCode:       recorder.ErrorCode(callErr),
 			OccurredAt:      timestamppb.Now(),
 		})
 		return nil, nil
@@ -212,6 +215,21 @@ func modelOf(response *adkmodel.LLMResponse, opts Options) string {
 	return opts.Model
 }
 
+// errorCodeOf names why a call did not succeed.
+//
+// The framework's own code first, then the error, then the reason a provider gave for ending a call it answered successfully — which is the only trace a safety block leaves.
+func errorCodeOf(response *adkmodel.LLMResponse, callErr error) string {
+	switch {
+	case response.ErrorCode != "":
+		return response.ErrorCode
+	case callErr != nil:
+		return recorder.ErrorCode(callErr)
+	case recorder.BlockedFinish(string(response.FinishReason)):
+		return string(response.FinishReason)
+	}
+	return ""
+}
+
 // statusOf reads how the call ended.
 //
 // Truncation is separated from failure because the two mean different things to a cost report: a truncated call did partial work and is charged for it, while a failed one may have been charged for work that produced nothing.
@@ -221,6 +239,10 @@ func statusOf(response *adkmodel.LLMResponse, callErr error) pb.Activity_Status 
 		return pb.Activity_FAILED
 	case response.Interrupted, response.FinishReason == genai.FinishReasonMaxTokens:
 		return pb.Activity_TRUNCATED
+	case recorder.BlockedFinish(string(response.FinishReason)):
+		// A safety block, a refusal or a malformed tool call arrives on a
+		// successful response with no content and a bill for the prompt.
+		return pb.Activity_FAILED
 	default:
 		return pb.Activity_OK
 	}

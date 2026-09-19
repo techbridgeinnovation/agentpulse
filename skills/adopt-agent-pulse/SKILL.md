@@ -113,7 +113,7 @@ ctx = recorder.WithProject(recorder.WithWorkspace(ctx, tenantID), projectID)
 
 Never pass the workspace or the project as an argument at a model call site. A value a call site can choose is a value that can attribute one customer's spend to another.
 
-On ADK v1 the same three functions live in `recorder/adkhooks` with `adkhooks.Options`.
+On ADK v1 the same three functions live in `recorder/adkhooks` with `adkhooks.Options`, and there is a fourth: register `adkhooks.BeforeTool` beside `adkhooks.AfterTool` as a `BeforeToolCallback`. It records nothing on its own — it notes when a tool call began, so that the record of it says how long it ran. Without it a tool is still recorded, with no duration, and a timeout reads as an ordinary failure.
 
 ## Step 4b: reporter path (no framework)
 

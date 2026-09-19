@@ -27,7 +27,6 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	adkmodel "google.golang.org/adk/model"
-	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -186,48 +185,14 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			Project:         recorder.ProjectFrom(ctx),
 			Model:           modelOf(response, known),
 			Provider:        opts.provider(),
+			DurationMs:      millisSince(known.startedAt, time.Now),
 			Status:          statusOf(response, callErr),
-			ErrorCode:       response.ErrorCode,
+			ErrorCode:       errorCodeOf(response, callErr),
 			OccurredAt:      timestamppb.Now(),
 		}
 		applyUsage(activity, response.UsageMetadata)
 
 		r.RecordIn(ctx, activity)
-		return nil, nil
-	}
-}
-
-// AfterTool records one activity per tool call.
-//
-// A tool call is a priced unit of work in its own right: a search or a lookup
-// is charged per request, not per token, and those charges are invisible to
-// anything that only counts tokens. Recorded on completion, so a tool that
-// never ran is not counted.
-func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
-	return func(ctx tool.Context, t tool.Tool, _, _ map[string]any, callErr error) (map[string]any, error) {
-		name := ""
-		if t != nil {
-			name = t.Name()
-		}
-
-		status := pb.Activity_OK
-		if callErr != nil {
-			status = pb.Activity_FAILED
-		}
-
-		r.RecordIn(ctx, &pb.Activity{
-			Agent:           opts.Agent,
-			Request:         requestOf(ctx),
-			Session:         ctx.SessionID(),
-			User:            userOf(r, ctx),
-			CallerService:   opts.Service,
-			CallerComponent: "tool:" + name,
-			Skill:           opts.Skill,
-			Project:         recorder.ProjectFrom(ctx),
-			Provider:        opts.provider(),
-			Status:          status,
-			OccurredAt:      timestamppb.Now(),
-		})
 		return nil, nil
 	}
 }
@@ -366,17 +331,43 @@ func componentOf(ctx agent.ReadonlyContext) string {
 	return "model_call"
 }
 
+// errorCodeOf names why a call did not succeed.
+//
+// The framework's own code is preferred, since it is the one the provider reported through it. A call that failed before there was a response has only the error, which is reduced the same way every other failure in this library is.
+func errorCodeOf(response *adkmodel.LLMResponse, callErr error) string {
+	if response.ErrorCode != "" {
+		return response.ErrorCode
+	}
+	if callErr != nil {
+		return recorder.ErrorCode(callErr)
+	}
+	if recorder.BlockedFinish(string(response.FinishReason)) {
+		return string(response.FinishReason)
+	}
+	return ""
+}
+
 // statusOf reads how the call ended.
 //
 // Truncation is separated from failure because the two mean different things to
 // a cost report: a truncated call did partial work and is charged for it, while
 // a failed one may have been charged for work that produced nothing.
+//
+// A blocked finish reason is read last and counts as a failure. It is the one
+// kind of failure that arrives on a perfectly successful response: safety
+// blocks, refusals and malformed tool calls come back with no error and no
+// content, and the prompt is billed all the same. Read only for the error,
+// such a call is recorded as a cheap success — which is exactly what it is
+// not. The limit reasons are checked first, so a call cut short by a token
+// ceiling stays truncated rather than becoming a failure.
 func statusOf(response *adkmodel.LLMResponse, callErr error) pb.Activity_Status {
 	switch {
 	case callErr != nil, response.ErrorCode != "":
 		return pb.Activity_FAILED
 	case response.Interrupted, response.FinishReason == genai.FinishReasonMaxTokens:
 		return pb.Activity_TRUNCATED
+	case recorder.BlockedFinish(string(response.FinishReason)):
+		return pb.Activity_FAILED
 	default:
 		return pb.Activity_OK
 	}
