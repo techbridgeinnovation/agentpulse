@@ -62,8 +62,8 @@ func TestAServiceReportsWithoutNamingWhatItAlreadyToldUs(t *testing.T) {
 			t.Errorf("%s = %q, want %q", label, pair[0], pair[1])
 		}
 	}
-	if got.GetProvider() != pb.Activity_VERTEX_AI {
-		t.Errorf("provider = %s, want VERTEX_AI", got.GetProvider())
+	if got.GetBilledBy() != ProviderVertexAI {
+		t.Errorf("billed_by = %q, want %q", got.GetBilledBy(), ProviderVertexAI)
 	}
 	if got.GetOccurredAt() == nil {
 		t.Error("no occurred_at, so the record cannot be priced against the rates that applied")

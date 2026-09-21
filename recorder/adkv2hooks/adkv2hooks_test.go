@@ -11,6 +11,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/techbridgeinnovation/agentpulse/recorder"
+	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
@@ -100,8 +101,8 @@ func TestEverythingIsDerivedFromTheOneContextType(t *testing.T) {
 	if a.GetCallerComponent() != "pulseagent-v1" {
 		t.Errorf("component = %q, want the agent name the framework reports", a.GetCallerComponent())
 	}
-	if a.GetProvider() != pb.Activity_VERTEX_AI {
-		t.Errorf("provider = %v, want VERTEX_AI by default rather than unspecified", a.GetProvider())
+	if a.GetBilledBy() != recorder.ProviderVertexAI {
+		t.Errorf("billed_by = %q, want %q by default rather than empty", a.GetBilledBy(), recorder.ProviderVertexAI)
 	}
 }
 
@@ -314,5 +315,277 @@ func TestATurnThatNamesNoWorkspaceOrProjectRecordsNeither(t *testing.T) {
 	}
 	if got := sink.workspaces; len(got) != 1 || got[0] != "" {
 		t.Fatalf("delivered under %v, want one batch under no workspace", got)
+	}
+}
+
+type fakeDecider struct {
+	resp  *governancepb.DecideResponse
+	err   error
+	got   *governancepb.DecideRequest
+	calls int
+}
+
+func (f *fakeDecider) Decide(ctx context.Context, req *governancepb.DecideRequest) (*governancepb.DecideResponse, error) {
+	f.calls++
+	f.got = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.resp, nil
+}
+
+func TestBeforeModelSkipsGovernanceWhenNoDeciderIsConfigured(t *testing.T) {
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	resp, err := BeforeModel(r, options())(newContext(), &adkmodel.LLMRequest{})
+	if resp != nil || err != nil {
+		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil)", resp, err)
+	}
+	if s := r.Stats(); s.Notified != 0 || s.Denied != 0 || s.DecisionErrors != 0 {
+		t.Fatalf("stats = %+v, want no decision activity when no Decider is configured", s)
+	}
+}
+
+func TestBeforeModelSendsTheExpectedDecideRequest(t *testing.T) {
+	decider := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	opts := options()
+	// Product is deprecated: setting it must have no effect on the request sent.
+	opts.Product = "rezco"
+	opts.Decider = decider
+
+	ctx := newContext()
+	ctx.user = "users/jane"
+	if _, err := BeforeModel(nil, opts)(ctx, &adkmodel.LLMRequest{}); err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+
+	if decider.got == nil {
+		t.Fatal("Decide was never called")
+	}
+	if decider.got.GetParent() != "organisations/techbridge" {
+		t.Fatalf("parent = %q, want the organisation derived from Options.Agent", decider.got.GetParent())
+	}
+	if decider.got.GetAgent() != opts.Agent {
+		t.Fatalf("agent = %q, want %q", decider.got.GetAgent(), opts.Agent)
+	}
+	if decider.got.GetProduct() != "" {
+		t.Fatalf("product = %q, want empty — Options.Product is deprecated and never sent", decider.got.GetProduct())
+	}
+	if decider.got.GetUser() != "users/jane" {
+		t.Fatalf("user = %q, want %q", decider.got.GetUser(), "users/jane")
+	}
+}
+
+func TestBeforeModelProceedsOnAllow(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	resp, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{})
+	if resp != nil || err != nil {
+		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil) — ALLOW must never preempt the model call", resp, err)
+	}
+	if s := r.Stats(); s.Notified != 0 || s.Denied != 0 || s.DecisionErrors != 0 {
+		t.Fatalf("stats = %+v, want no decision activity for ALLOW", s)
+	}
+}
+
+func TestBeforeModelProceedsAndCountsOnNotify(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_NOTIFY}}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	resp, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{})
+	if resp != nil || err != nil {
+		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil) — NOTIFY must still let the call proceed", resp, err)
+	}
+	if s := r.Stats(); s.Notified != 1 {
+		t.Fatalf("Notified = %d, want 1", s.Notified)
+	}
+}
+
+func TestBeforeModelProceedsAndCountsOnDecideError(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{err: errors.New("governance unreachable")}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	resp, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{})
+	if resp != nil || err != nil {
+		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil) — this integration proceeds on any Decide error", resp, err)
+	}
+	if s := r.Stats(); s.DecisionErrors != 1 {
+		t.Fatalf("DecisionErrors = %d, want 1", s.DecisionErrors)
+	}
+}
+
+func TestBeforeModelCountsADecisionErrorForAMalformedAgentName(t *testing.T) {
+	opts := options()
+	opts.Agent = "not-an-agent-name"
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	resp, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{})
+	if resp != nil || err != nil {
+		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil) — a malformed agent name must still fail open", resp, err)
+	}
+	if s := r.Stats(); s.DecisionErrors != 1 {
+		t.Fatalf("DecisionErrors = %d, want 1", s.DecisionErrors)
+	}
+}
+
+// deadlineCapturingDecider records whether the context Decide was called
+// with carried a deadline.
+type deadlineCapturingDecider struct {
+	*fakeDecider
+	hadDeadline bool
+}
+
+func (d *deadlineCapturingDecider) Decide(ctx context.Context, req *governancepb.DecideRequest) (*governancepb.DecideResponse, error) {
+	_, d.hadDeadline = ctx.Deadline()
+	return d.fakeDecider.Decide(ctx, req)
+}
+
+func TestBeforeModelBoundsDecideWithADeadline(t *testing.T) {
+	decider := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	wrapped := &deadlineCapturingDecider{fakeDecider: decider}
+	opts := options()
+	opts.Decider = wrapped
+	opts.DecideTimeout = 10 * time.Millisecond
+
+	if _, err := BeforeModel(nil, opts)(newContext(), &adkmodel.LLMRequest{}); err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+	if !wrapped.hadDeadline {
+		t.Fatal("Decide was called without a bounded context")
+	}
+}
+
+func TestBeforeModelCachesRepeatedDecideCallsForTheSameContext(t *testing.T) {
+	decider := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	opts := options()
+	opts.Decider = decider
+	opts.DecideCacheTTL = time.Minute
+
+	before := BeforeModel(nil, opts)
+	ctx := newContext()
+
+	if _, err := before(ctx, &adkmodel.LLMRequest{}); err != nil {
+		t.Fatalf("first BeforeModel: %v", err)
+	}
+	if _, err := before(ctx, &adkmodel.LLMRequest{}); err != nil {
+		t.Fatalf("second BeforeModel: %v", err)
+	}
+
+	if decider.calls != 1 {
+		t.Fatalf("wrapped Decider called %d times, want 1 — a repeated call for the same decision context should answer from the cache", decider.calls)
+	}
+}
+
+func TestBeforeModelSkipsTheProviderAndReturnsTheConfiguredMessageOnDeny(t *testing.T) {
+	opts := options()
+	opts.DeniedMessage = "You are out of credits."
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DENY}}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	resp, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{})
+	if err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("BeforeModel() returned (nil, nil) on DENY, want a synthetic response that skips the provider call")
+	}
+	if got := len(resp.Content.Parts); got != 1 || resp.Content.Parts[0].Text != "You are out of credits." {
+		t.Fatalf("response content = %+v, want the configured denied message", resp.Content)
+	}
+	if s := r.Stats(); s.Denied != 1 {
+		t.Fatalf("Denied = %d, want 1", s.Denied)
+	}
+}
+
+func TestBeforeModelUsesTheDefaultDeniedMessageWhenNoneIsConfigured(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DENY}}
+
+	resp, err := BeforeModel(nil, opts)(newContext(), &adkmodel.LLMRequest{})
+	if err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+	if resp == nil || len(resp.Content.Parts) != 1 || resp.Content.Parts[0].Text != DefaultDeniedMessage {
+		t.Fatalf("response = %+v, want the default denied message %q", resp, DefaultDeniedMessage)
+	}
+}
+
+func TestBeforeModelRecordsTheDenialAsAZeroCostDeniedActivity(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DENY}}
+
+	sink := delivered(t, func(r *recorder.Recorder) {
+		if _, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{}); err != nil {
+			t.Fatalf("BeforeModel: %v", err)
+		}
+	})
+
+	if len(sink.seen) != 1 {
+		t.Fatalf("recorded %d activities, want 1 — a denial must be recorded even though the model was never called", len(sink.seen))
+	}
+	got := sink.seen[0]
+	if got.GetStatus() != pb.Activity_DENIED {
+		t.Fatalf("status = %v, want DENIED", got.GetStatus())
+	}
+	if got.GetEstimatedCostMicros() != 0 || got.GetTotalTokens() != 0 {
+		t.Fatalf("activity = %+v, want zero cost and zero tokens — nothing was spent", got)
+	}
+}
+
+// TestBeforeModelDoesNotTreatAnUnrecognizedDecisionAsDeny proves DOWNGRADE —
+// declared in the contract but not implemented by this integration — and
+// any other value this build does not recognize proceed exactly like ALLOW,
+// never as DENY.
+func TestBeforeModelDoesNotTreatAnUnrecognizedDecisionAsDeny(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DOWNGRADE}}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	resp, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{})
+	if resp != nil || err != nil {
+		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil) — an unimplemented verdict must never preempt the call", resp, err)
+	}
+	if s := r.Stats(); s.Denied != 0 {
+		t.Fatalf("Denied = %d, want 0 — DOWNGRADE is not DENY", s.Denied)
 	}
 }

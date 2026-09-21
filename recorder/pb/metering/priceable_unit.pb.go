@@ -124,6 +124,22 @@ type PriceableUnit struct {
 	// every token priced against it. An activity's cost is still stored in
 	// millionths; the extra precision belongs to the rate, not to the money.
 	UnitCostNanos int64 `protobuf:"varint,11,opt,name=unit_cost_nanos,json=unitCostNanos,proto3" json:"unit_cost_nanos,omitempty"`
+	// The service tier this rate is for, e.g. `BATCH`, `FLEX`, `PRIORITY`.
+	//
+	// Empty applies to the standard tier and to a call that named no tier. A free string, matching `Activity.service_tier`, so a tier a provider introduces can be priced without a contract change.
+	ServiceTier string `protobuf:"bytes,12,opt,name=service_tier,json=serviceTier,proto3" json:"service_tier,omitempty"`
+	// The smallest prompt this rate applies to, in tokens.
+	//
+	// Zero is every prompt. A provider that charges more above a context threshold has a second rate at that threshold, and the higher one wins for a call that crosses it. Measured against the whole prompt the call sent, cached tokens included, because that is the size the provider is reacting to.
+	MinPromptTokens int32 `protobuf:"varint,13,opt,name=min_prompt_tokens,json=minPromptTokens,proto3" json:"min_prompt_tokens,omitempty"`
+	// The shortest cache lifetime this rate applies to, in seconds.
+	//
+	// Zero is any lifetime. Only meaningful on a cache write, where a provider charges a premium for an entry that lives longer — an hour against the usual five minutes.
+	MinCacheWriteTtlSeconds int32 `protobuf:"varint,14,opt,name=min_cache_write_ttl_seconds,json=minCacheWriteTtlSeconds,proto3" json:"min_cache_write_ttl_seconds,omitempty"`
+	// The modality this rate is for, e.g. `AUDIO`, `IMAGE`, `VIDEO`, `DOCUMENT`.
+	//
+	// Empty is text, and is what an ordinary rate states. Audio and image tokens are counted in the same classes as text and charged at several times the rate, so a card with no modality on it prices a voice turn as though it had been typed.
+	Modality string `protobuf:"bytes,15,opt,name=modality,proto3" json:"modality,omitempty"`
 	// When this rate takes effect, inclusive.
 	EffectiveFrom *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=effective_from,json=effectiveFrom,proto3" json:"effective_from,omitempty"`
 	// When this rate stops applying, exclusive. Empty while it is current.
@@ -222,6 +238,34 @@ func (x *PriceableUnit) GetUnitCostNanos() int64 {
 		return x.UnitCostNanos
 	}
 	return 0
+}
+
+func (x *PriceableUnit) GetServiceTier() string {
+	if x != nil {
+		return x.ServiceTier
+	}
+	return ""
+}
+
+func (x *PriceableUnit) GetMinPromptTokens() int32 {
+	if x != nil {
+		return x.MinPromptTokens
+	}
+	return 0
+}
+
+func (x *PriceableUnit) GetMinCacheWriteTtlSeconds() int32 {
+	if x != nil {
+		return x.MinCacheWriteTtlSeconds
+	}
+	return 0
+}
+
+func (x *PriceableUnit) GetModality() string {
+	if x != nil {
+		return x.Modality
+	}
+	return ""
 }
 
 func (x *PriceableUnit) GetEffectiveFrom() *timestamppb.Timestamp {
@@ -555,7 +599,7 @@ var File_techbridge_ap_metering_v1_priceable_unit_proto protoreflect.FileDescrip
 
 const file_techbridge_ap_metering_v1_priceable_unit_proto_rawDesc = "" +
 	"\n" +
-	".techbridge/ap/metering/v1/priceable_unit.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xfd\x06\n" +
+	".techbridge/ap/metering/v1/priceable_unit.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa6\b\n" +
 	"\rPriceableUnit\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12'\n" +
 	"\fdisplay_name\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\vdisplayName\x12 \n" +
@@ -563,7 +607,11 @@ const file_techbridge_ap_metering_v1_priceable_unit_proto_rawDesc = "" +
 	"\x05model\x18\x04 \x01(\tR\x05model\x12G\n" +
 	"\x04kind\x18\x05 \x01(\x0e2-.techbridge.ap.metering.v1.PriceableUnit.KindB\x04\xe2A\x01\x02R\x04kind\x12,\n" +
 	"\x10unit_cost_micros\x18\x06 \x01(\x03B\x02\x18\x01R\x0eunitCostMicros\x12,\n" +
-	"\x0funit_cost_nanos\x18\v \x01(\x03B\x04\xe2A\x01\x02R\runitCostNanos\x12G\n" +
+	"\x0funit_cost_nanos\x18\v \x01(\x03B\x04\xe2A\x01\x02R\runitCostNanos\x12!\n" +
+	"\fservice_tier\x18\f \x01(\tR\vserviceTier\x12*\n" +
+	"\x11min_prompt_tokens\x18\r \x01(\x05R\x0fminPromptTokens\x12<\n" +
+	"\x1bmin_cache_write_ttl_seconds\x18\x0e \x01(\x05R\x17minCacheWriteTtlSeconds\x12\x1a\n" +
+	"\bmodality\x18\x0f \x01(\tR\bmodality\x12G\n" +
 	"\x0eeffective_from\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\x04\xe2A\x01\x02R\reffectiveFrom\x12=\n" +
 	"\feffective_to\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\veffectiveTo\x120\n" +
 	"\x11rate_card_version\x18\t \x01(\tB\x04\xe2A\x01\x02R\x0frateCardVersion\x12\x16\n" +

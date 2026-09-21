@@ -30,10 +30,11 @@ const (
 // DecisionsService answers whether an agent may proceed with a call it is
 // about to make, before it makes it.
 //
-// Governance is authoritative for the product budget and any user cap
-// within it, and returns a verdict rather than raw budget figures — how a
-// recorder caches and reuses that verdict between calls is a question for
-// the recorder's own integration work, not this contract.
+// Governance is authoritative for an organisation's spend ceiling and any
+// narrower workspace, agent or user cap within it, and returns a verdict
+// rather than raw budget figures — how a recorder caches and reuses that
+// verdict between calls is a question for the recorder's own integration
+// work, not this contract.
 type DecisionsServiceClient interface {
 	// Decides whether a call may proceed.
 	Decide(ctx context.Context, in *DecideRequest, opts ...grpc.CallOption) (*DecideResponse, error)
@@ -98,10 +99,11 @@ type DecisionsService_StreamDecisionInvalidationsClient = grpc.ServerStreamingCl
 // DecisionsService answers whether an agent may proceed with a call it is
 // about to make, before it makes it.
 //
-// Governance is authoritative for the product budget and any user cap
-// within it, and returns a verdict rather than raw budget figures — how a
-// recorder caches and reuses that verdict between calls is a question for
-// the recorder's own integration work, not this contract.
+// Governance is authoritative for an organisation's spend ceiling and any
+// narrower workspace, agent or user cap within it, and returns a verdict
+// rather than raw budget figures — how a recorder caches and reuses that
+// verdict between calls is a question for the recorder's own integration
+// work, not this contract.
 type DecisionsServiceServer interface {
 	// Decides whether a call may proceed.
 	Decide(context.Context, *DecideRequest) (*DecideResponse, error)

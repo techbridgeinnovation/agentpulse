@@ -65,7 +65,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			CallerComponent: "tool:" + name,
 			Skill:           opts.Skill,
 			Project:         recorder.ProjectFrom(ctx),
-			Provider:        opts.provider(),
+			BilledBy:        opts.billedBy(),
 			DurationMs:      millisSince(started, time.Now),
 			Status:          status,
 			ErrorCode:       recorder.ErrorCode(callErr),

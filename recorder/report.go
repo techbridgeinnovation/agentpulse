@@ -39,9 +39,12 @@ type Attribution struct {
 	// Service names the service itself, e.g. "sources-service".
 	Service string
 
-	// Provider is who bills for the calls. Vertex unless the service calls a
-	// provider directly, which decides whether the spend can ever be checked
-	// against an invoice.
+	// BilledBy is who bills for the calls, e.g. "VERTEX_AI", "ANTHROPIC". Vertex unless the service calls a provider directly, which decides whether the spend can ever be checked against an invoice.
+	//
+	// A string so that calling a provider this library has never heard of needs no release of it. Recognised or not, the value reaches the rate card as written.
+	BilledBy string
+
+	// Deprecated: set BilledBy. Kept so a service configured before it existed still attributes its spend correctly.
 	Provider pb.Activity_Provider
 
 	// Skill is the area of the product the work belongs to, where the product
@@ -49,19 +52,17 @@ type Attribution struct {
 	Skill string
 }
 
-func (a Attribution) provider() pb.Activity_Provider {
-	if a.Provider == pb.Activity_PROVIDER_UNSPECIFIED {
-		return pb.Activity_VERTEX_AI
-	}
-	return a.Provider
+func (a Attribution) billedBy() string {
+	return BilledByOf(a.BilledBy, a.Provider) //nolint:staticcheck // the enum is read only to keep an agent configured before BilledBy existed attributing correctly
 }
 
-// Tokens is what the provider reported it will charge for.
+// Tokens is a split a caller has already made, for a caller who is certain the classes do not overlap.
 //
-// Each kind is separate because each is billed at its own rate, and the ones
-// that get forgotten are the expensive ones: cache writes cost more than
-// ordinary input, and reasoning tokens are invisible to anything that only adds
-// up input and output.
+// Prefer ModelCall.Reported. Filling this in means deciding, at the call site, what a provider's numbers mean — and providers disagree about that in ways that are easy to miss and expensive to get wrong. Gemini's prompt count already contains the tokens served from cache, so copying it into Prompt and the cache figure into Cached charges the same tokens twice, once at roughly ten times the rate they earned. OpenAI does the same with cached, and counts reasoning inside its output figure besides.
+//
+// Reported hands the provider's own numbers to the server and lets the split be made in one place that can be corrected. This stays for a caller who has genuinely already done the arithmetic, and for one whose provider reports classes that never overlapped.
+//
+// Each class is separate because each is billed at its own rate, and the ones that get forgotten are the expensive ones: cache writes cost more than ordinary input, and reasoning is invisible to anything that only adds up input and output.
 type Tokens struct {
 	Prompt     int32
 	Candidate  int32
@@ -101,8 +102,34 @@ type ModelCall struct {
 	// Component is the part of the service that spent this, e.g. "asset_summary".
 	Component string
 
+	// Reported is what the provider said, keyed by the provider's own name for each quantity, e.g. {"input_tokens": 4211, "cache_read_input_tokens": 21847}.
+	//
+	// The way to report usage from a service that is not on a framework. Hand over the numbers as the provider gave them, name them as the provider named them, say which convention they are in with Format, and the split into priced classes is made server-side — in one place, correctable without this service being touched, and reapplicable to records already written.
+	Reported map[string]int64
+
+	// Format names the convention Reported is in, e.g. recorder.FormatAnthropic.
+	//
+	// Required alongside Reported, and the whole reason Reported can be read at all: the same field name means different things to different providers, and a set of counts with no convention attached cannot be split without guessing.
+	Format string
+
+	// Tokens is a split already made, for a caller who has genuinely made it. Prefer Reported.
 	Tokens   Tokens
 	Duration time.Duration
+
+	// CacheWriteTTL is how long a cache entry this call wrote is kept.
+	//
+	// Stated by the caller because no provider reports it back: it is a request parameter, so the only place it is known is the code that set it. Worth stating because a longer-lived entry is charged a premium — an hour against the usual few minutes — and a write priced at the short rate is wrong by that difference.
+	CacheWriteTTL time.Duration
+
+	// CostMicros is what the provider said the call cost, in millionths of a dollar.
+	//
+	// A few providers return a price with the response. Where one does there is no reason for us to estimate over the top of it, so it is carried through and preferred.
+	CostMicros int64
+
+	// Tier is how the call was served, where a provider prices the same tokens differently by tier, e.g. "BATCH".
+	//
+	// Stated by the caller for the same reason as the lifetime: the tier is chosen when the request is made and does not come back on the response. Batch is priced at around half, so a batched call recorded without it is charged about twice what it cost.
+	Tier string
 
 	// Err is read for whether the call failed and for its code. The message is
 	// never recorded: a provider error routinely quotes the prompt back.
@@ -168,12 +195,21 @@ func (rp *Reporter) ModelCall(ctx context.Context, call ModelCall) {
 
 	activity := rp.activity(ctx, call.Component, call.Duration, call.Err, call.Charges)
 	activity.Model = call.Model
-	activity.PromptTokens = call.Tokens.Prompt
-	activity.CandidateTokens = call.Tokens.Candidate
-	activity.CachedTokens = call.Tokens.Cached
-	activity.CacheWriteTokens = call.Tokens.CacheWrite
-	activity.ReasoningTokens = call.Tokens.Reasoning
-	activity.TotalTokens = call.Tokens.total()
+	activity.UsageFormat = call.Format
+	activity.ReportedUsage = reportedQuantities(call.Reported)
+	activity.ServiceTier = call.Tier
+	activity.ProviderCostMicros = call.CostMicros
+	activity.CacheWriteTtlSeconds = int32(call.CacheWriteTTL.Seconds())
+
+	// A split the caller made is carried as given. Both can be present: a caller migrating onto Reported keeps its own figures until the server's reading of the same call is confirmed to agree with them, which is the cheapest way to prove a convention is read right.
+	if call.Tokens != (Tokens{}) {
+		activity.PromptTokens = call.Tokens.Prompt
+		activity.CandidateTokens = call.Tokens.Candidate
+		activity.CachedTokens = call.Tokens.Cached
+		activity.CacheWriteTokens = call.Tokens.CacheWrite
+		activity.ReasoningTokens = call.Tokens.Reasoning
+		activity.TotalTokens = call.Tokens.total()
+	}
 
 	switch {
 	case call.Err != nil:
@@ -235,7 +271,7 @@ func (rp *Reporter) activity(ctx context.Context, component string, duration tim
 		CallerService:   rp.attribution.Service,
 		CallerComponent: component,
 		Skill:           rp.attribution.Skill,
-		Provider:        rp.attribution.provider(),
+		BilledBy:        rp.attribution.billedBy(),
 		DurationMs:      duration.Milliseconds(),
 		Status:          pb.Activity_OK,
 		OccurredAt:      timestamppb.Now(),
