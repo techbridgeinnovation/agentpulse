@@ -34,7 +34,7 @@ func (c *rateCard) priceOf(a *pb.Activity) int64 {
 		if !inForce(unit, at) {
 			continue
 		}
-		if unit.GetProvider() != a.GetProvider().String() {
+		if unit.GetProvider() != BilledByOf(a.GetBilledBy(), a.GetProvider()) { //nolint:staticcheck // a record written before billed_by existed states its provider only in the enum
 			continue
 		}
 		// An empty model on a rate means it applies whatever the model.

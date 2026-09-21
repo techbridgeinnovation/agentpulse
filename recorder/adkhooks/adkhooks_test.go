@@ -364,8 +364,8 @@ func TestProviderDefaultsToVertexRatherThanUnspecified(t *testing.T) {
 		AfterModel(r, Options{Agent: "organisations/x/agents/y"})(newContext(), &adkmodel.LLMResponse{ModelVersion: "m"}, nil)
 	})
 
-	if got[0].GetProvider() != pb.Activity_VERTEX_AI {
-		t.Fatalf("provider = %v, want VERTEX_AI", got[0].GetProvider())
+	if got[0].GetBilledBy() != recorder.ProviderVertexAI {
+		t.Fatalf("billed_by = %q, want %q", got[0].GetBilledBy(), recorder.ProviderVertexAI)
 	}
 }
 
@@ -558,6 +558,93 @@ func TestBeforeModelProceedsAndCountsOnDecideError(t *testing.T) {
 	}
 	if s := r.Stats(); s.DecisionErrors != 1 {
 		t.Fatalf("DecisionErrors = %d, want 1", s.DecisionErrors)
+	}
+}
+
+func TestBeforeModelSkipsTheProviderAndReturnsTheConfiguredMessageOnDeny(t *testing.T) {
+	opts := options()
+	opts.DeniedMessage = "You are out of credits."
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DENY}}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	resp, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{})
+	if err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+	// A non-nil response from a BeforeModelCallback is what makes ADK skip
+	// the actual model call and use this response instead — see llmagent's
+	// own doc on BeforeModelCallbacks.
+	if resp == nil {
+		t.Fatal("BeforeModel() returned (nil, nil) on DENY, want a synthetic response that skips the provider call")
+	}
+	if got := len(resp.Content.Parts); got != 1 || resp.Content.Parts[0].Text != "You are out of credits." {
+		t.Fatalf("response content = %+v, want the configured denied message", resp.Content)
+	}
+	if s := r.Stats(); s.Denied != 1 {
+		t.Fatalf("Denied = %d, want 1", s.Denied)
+	}
+}
+
+func TestBeforeModelUsesTheDefaultDeniedMessageWhenNoneIsConfigured(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DENY}}
+
+	resp, err := BeforeModel(nil, opts)(newContext(), &adkmodel.LLMRequest{})
+	if err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+	if resp == nil || len(resp.Content.Parts) != 1 || resp.Content.Parts[0].Text != DefaultDeniedMessage {
+		t.Fatalf("response = %+v, want the default denied message %q", resp, DefaultDeniedMessage)
+	}
+}
+
+func TestBeforeModelRecordsTheDenialAsAZeroCostDeniedActivity(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DENY}}
+
+	sink := delivered(t, func(r *recorder.Recorder) {
+		if _, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{}); err != nil {
+			t.Fatalf("BeforeModel: %v", err)
+		}
+	})
+
+	if len(sink.seen) != 1 {
+		t.Fatalf("recorded %d activities, want 1 — a denial must be recorded even though the model was never called", len(sink.seen))
+	}
+	got := sink.seen[0]
+	if got.GetStatus() != pb.Activity_DENIED {
+		t.Fatalf("status = %v, want DENIED", got.GetStatus())
+	}
+	if got.GetEstimatedCostMicros() != 0 || got.GetTotalTokens() != 0 {
+		t.Fatalf("activity = %+v, want zero cost and zero tokens — nothing was spent", got)
+	}
+}
+
+// TestBeforeModelDoesNotTreatAnUnrecognizedDecisionAsDeny proves DOWNGRADE —
+// declared in the contract but not implemented by this integration — and
+// any other value this build does not recognize proceed exactly like ALLOW,
+// never as DENY.
+func TestBeforeModelDoesNotTreatAnUnrecognizedDecisionAsDeny(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DOWNGRADE}}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	resp, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{})
+	if resp != nil || err != nil {
+		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil) — an unimplemented verdict must never preempt the call", resp, err)
+	}
+	if s := r.Stats(); s.Denied != 0 {
+		t.Fatalf("Denied = %d, want 0 — DOWNGRADE is not DENY", s.Denied)
 	}
 }
 

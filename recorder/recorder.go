@@ -49,6 +49,11 @@ type Counters struct {
 	// host to watch, the same way Dropped is, not a block.
 	Notified atomic.Int64
 
+	// Denied counts every Decide call that came back DENY. Unlike Notified,
+	// a denial does stop the model call — this counts how often, so a host
+	// can watch it the same way it watches every other counter here.
+	Denied atomic.Int64
+
 	// DecisionErrors counts every Decide call that could not be completed —
 	// unreachable, timed out, or refused for a reason such as a
 	// misconfigured budget, among others. The model call still proceeds:
@@ -95,6 +100,8 @@ type Stats struct {
 	Panicked int64
 	// Notified is how many Decide calls came back NOTIFY.
 	Notified int64
+	// Denied is how many Decide calls came back DENY. See Counters.Denied.
+	Denied int64
 	// DecisionErrors is how many Decide calls could not be completed. See
 	// Counters.DecisionErrors.
 	DecisionErrors int64
@@ -181,6 +188,7 @@ func (r *Recorder) Stats() Stats {
 		Failed:          r.counters.Failed.Load(),
 		Panicked:        r.counters.Panicked.Load(),
 		Notified:        r.counters.Notified.Load(),
+		Denied:          r.counters.Denied.Load(),
 		DecisionErrors:  r.counters.DecisionErrors.Load(),
 		RateFetchErrors: r.counters.RateFetchErrors.Load(),
 		TotalsEvicted:   r.totals.evictedCount(),
@@ -212,6 +220,18 @@ func (r *Recorder) NoteNotified() {
 		return
 	}
 	r.counters.Notified.Add(1)
+}
+
+// NoteDenied records that a Decide call returned DENY.
+//
+// Exported for the same reason NoteNotified is: the adk and adkv2 adapters
+// report into this Counters/Stats surface rather than keeping one of their
+// own.
+func (r *Recorder) NoteDenied() {
+	if r == nil {
+		return
+	}
+	r.counters.Denied.Add(1)
 }
 
 // NoteDecisionError records that a Decide call could not be completed. See

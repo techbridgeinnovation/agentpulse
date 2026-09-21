@@ -98,11 +98,17 @@ type DecideRequest struct {
 	// The agent asking to proceed.
 	// Format: `organisations/{organisation}/agents/{agent}`
 	Agent string `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
-	// The product the agent belongs to, matching `Agent.product`. Budgets are
-	// product-level, so this is what governance decides against.
+	// Deprecated: no longer a budget-matching dimension. Organisation
+	// identifies the customer whose spend is governed; workspace, agent and
+	// user may still narrow a budget within that organisation. This field
+	// remains solely for wire and stored-data compatibility — new callers
+	// should leave it empty. Existing implementations may continue using it
+	// until the downstream consumer update is deployed.
+	//
+	// Deprecated: Marked as deprecated in techbridge/ap/governance/v1/decision.proto.
 	Product string `protobuf:"bytes,3,opt,name=product,proto3" json:"product,omitempty"`
 	// The user the call would be attributed to, matching `Activity.user`.
-	// Checked against that user's cap within the product, where one exists.
+	// Checked against that user's own cap, where one exists.
 	User string `protobuf:"bytes,4,opt,name=user,proto3" json:"user,omitempty"`
 	// The workspace the call would be billed to, the tenant it is for.
 	// Format: `organisations/{organisation}/workspaces/{workspace}`
@@ -162,6 +168,7 @@ func (x *DecideRequest) GetAgent() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in techbridge/ap/governance/v1/decision.proto.
 func (x *DecideRequest) GetProduct() string {
 	if x != nil {
 		return x.Product
@@ -195,9 +202,8 @@ type DecideResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The decision.
 	Decision DecideResponse_Decision `protobuf:"varint,1,opt,name=decision,proto3,enum=techbridge.ap.governance.v1.DecideResponse_Decision" json:"decision,omitempty"`
-	// Why this decision was reached, e.g. `product budget exceeded`. Composed
-	// by governance from a fixed vocabulary, never from a caller-supplied
-	// value.
+	// Why this decision was reached, e.g. `budget exceeded`. Composed by
+	// governance from a fixed vocabulary, never from a caller-supplied value.
 	Reason string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	// The version of the policy that produced this decision. Recorded so a
 	// later policy change never rewrites what a past decision meant.
@@ -407,11 +413,11 @@ var File_techbridge_ap_governance_v1_decision_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_governance_v1_decision_proto_rawDesc = "" +
 	"\n" +
-	"*techbridge/ap/governance/v1/decision.proto\x12\x1btechbridge.ap.governance.v1\x1a\x1fgoogle/api/field_behavior.proto\"\xb5\x01\n" +
+	"*techbridge/ap/governance/v1/decision.proto\x12\x1btechbridge.ap.governance.v1\x1a\x1fgoogle/api/field_behavior.proto\"\xb3\x01\n" +
 	"\rDecideRequest\x12\x1c\n" +
 	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\x12\x1a\n" +
-	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x1e\n" +
-	"\aproduct\x18\x03 \x01(\tB\x04\xe2A\x01\x02R\aproduct\x12\x12\n" +
+	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x1c\n" +
+	"\aproduct\x18\x03 \x01(\tB\x02\x18\x01R\aproduct\x12\x12\n" +
 	"\x04user\x18\x04 \x01(\tR\x04user\x12\x1c\n" +
 	"\tworkspace\x18\x05 \x01(\tR\tworkspace\x12\x18\n" +
 	"\aproject\x18\x06 \x01(\tR\aproject\"\xf7\x01\n" +

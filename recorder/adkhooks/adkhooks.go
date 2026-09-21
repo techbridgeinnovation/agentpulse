@@ -42,6 +42,13 @@ import (
 // governance service SLO.
 const defaultDecideTimeout = 500 * time.Millisecond
 
+// DefaultDeniedMessage is what a caller sees on a DENY verdict when
+// Options.DeniedMessage is empty. Generic on purpose: the actual words a
+// product wants its user to read are product copy this library has no basis
+// to guess, so this exists only so a team that has not set one yet still
+// gets a sentence instead of an empty response.
+const DefaultDeniedMessage = "This request was declined because it would exceed a configured spending limit."
+
 // Options is what the framework cannot tell us.
 type Options struct {
 	// Agent is the registered agent these records belong to.
@@ -51,8 +58,12 @@ type Options struct {
 	// Service names the service the agent runs in, e.g. "atlas-agent".
 	Service string
 
-	// Provider is who bills for the model calls. Vertex unless an agent has
-	// been pointed at a provider directly.
+	// BilledBy is who bills for the model calls, e.g. "VERTEX_AI", "ANTHROPIC". Vertex unless an agent has been pointed at a provider directly.
+	//
+	// A string so that calling a provider this library has never heard of needs no release of it. Recognised or not, the value reaches the rate card as written.
+	BilledBy string
+
+	// Deprecated: set BilledBy. Kept so an agent configured before it existed still attributes its spend correctly.
 	Provider pb.Activity_Provider
 
 	// Skill is the area of the product the user is in, where the product wants
@@ -88,13 +99,24 @@ type Options struct {
 	// before it is asked for again is a policy choice this library does not
 	// make on a caller's behalf.
 	DecideCacheTTL time.Duration
+
+	// DeniedMessage is what the model's caller sees when governance answers
+	// DENY, in the model's own voice. Adopter-configurable because the
+	// words a user reads on a refusal are product copy — dealade's would
+	// say something about credits — not something this library should
+	// assume. Defaults to DefaultDeniedMessage when empty.
+	DeniedMessage string
 }
 
-func (o Options) provider() pb.Activity_Provider {
-	if o.Provider == pb.Activity_PROVIDER_UNSPECIFIED {
-		return pb.Activity_VERTEX_AI
+func (o Options) deniedMessage() string {
+	if o.DeniedMessage == "" {
+		return DefaultDeniedMessage
 	}
-	return o.Provider
+	return o.DeniedMessage
+}
+
+func (o Options) billedBy() string {
+	return recorder.BilledByOf(o.BilledBy, o.Provider) //nolint:staticcheck // the enum is read only to keep an agent configured before BilledBy existed attributing correctly
 }
 
 func (o Options) decideTimeout() time.Duration {
@@ -184,7 +206,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			Skill:           opts.Skill,
 			Project:         recorder.ProjectFrom(ctx),
 			Model:           modelOf(response, known),
-			Provider:        opts.provider(),
+			BilledBy:        opts.billedBy(),
 			DurationMs:      millisSince(known.startedAt, time.Now),
 			Status:          statusOf(response, callErr),
 			ErrorCode:       errorCodeOf(response, callErr),
@@ -220,13 +242,17 @@ func AfterAgent(r *recorder.Recorder, _ Options) agent.AfterAgentCallback {
 // opaque identifiers go on a label — never an email — so nothing reaches
 // billing that would be PII.
 //
-// ALLOW and NOTIFY both let the call proceed in this version — this always
-// returns (nil, nil), never preempting the model call. NOTIFY increments the
-// Notified counter first; a Decide call that could not be completed
-// increments DecisionErrors and proceeds the same way. This is this
-// integration's behavior for as long as governance can only produce ALLOW
-// or NOTIFY — it is not a settled fail-open policy for the DOWNGRADE/DENY
-// verdicts that do not exist yet.
+// ALLOW and NOTIFY both let the call proceed: NOTIFY increments the Notified
+// counter first, since it is advisory and must never block. DENY is the one
+// verdict that preempts the call — BeforeModel returns a synthetic response
+// in that case, which is what makes ADK skip the model call entirely (see
+// llmagent's own doc on BeforeModelCallbacks). Everything else — a nil
+// Decider, a malformed opts.Agent, a Decide call that timed out or errored,
+// and any decision value this build does not recognize (including
+// DOWNGRADE, which is not implemented here) — proceeds exactly like ALLOW.
+// An unrecognized or failed decision is never treated as DENY: fail-open
+// means the call proceeds when governance cannot be asked, not when it
+// answers with something this version does not understand.
 //
 // If opts.DecideCacheTTL is positive, opts.Decider is wrapped in a
 // recorder.CachingDecider exactly once, here, before the callback is
@@ -268,13 +294,23 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 			}
 		}
 
-		decide(ctx, r, opts, decider)
+		if denied := decide(ctx, r, opts, decider); denied != nil {
+			// AfterModel never runs for a short-circuited response — ADK
+			// skips it along with the model call — so this is the only
+			// place a denied call is recorded, and the only place this
+			// call's in-flight entry is cleared.
+			inFlight.take(callKey(ctx))
+			return denied, nil
+		}
 		return nil, nil
 	}
 }
 
 // decide asks governance whether ctx's call may proceed, using decider,
-// when one is configured.
+// when one is configured. It returns a non-nil response only on a genuine
+// DENY verdict — the synthetic response BeforeModel should return to skip
+// the model call — and nil in every other case, including one this build
+// does not recognize.
 //
 // decider is BeforeModel's precomputed value — opts.Decider itself, or
 // opts.Decider wrapped in a cache — rather than opts.Decider read fresh
@@ -282,20 +318,21 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 //
 // Bounded by opts.decideTimeout() against ctx itself (not a detached
 // context.Background()), so a cancelled turn cancels this call too rather
-// than outliving it. A malformed opts.Agent, a Decide error, or a NOTIFY
-// verdict are all handled without ever stopping the model call — see
-// BeforeModel's own doc for why.
+// than outliving it. A nil decider, a malformed opts.Agent, a Decide error,
+// a NOTIFY verdict, and any decision value that is not exactly DENY are all
+// handled without ever stopping the model call — see BeforeModel's own doc
+// for why.
 //
 // The workspace and the project are asked about because a budget can be narrowed to either, and a call is only held to a budget that names the tenant it is for. A turn that names no workspace asks about the organisation's default, which is what the same call spends against.
-func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decider recorder.Decider) {
+func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decider recorder.Decider) *adkmodel.LLMResponse {
 	if decider == nil {
-		return
+		return nil
 	}
 
 	organisation, err := organisationOf(opts.Agent)
 	if err != nil {
 		r.NoteDecisionError()
-		return
+		return nil
 	}
 
 	dctx, cancel := context.WithTimeout(ctx, opts.decideTimeout())
@@ -311,12 +348,54 @@ func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decid
 	})
 	if err != nil {
 		r.NoteDecisionError()
-		return
+		return nil
 	}
 
-	if resp.GetDecision() == governancepb.DecideResponse_NOTIFY {
+	switch resp.GetDecision() {
+	case governancepb.DecideResponse_NOTIFY:
 		r.NoteNotified()
+		return nil
+	case governancepb.DecideResponse_DENY:
+		r.NoteDenied()
+		recordDenied(r, ctx, opts)
+		return deniedResponse(opts)
+	default:
+		// ALLOW, and anything this build does not recognize (including
+		// DOWNGRADE, which this integration does not implement yet),
+		// proceeds exactly like ALLOW. An unrecognized value is never
+		// treated as DENY.
+		return nil
 	}
+}
+
+// deniedResponse is what BeforeModel returns on a genuine DENY. Returning a
+// non-nil response from a BeforeModelCallback is what makes ADK skip the
+// actual model call and use this response instead — see llmagent's doc on
+// BeforeModelCallbacks.
+func deniedResponse(opts Options) *adkmodel.LLMResponse {
+	return &adkmodel.LLMResponse{
+		Content:      genai.NewContentFromText(opts.deniedMessage(), genai.RoleModel),
+		FinishReason: genai.FinishReasonStop,
+	}
+}
+
+// recordDenied files the refused call as a zero-cost activity. Nothing was
+// spent — the call never reached the provider — but a refusal still has to
+// be countable, which is what Activity_DENIED is for.
+func recordDenied(r *recorder.Recorder, ctx agent.CallbackContext, opts Options) {
+	r.RecordIn(ctx, &pb.Activity{
+		Agent:           opts.Agent,
+		Request:         requestOf(ctx),
+		Session:         ctx.SessionID(),
+		User:            userOf(r, ctx),
+		CallerService:   opts.Service,
+		CallerComponent: componentOf(ctx),
+		Skill:           opts.Skill,
+		Project:         recorder.ProjectFrom(ctx),
+		BilledBy:        opts.billedBy(),
+		Status:          pb.Activity_DENIED,
+		OccurredAt:      timestamppb.Now(),
+	})
 }
 
 // componentOf derives which part of the calling code spent the money.
@@ -373,15 +452,18 @@ func statusOf(response *adkmodel.LLMResponse, callErr error) pb.Activity_Status 
 	}
 }
 
-// applyUsage copies the token counts the provider reported.
+// applyUsage records what the provider said about a call, and leaves reading it to the server.
 //
-// Each kind is kept apart because each is billed at its own rate. Thoughts are
-// reasoning tokens, which the existing implementations do not capture at all —
-// on a reasoning model that is a silent undercount.
+// The counts go on as reported, under the provider's own names, with `usage_format` saying which convention they are in. The token classes an activity is priced on are written server-side from those, because the arithmetic differs by provider and gets corrected: Gemini's prompt count already contains the tokens served from cache, so subtracting here and being wrong means every adopter has to upgrade and redeploy before a bill comes right, while being wrong on the server costs one deploy and can be reapplied to records already written.
+//
+// The classes are also filled in here, and are deliberately the cruder reading. They are what the in-process running total is priced from, which is the half of a spend limit that needs no network call, so they have to exist before the record reaches anything. The server overwrites them from the reported quantities, so what is stored, shown and billed is the server's reading and never this one. Where the two differ this one reads high — it counts a cached token as ordinary input — and a running total that is too high stops a budget slightly early, which is the safe direction for the one figure that refuses work.
 func applyUsage(activity *pb.Activity, usage *genai.GenerateContentResponseUsageMetadata) {
 	if usage == nil {
 		return
 	}
+	activity.UsageFormat = recorder.FormatVertex
+	activity.ReportedUsage = recorder.ReportedFromGenAI(usage)
+
 	activity.PromptTokens = usage.PromptTokenCount
 	activity.CandidateTokens = usage.CandidatesTokenCount
 	activity.CachedTokens = usage.CachedContentTokenCount
@@ -421,5 +503,5 @@ func labelValue(v string) string {
 // team checking their own setup.
 func Describe(opts Options) string {
 	return fmt.Sprintf("recording as agent %s in service %q, billed to %s",
-		opts.Agent, opts.Service, opts.provider())
+		opts.Agent, opts.Service, opts.billedBy())
 }
