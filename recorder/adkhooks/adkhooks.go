@@ -71,10 +71,12 @@ type Options struct {
 	// because the framework cannot infer a product concept.
 	Skill string
 
-	// Product identifies the product the agent belongs to, e.g. "rezco".
-	// Supplied once by the adopting product, for the same reason as Skill:
-	// the framework cannot infer a product concept. Required for Decide —
-	// DecideRequest.product is a required field of that contract.
+	// Product is deprecated and ignored: DecideRequest.product no longer
+	// narrows a governance decision, and this library no longer sends it.
+	// The field is kept only so a caller already setting it does not fail
+	// to compile; it may be removed in a future version.
+	//
+	// Deprecated: no longer read.
 	Product string
 
 	// Decider asks governance whether a call may proceed, before BeforeModel
@@ -341,7 +343,6 @@ func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decid
 	resp, err := decider.Decide(dctx, &governancepb.DecideRequest{
 		Parent:    organisation,
 		Agent:     opts.Agent,
-		Product:   opts.Product,
 		User:      userIDOf(ctx),
 		Workspace: recorder.WorkspaceName(organisation, recorder.WorkspaceFrom(ctx)),
 		Project:   recorder.ProjectFrom(ctx),

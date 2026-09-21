@@ -116,6 +116,21 @@ type ModelCall struct {
 	Tokens   Tokens
 	Duration time.Duration
 
+	// CacheWriteTTL is how long a cache entry this call wrote is kept.
+	//
+	// Stated by the caller because no provider reports it back: it is a request parameter, so the only place it is known is the code that set it. Worth stating because a longer-lived entry is charged a premium — an hour against the usual few minutes — and a write priced at the short rate is wrong by that difference.
+	CacheWriteTTL time.Duration
+
+	// CostMicros is what the provider said the call cost, in millionths of a dollar.
+	//
+	// A few providers return a price with the response. Where one does there is no reason for us to estimate over the top of it, so it is carried through and preferred.
+	CostMicros int64
+
+	// Tier is how the call was served, where a provider prices the same tokens differently by tier, e.g. "BATCH".
+	//
+	// Stated by the caller for the same reason as the lifetime: the tier is chosen when the request is made and does not come back on the response. Batch is priced at around half, so a batched call recorded without it is charged about twice what it cost.
+	Tier string
+
 	// Err is read for whether the call failed and for its code. The message is
 	// never recorded: a provider error routinely quotes the prompt back.
 	Err error
@@ -182,6 +197,9 @@ func (rp *Reporter) ModelCall(ctx context.Context, call ModelCall) {
 	activity.Model = call.Model
 	activity.UsageFormat = call.Format
 	activity.ReportedUsage = reportedQuantities(call.Reported)
+	activity.ServiceTier = call.Tier
+	activity.ProviderCostMicros = call.CostMicros
+	activity.CacheWriteTtlSeconds = int32(call.CacheWriteTTL.Seconds())
 
 	// A split the caller made is carried as given. Both can be present: a caller migrating onto Reported keeps its own figures until the server's reading of the same call is confirmed to agree with them, which is the cheapest way to prove a convention is read right.
 	if call.Tokens != (Tokens{}) {

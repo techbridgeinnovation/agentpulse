@@ -15,7 +15,9 @@ type rateCard struct {
 
 // priceOf returns what an activity is expected to cost, in millionths of a dollar.
 //
-// This is the same arithmetic metering runs server-side, and it has to stay the same. The server figure is the one that is stored and billed against; this one exists so a spend decision can read what a request has spent without a network call per model call. Two figures for the same work that disagree are worse than one figure and a gap.
+// Deliberately not the same figure metering arrives at, and the difference is the point of the split. This one is priced from the classes the hooks fill in, which is the cruder reading a library can make without knowing a provider's conventions; metering prices from what the provider actually said. It exists so a spend decision can read what a request has spent without a network call per model call, and it is never stored or billed against.
+//
+// Where the two differ this one reads high, because it counts a token served from cache as ordinary input. A running total that is too high stops a budget slightly early, which is the safe direction for the one figure that refuses work — and the figure a customer sees is always the server's.
 //
 // A token kind with no matching rate contributes nothing rather than failing, for the same reason it does server-side: a model there is no price for yet must never stop an agent from running.
 func (c *rateCard) priceOf(a *pb.Activity) int64 {

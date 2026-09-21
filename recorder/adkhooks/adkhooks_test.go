@@ -411,6 +411,7 @@ func TestBeforeModelSkipsGovernanceWhenNoDeciderIsConfigured(t *testing.T) {
 func TestBeforeModelSendsTheExpectedDecideRequest(t *testing.T) {
 	decider := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
 	opts := options()
+	// Product is deprecated: setting it must have no effect on the request sent.
 	opts.Product = "rezco"
 	opts.Decider = decider
 
@@ -429,8 +430,8 @@ func TestBeforeModelSendsTheExpectedDecideRequest(t *testing.T) {
 	if decider.got.GetAgent() != opts.Agent {
 		t.Fatalf("agent = %q, want %q", decider.got.GetAgent(), opts.Agent)
 	}
-	if decider.got.GetProduct() != "rezco" {
-		t.Fatalf("product = %q, want %q", decider.got.GetProduct(), "rezco")
+	if decider.got.GetProduct() != "" {
+		t.Fatalf("product = %q, want empty — Options.Product is deprecated and never sent", decider.got.GetProduct())
 	}
 	if decider.got.GetUser() != "users/jane" {
 		t.Fatalf("user = %q, want %q", decider.got.GetUser(), "users/jane")
