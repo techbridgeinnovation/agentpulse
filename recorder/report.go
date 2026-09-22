@@ -147,6 +147,13 @@ type ModelCall struct {
 	// provider reports on a successful response: a call blocked for safety
 	// comes back 200 with no error, no content and a bill for the prompt, and
 	// a recorder that reads only Err files it as an ordinary success.
+	//
+	// A prompt refused before the model saw it belongs here too, under whatever
+	// the provider called it — Gemini puts that on the prompt feedback rather
+	// than on a candidate, so such a response carries no finish reason of its
+	// own and there is nowhere else for it to be read from. It is the same
+	// shape of failure and is charged the same way: the prompt was billed and
+	// nothing came back.
 	FinishReason string
 
 	// Charges are costs on this call that tokens do not describe.
@@ -329,6 +336,20 @@ var blockedFinishReasons = map[string]bool{
 	// as a cheap success.
 	"OTHER":       true,
 	"IMAGE_OTHER": true,
+
+	// The reasons a prompt is refused before the model sees it. They arrive on
+	// the prompt feedback and never on a candidate, so a caller reporting one
+	// states it here, and a response carrying one has no finish reason beside
+	// it to disagree with.
+	"MODEL_ARMOR":     true,
+	"JAILBREAK":       true,
+	"CONTENT_BLOCKED": true,
+
+	// A model that asked for a tool in a shape nothing can run. Named
+	// differently by the provider depending on where in the response it
+	// appears, and the same failure either way.
+	"MALFORMED_TOOL_CALL":       true,
+	"MISSING_THOUGHT_SIGNATURE": true,
 }
 
 // truncatedReasons are the reasons that mean a limit was reached, not a refusal.

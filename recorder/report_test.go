@@ -299,8 +299,17 @@ func TestARecordFromAContextWithNoProjectNamesNone(t *testing.T) {
 // The failure that costs the most and shows the least: a provider blocks the
 // call for safety, answers 200 with no error and no content, and bills for the
 // prompt. Read only for the error, it is recorded as a cheap success.
+//
+// The last three are refused before the model sees the prompt rather than after
+// it answers, which the provider reports in a different place on the response
+// and never as a finish reason. They are the same failure to a bill, so they are
+// read the same way here.
 func TestACallBlockedByTheProviderIsAFailureNotACheapSuccess(t *testing.T) {
-	for _, reason := range []string{"SAFETY", "PROHIBITED_CONTENT", "content_filter", "guardrail_intervened", "MALFORMED_FUNCTION_CALL", "OTHER"} {
+	for _, reason := range []string{
+		"SAFETY", "PROHIBITED_CONTENT", "content_filter", "guardrail_intervened", "MALFORMED_FUNCTION_CALL", "OTHER",
+		"MALFORMED_TOOL_CALL", "MISSING_THOUGHT_SIGNATURE",
+		"MODEL_ARMOR", "JAILBREAK", "CONTENT_BLOCKED",
+	} {
 		got := reported(t, context.Background(), func(rp *Reporter) {
 			rp.ModelCall(context.Background(), ModelCall{
 				Model:        "gemini-2.5-pro",

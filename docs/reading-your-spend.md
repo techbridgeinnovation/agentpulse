@@ -82,9 +82,11 @@ Every method is a GET. The question goes in the query string — a dimension rep
 
 ## What you can group by
 
-`agent` · `model` · `provider` · `user` · `caller_service` · `caller_component` · `skill` · `status` · `error_code` · `kind` · `date` · `hour`
+`workspace` · `project` · `agent` · `model` · `provider` · `user` · `caller_service` · `caller_component` · `skill` · `tool` · `status` · `error_code` · `error_class` · `kind` · `date` · `hour`
 
 `date` and `hour` are UTC. `kind` is `model`, `tool` or `call`. An empty `groupBy` returns a single total for the window.
+
+`error_code` is what the provider called a failure and `error_class` is what every provider's name for it collapses to, so `RESOURCE_EXHAUSTED`, `rate_limit_error` and `HTTP_429` are one row of `ERROR_CLASS_RATE_LIMITED` rather than three rows of nothing in particular. Group on the class to count failures, and read the code to look one up.
 
 Group by as many at once as the panel needs: `groupBy=date&groupBy=model` is a stacked chart, `groupBy=user` is a cost-per-person table.
 
