@@ -156,6 +156,16 @@ type ModelCall struct {
 	// nothing came back.
 	FinishReason string
 
+	// ReportedError is what the provider said about a failure, for a caller
+	// holding an error this library has no reader for.
+	//
+	// Anthropic, OpenAI and anything else reached through its own sdk: the error
+	// object is in the call site's hands and not in this library's, so the call
+	// site states it. Built with ReportedErrorOf, under the provider's own names.
+	// Left empty, a failure is still recorded and still carries its code — this
+	// only decides whether the server can read it again later.
+	ReportedError ReportedFailure
+
 	// Charges are costs on this call that tokens do not describe.
 	Charges []Charge
 }
@@ -216,6 +226,14 @@ func (rp *Reporter) ModelCall(ctx context.Context, call ModelCall) {
 		activity.CacheWriteTokens = call.Tokens.CacheWrite
 		activity.ReasoningTokens = call.Tokens.Reasoning
 		activity.TotalTokens = call.Tokens.total()
+	}
+
+	// A reading the call site made beats one this library guessed at: the call
+	// site held the provider's own error object and this only ever saw an
+	// interface.
+	if call.ReportedError.Format != "" {
+		activity.ErrorFormat = call.ReportedError.Format
+		activity.ReportedError = call.ReportedError.Fields
 	}
 
 	switch {
@@ -287,6 +305,14 @@ func (rp *Reporter) activity(ctx context.Context, component string, duration tim
 	if err != nil {
 		activity.Status = pb.Activity_FAILED
 		activity.ErrorCode = ErrorCode(err)
+		// What the provider said, beside the one word this library made of it. The
+		// word is what a reader searches for today; the fields are what lets the
+		// server read the failure again later, and read it differently if this
+		// library got it wrong.
+		if reported := ReportedErrorFrom(err); reported.Format != "" {
+			activity.ErrorFormat = reported.Format
+			activity.ReportedError = reported.Fields
+		}
 	}
 
 	for _, charge := range charges {
