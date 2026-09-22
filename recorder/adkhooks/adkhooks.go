@@ -30,9 +30,9 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -78,6 +78,24 @@ type Options struct {
 	//
 	// Deprecated: no longer read.
 	Product string
+
+	// ToolFailed reads a tool's own result and says whether it worked.
+	//
+	// A great many tools never raise. They catch what went wrong and hand back an
+	// answer that says so — `{"success": false}`, or a partial result with two of
+	// its four lookups missing — and the framework, which only sees that a value
+	// was returned, reports a success. Recorded that way, the one call in a turn
+	// that actually failed is the one nothing reports, and a team reading a clean
+	// failure rate has no idea why their answers are poor.
+	//
+	// Only the adopter can judge this: the shape of a tool's result is the
+	// product's own, and a library guessing at it would be wrong differently for
+	// every tool. The code returned is stored as the failure's code, so a report
+	// can group by it like any other; it is a code and never a sentence, for the
+	// same reason no message is ever recorded.
+	//
+	// Left nil, nothing changes: a tool fails when it raises, as it does today.
+	ToolFailed func(tool string, result map[string]any) (failed bool, code string)
 
 	// Decider asks governance whether a call may proceed, before BeforeModel
 	// lets it through. Optional: nil means governance is skipped entirely,
@@ -198,6 +216,12 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 		}
 		known := inFlight.take(key)
 
+		// What the provider said about a failure, beside the one word the code
+		// reduces to. A framework that flattens its model's error to a message
+		// before this callback sees it leaves nothing to read, and the record then
+		// says so rather than carrying a guess.
+		reported := recorder.ReportedErrorFrom(callErr)
+
 		activity := &pb.Activity{
 			Agent:           opts.Agent,
 			Request:         requestOf(ctx),
@@ -212,6 +236,8 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			DurationMs:      millisSince(known.startedAt, time.Now),
 			Status:          statusOf(response, callErr),
 			ErrorCode:       errorCodeOf(response, callErr),
+			ErrorFormat:     reported.Format,
+			ReportedError:   reported.Fields,
 			OccurredAt:      timestamppb.Now(),
 		}
 		applyUsage(activity, response.UsageMetadata)

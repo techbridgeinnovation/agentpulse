@@ -7,8 +7,8 @@ import (
 	"google.golang.org/adk/tool"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // runningTools holds when each tool call began, until the call ends and is recorded.
@@ -47,14 +47,11 @@ func BeforeTool(_ *recorder.Recorder, _ Options) llmagent.BeforeToolCallback {
 //
 // The error is read for its code, not its message, the same way a model call's is: a report that says a tool failed and not how it failed leaves a team to guess between a timeout, a bad argument and an outage, which are three different things to fix.
 func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
-	return func(ctx tool.Context, t tool.Tool, _, _ map[string]any, callErr error) (map[string]any, error) {
+	return func(ctx tool.Context, t tool.Tool, _, result map[string]any, callErr error) (map[string]any, error) {
 		name := toolName(t)
 		started, _ := runningTools.take(toolKey(ctx, name))
 
-		status := pb.Activity_OK
-		if callErr != nil {
-			status = pb.Activity_FAILED
-		}
+		status, code := toolOutcome(opts, name, result, callErr)
 
 		r.RecordIn(ctx, &pb.Activity{
 			Agent:           opts.Agent,
@@ -63,12 +60,13 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			User:            userOf(r, ctx),
 			CallerService:   opts.Service,
 			CallerComponent: "tool:" + name,
+			Tool:            name,
 			Skill:           opts.Skill,
 			Project:         recorder.ProjectFrom(ctx),
 			BilledBy:        opts.billedBy(),
 			DurationMs:      millisSince(started, time.Now),
 			Status:          status,
-			ErrorCode:       recorder.ErrorCode(callErr),
+			ErrorCode:       code,
 			OccurredAt:      timestamppb.Now(),
 		})
 		return nil, nil
@@ -81,4 +79,30 @@ func toolName(t tool.Tool) string {
 		return ""
 	}
 	return t.Name()
+}
+
+// toolOutcome reads how a tool call ended.
+//
+// A raised error is a failure whatever else is true, so it is read first and the
+// adopter's own judgement is not consulted: an error already says what went
+// wrong, in a code, and a result returned alongside one says nothing. Where
+// nothing was raised, the adopter decides, because only the product knows the
+// shape of its own tool's answer.
+func toolOutcome(opts Options, tool string, result map[string]any, callErr error) (pb.Activity_Status, string) {
+	if callErr != nil {
+		return pb.Activity_FAILED, recorder.ErrorCode(callErr)
+	}
+	if opts.ToolFailed == nil {
+		return pb.Activity_OK, ""
+	}
+	if failed, code := opts.ToolFailed(tool, result); failed {
+		// A failure the adopter named but gave no code for is still a failure. It is
+		// recorded under one the server can classify rather than under nothing, which
+		// would read as a success that happened to be marked.
+		if code == "" {
+			code = "TOOL_ERROR"
+		}
+		return pb.Activity_FAILED, code
+	}
+	return pb.Activity_OK, ""
 }

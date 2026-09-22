@@ -22,9 +22,9 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -74,6 +74,24 @@ type Options struct {
 	//
 	// Deprecated: no longer read.
 	Product string
+
+	// ToolFailed reads a tool's own result and says whether it worked.
+	//
+	// A great many tools never raise. They catch what went wrong and hand back an
+	// answer that says so — `{"success": false}`, or a partial result with two of
+	// its four lookups missing — and the framework, which only sees that a value
+	// was returned, reports a success. Recorded that way, the one call in a turn
+	// that actually failed is the one nothing reports, and a team reading a clean
+	// failure rate has no idea why their answers are poor.
+	//
+	// Only the adopter can judge this: the shape of a tool's result is the
+	// product's own, and a library guessing at it would be wrong differently for
+	// every tool. The code returned is stored as the failure's code, so a report
+	// can group by it like any other; it is a code and never a sentence, for the
+	// same reason no message is ever recorded.
+	//
+	// Left nil, nothing changes: a tool fails when it raises, as it does today.
+	ToolFailed func(tool string, result map[string]any) (failed bool, code string)
 
 	// Decider asks governance whether a call may proceed, before BeforeModel
 	// lets it through. Optional: nil means governance is skipped entirely,
@@ -170,6 +188,12 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			return nil, nil
 		}
 
+		// What the provider said about a failure, beside the one word the code
+		// reduces to. A framework that flattens its model's error to a message
+		// before this callback sees it leaves nothing to read, and the record then
+		// says so rather than carrying a guess.
+		reported := recorder.ReportedErrorFrom(callErr)
+
 		activity := &pb.Activity{
 			Agent:           opts.Agent,
 			Request:         requestOf(ctx),
@@ -183,6 +207,8 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			BilledBy:        opts.billedBy(),
 			Status:          statusOf(response, callErr),
 			ErrorCode:       errorCodeOf(response, callErr),
+			ErrorFormat:     reported.Format,
+			ReportedError:   reported.Fields,
 			OccurredAt:      timestamppb.Now(),
 		}
 		applyUsage(activity, response.UsageMetadata)
@@ -198,16 +224,13 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 //
 // The error is read for its code, not its message, the same way a model call's is: a report that says a tool failed and not how it failed leaves a team to guess between a timeout, a bad argument and an outage.
 func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
-	return func(ctx agent.Context, t tool.Tool, _, _ map[string]any, callErr error) (map[string]any, error) {
+	return func(ctx agent.Context, t tool.Tool, _, result map[string]any, callErr error) (map[string]any, error) {
 		name := ""
 		if t != nil {
 			name = t.Name()
 		}
 
-		status := pb.Activity_OK
-		if callErr != nil {
-			status = pb.Activity_FAILED
-		}
+		status, code := toolOutcome(opts, name, result, callErr)
 
 		r.RecordIn(ctx, &pb.Activity{
 			Agent:           opts.Agent,
@@ -216,11 +239,12 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			User:            userOf(r, ctx),
 			CallerService:   opts.Service,
 			CallerComponent: "tool:" + name,
+			Tool:            name,
 			Skill:           opts.Skill,
 			Project:         recorder.ProjectFrom(ctx),
 			BilledBy:        opts.billedBy(),
 			Status:          status,
-			ErrorCode:       recorder.ErrorCode(callErr),
+			ErrorCode:       code,
 			OccurredAt:      timestamppb.Now(),
 		})
 		return nil, nil
@@ -482,4 +506,30 @@ func labelValue(v string) string {
 func Describe(opts Options) string {
 	return fmt.Sprintf("recording as agent %s in service %q, billed to %s",
 		opts.Agent, opts.Service, opts.billedBy())
+}
+
+// toolOutcome reads how a tool call ended.
+//
+// A raised error is a failure whatever else is true, so it is read first and the
+// adopter's own judgement is not consulted: an error already says what went
+// wrong, in a code, and a result returned alongside one says nothing. Where
+// nothing was raised, the adopter decides, because only the product knows the
+// shape of its own tool's answer.
+func toolOutcome(opts Options, tool string, result map[string]any, callErr error) (pb.Activity_Status, string) {
+	if callErr != nil {
+		return pb.Activity_FAILED, recorder.ErrorCode(callErr)
+	}
+	if opts.ToolFailed == nil {
+		return pb.Activity_OK, ""
+	}
+	if failed, code := opts.ToolFailed(tool, result); failed {
+		// A failure the adopter named but gave no code for is still a failure. It is
+		// recorded under one the server can classify rather than under nothing, which
+		// would read as a success that happened to be marked.
+		if code == "" {
+			code = "TOOL_ERROR"
+		}
+		return pb.Activity_FAILED, code
+	}
+	return pb.Activity_OK, ""
 }
