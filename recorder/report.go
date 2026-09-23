@@ -192,6 +192,10 @@ type ToolCall struct {
 type Reporter struct {
 	recorder    *Recorder
 	attribution Attribution
+
+	// decider, when set, is asked before every call an instrumented client makes. See Governed.
+	decider       Decider
+	decideTimeout time.Duration
 }
 
 // For returns a reporter that stamps every record with the same attribution.

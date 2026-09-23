@@ -208,10 +208,15 @@ func reportedSDK(err error, billedBy string) ReportedFailure {
 	if !errors.As(err, &sdk) {
 		return ReportedFailure{}
 	}
+	status, header := responseOf(sdk)
+	return reportedBody([]byte(sdk.RawJSON()), status, header, billedBy)
+}
 
+// reportedBody states a failure from an OpenAI- or Anthropic-shaped error body, the status it came with and the headers beside it.
+func reportedBody(raw []byte, status int, header http.Header, billedBy string) ReportedFailure {
 	var body map[string]any
-	if raw := sdk.RawJSON(); raw != "" {
-		_ = json.Unmarshal([]byte(raw), &body)
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &body)
 	}
 	inner := body
 	if nested, ok := body["error"].(map[string]any); ok {
@@ -219,7 +224,6 @@ func reportedSDK(err error, billedBy string) ReportedFailure {
 	}
 
 	var s fieldSet
-	status, header := responseOf(sdk)
 	if status != 0 {
 		s.add("http_status", strconv.Itoa(status))
 	}
@@ -259,7 +263,11 @@ func responseOf(sdk sdkError) (int, http.Header) {
 // record's code: the specific code where the provider gave one, and its type
 // where it did not.
 func sdkCode(err error, billedBy string) string {
-	reported := reportedSDK(err, billedBy)
+	return codeOf(reportedSDK(err, billedBy))
+}
+
+// codeOf is the name a stated failure gives itself, for a record's code: the specific code where the provider gave one, and its type where it did not.
+func codeOf(reported ReportedFailure) string {
 	fields := map[string]string{}
 	for _, f := range reported.Fields {
 		fields[f.GetName()] = f.GetValue()
@@ -269,8 +277,17 @@ func sdkCode(err error, billedBy string) string {
 		return fields["type"]
 	case ErrorFormatOpenAI:
 		return firstOf(fields["code"], fields["type"])
+	case ErrorFormatVertex:
+		return firstOf(fields["status"], httpCode(fields["http_status"]))
 	}
 	return ""
+}
+
+func httpCode(status string) string {
+	if status == "" {
+		return ""
+	}
+	return "HTTP_" + status
 }
 
 // reportedTransport states a failure that never carried a provider's own answer.

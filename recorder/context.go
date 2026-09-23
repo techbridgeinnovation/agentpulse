@@ -14,6 +14,7 @@ type userContextKey struct{}
 type sessionContextKey struct{}
 type workspaceContextKey struct{}
 type projectContextKey struct{}
+type componentContextKey struct{}
 
 // WithRequest marks a context as belonging to one end-user request.
 //
@@ -124,4 +125,19 @@ func WithProject(ctx context.Context, project string) context.Context {
 func ProjectFrom(ctx context.Context) string {
 	project, _ := ctx.Value(projectContextKey{}).(string)
 	return project
+}
+
+// WithComponent names the part of the product a model call made under this context belongs to, e.g. `report_generation`.
+//
+// Optional. A model call made through an instrumented client with no component named is attributed to the function in the product's own code that made it, which is enough to tell one caller from another without anyone choosing a name. Name one where several functions do the same job and should be counted as one, or where the function that makes the call is a shared helper that every caller goes through.
+//
+// A free string, and an unrecognised one is recorded and reported rather than refused.
+func WithComponent(ctx context.Context, component string) context.Context {
+	return context.WithValue(ctx, componentContextKey{}, component)
+}
+
+// ComponentFrom returns the component a context names, if any.
+func ComponentFrom(ctx context.Context) string {
+	component, _ := ctx.Value(componentContextKey{}).(string)
+	return component
 }
