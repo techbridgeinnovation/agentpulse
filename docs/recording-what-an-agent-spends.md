@@ -61,7 +61,36 @@ Neither is an argument at a model call site. A value a call site can choose is a
 
 **Built on Google ADK?** Register three callbacks and no call site changes.
 
-**Calling a model directly?** Each call reports itself through a reporter.
+**Calling a model directly?** Instrument the client once, where it is built, and every call through it is recorded, including the ones written later:
+
+```go
+reporter := rec.For(recorder.Attribution{Agent: os.Getenv("AP_AGENT"), Service: "documents-service"})
+
+reporter.InstrumentGenAI(geminiClient)                                   // google.golang.org/genai, Gemini api or Vertex
+anthropic.NewClient(option.WithMiddleware(reporter.AnthropicMiddleware())) // github.com/anthropics/anthropic-sdk-go
+openai.NewClient(option.WithMiddleware(reporter.OpenAIMiddleware()))       // github.com/openai/openai-go, and Perplexity through it
+```
+
+Each call is recorded under the user, workspace and project already on its context, and under the function in your code that made it. Name the part of your product instead with `recorder.WithComponent(ctx, "report_generation")` where several functions do one job or every call goes through one shared helper.
+
+A few things the client cannot see for you:
+
+- Claude served through Vertex or Bedrock is billed by Google or Amazon. Set `BilledBy` on the attribution, and register the middleware before the sdk's `vertex` or `bedrock` option.
+- A streamed OpenAI chat reports its token counts only when the request sets `stream_options.include_usage`. Without it the call is recorded with no counts.
+- Gemini's Live api does not travel over the client's transport, so it is not recorded.
+- Do not instrument a client an ADK agent also uses: the agent's callbacks already record its calls.
+
+Its spend counts against your organisation's and your customers' budgets like any other. To have a budget stop it as well, the way an agent's callbacks do, ask before each call:
+
+```go
+reporter = reporter.Governed(recorder.Governance{Decider: recorder.NewGRPCDecider(conn)})
+```
+
+A call a budget refuses is never sent, and your code sees an error `recorder.Denied` recognises. If governance cannot answer, the call goes ahead.
+
+Once it has recorded, open it from Agents and set **Listed as** to **Service**, so it is shown apart from your agents. Until then it is recorded exactly the same and listed as an agent.
+
+For a provider none of these reach, a reporter records a call you describe yourself.
 
 Both are in the adoption guide in the public repository, which is also a Claude Code skill: point an agent at it and it will wire this in for you.
 

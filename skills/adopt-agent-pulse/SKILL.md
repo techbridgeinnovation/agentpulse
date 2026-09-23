@@ -23,7 +23,7 @@ The key belongs to one organisation. A record naming a different organisation, o
 Confirm which of the two paths applies:
 
 - The agent is built on Google ADK v2 → the **framework path**. Nothing at a call site changes.
-- The code calls a model directly with no framework → the **reporter path**. Each model call reports itself.
+- The code calls a model directly with no framework → the **client path**. The model client is instrumented once where it is built, and nothing at a call site changes either.
 
 ## Step 1: the dependency
 
@@ -115,16 +115,25 @@ Never pass the workspace or the project as an argument at a model call site. A v
 
 On ADK v1 the same three functions live in `recorder/adkhooks` with `adkhooks.Options`, and there is a fourth: register `adkhooks.BeforeTool` beside `adkhooks.AfterTool` as a `BeforeToolCallback`. It records nothing on its own — it notes when a tool call began, so that the record of it says how long it ran. Without it a tool is still recorded, with no duration, and a timeout reads as an ordinary failure.
 
-## Step 4b: reporter path (no framework)
+## Step 4b: client path (no framework)
 
 Construct a reporter once, beside the recorder:
 
 ```go
 reporter := rec.For(recorder.Attribution{
-	Agent:    agent,
-	Service:  "<service-name>",
-	Provider: pb.Activity_VERTEX_AI, // or the provider actually called
+	Agent:   agent,
+	Service: "<service-name>",
 })
+```
+
+Then instrument each model client once, where it is built. Every call through it is recorded from then on:
+
+```go
+reporter.InstrumentGenAI(geminiClient) // google.golang.org/genai, after genai.NewClient
+
+anthropic.NewClient(option.WithMiddleware(reporter.AnthropicMiddleware()))
+
+openai.NewClient(option.WithMiddleware(reporter.OpenAIMiddleware())) // also Perplexity and other OpenAI-compatible apis
 ```
 
 Once per request, where the request arrives and the sign-in has been checked, so everything recorded under it groups together and the person can be named:
@@ -137,28 +146,34 @@ ctx = recorder.WithUser(recorder.WithRequest(ctx, requestID), recorder.User{
 })
 ```
 
-At each model call:
+Each call is recorded under the function that made it. Where several functions do one job, or every call goes through one shared helper, name the part of the product instead: `ctx = recorder.WithComponent(ctx, "report_generation")`.
+
+Check before finishing:
+
+- Claude through Vertex or Bedrock: set `BilledBy` on the attribution to who bills, and pass `AnthropicMiddleware` before the sdk's `vertex` or `bedrock` option.
+- A streamed OpenAI chat reports counts only with `stream_options.include_usage` set on the request.
+- A client an ADK agent also uses is not instrumented: its callbacks already record it.
+- Once the service has recorded, tell the person to open it from Agents in the console and set **Listed as** to **Service**.
+
+To have budgets stop the service as well as count it, the way an agent's callbacks do:
 
 ```go
-started := time.Now()
-resp, err := model.GenerateContent(ctx, contents)
-
-usage := resp.UsageMetadata
-reporter.ModelCall(ctx, recorder.ModelCall{
-	Model:     "<model called>",
-	Component: "<which part of the service made this call>",
-	Duration:  time.Since(started),
-	Err:       err,
-	Tokens: recorder.Tokens{
-		Prompt:    usage.PromptTokenCount,
-		Candidate: usage.CandidatesTokenCount,
-		Cached:    usage.CachedContentTokenCount,
-		Reasoning: usage.ThoughtsTokenCount,
-	},
-})
+reporter = reporter.Governed(recorder.Governance{Decider: recorder.NewGRPCDecider(conn)})
 ```
 
-Keep every token kind apart. Cache writes and reasoning are the ones that get forgotten and the ones that cost.
+A call a budget refuses is never sent and returns an error `recorder.Denied(err)` recognises. If governance cannot answer, the call goes ahead.
+
+For a provider none of the clients reach, report the call yourself with the provider's own counts, untouched. Never split them into prompt and cached yourself: Gemini's and OpenAI's prompt counts already include the cached tokens, and splitting them charges those twice.
+
+```go
+reporter.ModelCall(ctx, recorder.ModelCall{
+	Model:    "<model called>",
+	Duration: time.Since(started),
+	Err:      err,
+	Format:   recorder.FormatAnthropic, // the convention the counts are in
+	Reported: map[string]int64{"input_tokens": in, "output_tokens": out},
+})
+```
 
 A tool charged per use is recorded too, naming the rate card entry, never a price:
 
@@ -215,6 +230,6 @@ Point the team at [`docs/reading-your-spend.md`](../../docs/reading-your-spend.m
 
 - The four environment variables are set and the service refuses to start without them.
 - One recorder, constructed once, closed on shutdown.
-- Either the three callbacks are registered, or every model call reports through the reporter.
+- Either the three callbacks are registered, or every model client is instrumented where it is built.
 - The stats line is logged on shutdown.
-- No existing call site changed except to add a report, and nothing the agent does waits on recording.
+- No existing call site changed, and nothing the agent does waits on recording.

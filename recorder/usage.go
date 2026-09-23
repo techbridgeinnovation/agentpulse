@@ -17,6 +17,9 @@ const (
 	FormatAnthropic       = "ANTHROPIC"
 	FormatOpenAIChat      = "OPENAI_CHAT"
 	FormatOpenAIResponses = "OPENAI_RESPONSES"
+
+	// FormatPerplexity is OpenAI's chat field names with Perplexity's own counts beside them, such as the citation tokens its search charges for.
+	FormatPerplexity = "PERPLEXITY"
 )
 
 // The providers that bill for a call, in the vocabulary the rate card prices against.
