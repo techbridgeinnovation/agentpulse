@@ -187,6 +187,11 @@ func TestAToolCallSaysWhichToolAndWhatItCharged(t *testing.T) {
 	if got.GetCallerComponent() != "tool:web_search" {
 		t.Errorf("component = %q, want tool:web_search", got.GetCallerComponent())
 	}
+	// Named on its own field too, so a report asks which tools fail of the tool
+	// rather than of a component it has to parse.
+	if got.GetTool() != "web_search" {
+		t.Errorf("tool = %q, want web_search", got.GetTool())
+	}
 	if got.GetDurationMs() != 250 {
 		t.Errorf("duration = %dms, want 250", got.GetDurationMs())
 	}

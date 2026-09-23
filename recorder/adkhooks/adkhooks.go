@@ -30,9 +30,9 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -220,7 +220,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 		// reduces to. A framework that flattens its model's error to a message
 		// before this callback sees it leaves nothing to read, and the record then
 		// says so rather than carrying a guess.
-		reported := recorder.ReportedErrorFrom(callErr)
+		reported := recorder.ReportedErrorFor(callErr, opts.billedBy())
 
 		activity := &pb.Activity{
 			Agent:           opts.Agent,

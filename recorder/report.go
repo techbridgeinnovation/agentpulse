@@ -159,11 +159,13 @@ type ModelCall struct {
 	// ReportedError is what the provider said about a failure, for a caller
 	// holding an error this library has no reader for.
 	//
-	// Anthropic, OpenAI and anything else reached through its own sdk: the error
-	// object is in the call site's hands and not in this library's, so the call
-	// site states it. Built with ReportedErrorOf, under the provider's own names.
-	// Left empty, a failure is still recorded and still carries its code — this
-	// only decides whether the server can read it again later.
+	// An error from the genai client or from OpenAI's or Anthropic's Go sdk is
+	// read from Err and needs nothing here. Anything else — a plain http client,
+	// an sdk in another shape — is in the call site's hands and not in this
+	// library's, so the call site states it. Built with ReportedErrorOf, under the
+	// provider's own names, and it replaces what was read from Err. Left empty, a
+	// failure is still recorded and still carries its code; this only decides
+	// whether the server can read it again later.
 	ReportedError ReportedFailure
 
 	// Charges are costs on this call that tokens do not describe.
@@ -256,6 +258,7 @@ func (rp *Reporter) ToolCall(ctx context.Context, call ToolCall) {
 	}
 
 	activity := rp.activity(ctx, "tool:"+call.Tool, call.Duration, call.Err, call.Charges)
+	activity.Tool = call.Tool
 	rp.recorder.RecordIn(ctx, activity)
 }
 
@@ -309,7 +312,7 @@ func (rp *Reporter) activity(ctx context.Context, component string, duration tim
 		// word is what a reader searches for today; the fields are what lets the
 		// server read the failure again later, and read it differently if this
 		// library got it wrong.
-		if reported := ReportedErrorFrom(err); reported.Format != "" {
+		if reported := ReportedErrorFor(err, rp.attribution.billedBy()); reported.Format != "" {
 			activity.ErrorFormat = reported.Format
 			activity.ReportedError = reported.Fields
 		}
@@ -433,6 +436,9 @@ func ErrorCode(err error) string {
 		return codes.Canceled.String()
 	}
 	if code := providerCode(err); code != "" {
+		return code
+	}
+	if code := sdkCode(err, ""); code != "" {
 		return code
 	}
 	var netErr net.Error

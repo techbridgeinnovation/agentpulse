@@ -22,9 +22,9 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -192,7 +192,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 		// reduces to. A framework that flattens its model's error to a message
 		// before this callback sees it leaves nothing to read, and the record then
 		// says so rather than carrying a guess.
-		reported := recorder.ReportedErrorFrom(callErr)
+		reported := recorder.ReportedErrorFor(callErr, opts.billedBy())
 
 		activity := &pb.Activity{
 			Agent:           opts.Agent,
@@ -230,7 +230,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			name = t.Name()
 		}
 
-		status, code := toolOutcome(opts, name, result, callErr)
+		status, code := toolOutcome(r, opts, name, result, callErr)
 
 		r.RecordIn(ctx, &pb.Activity{
 			Agent:           opts.Agent,
@@ -515,14 +515,14 @@ func Describe(opts Options) string {
 // wrong, in a code, and a result returned alongside one says nothing. Where
 // nothing was raised, the adopter decides, because only the product knows the
 // shape of its own tool's answer.
-func toolOutcome(opts Options, tool string, result map[string]any, callErr error) (pb.Activity_Status, string) {
+func toolOutcome(r *recorder.Recorder, opts Options, tool string, result map[string]any, callErr error) (pb.Activity_Status, string) {
 	if callErr != nil {
 		return pb.Activity_FAILED, recorder.ErrorCode(callErr)
 	}
 	if opts.ToolFailed == nil {
 		return pb.Activity_OK, ""
 	}
-	if failed, code := opts.ToolFailed(tool, result); failed {
+	if failed, code := judgeTool(r, opts, tool, result); failed {
 		// A failure the adopter named but gave no code for is still a failure. It is
 		// recorded under one the server can classify rather than under nothing, which
 		// would read as a success that happened to be marked.
@@ -532,4 +532,20 @@ func toolOutcome(opts Options, tool string, result map[string]any, callErr error
 		return pb.Activity_FAILED, code
 	}
 	return pb.Activity_OK, ""
+}
+
+// judgeTool runs the adopter's own judgement of a tool's result, and survives it
+// panicking.
+//
+// It is the adopter's code running inside the framework's callback, so a panic in
+// it would otherwise fail the tool call it was only meant to describe. A judgement
+// that panics is counted and the call is recorded as the framework saw it.
+func judgeTool(r *recorder.Recorder, opts Options, tool string, result map[string]any) (failed bool, code string) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			r.NotePanicked()
+			failed, code = false, ""
+		}
+	}()
+	return opts.ToolFailed(tool, result)
 }
