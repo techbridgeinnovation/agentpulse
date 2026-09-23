@@ -95,8 +95,9 @@ type Stats struct {
 	Delivered int64
 	// Failed is how many a sink rejected.
 	Failed int64
-	// Panicked is how many times a sink panicked. Above zero means a sink is
-	// broken; the agent was unaffected.
+	// Panicked is how many times a sink, a rate source or a callback the adopter
+	// supplied panicked. Above zero means one of them is broken; the agent was
+	// unaffected.
 	Panicked int64
 	// Notified is how many Decide calls came back NOTIFY.
 	Notified int64
@@ -232,6 +233,16 @@ func (r *Recorder) NoteDenied() {
 		return
 	}
 	r.counters.Denied.Add(1)
+}
+
+// NotePanicked records that something run on the host's behalf panicked and
+// was recovered, such as a callback the adopter supplied to judge a tool's
+// result. Exported for the reason NoteNotified is. See Stats.Panicked.
+func (r *Recorder) NotePanicked() {
+	if r == nil {
+		return
+	}
+	r.counters.Panicked.Add(1)
 }
 
 // NoteDecisionError records that a Decide call could not be completed. See

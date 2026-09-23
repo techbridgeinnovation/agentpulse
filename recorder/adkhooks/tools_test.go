@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 	"github.com/techbridgeinnovation/agentpulse/recorder"
+	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
 // fakeToolContext stands in for what the framework hands a tool callback: a
@@ -268,5 +268,27 @@ func TestAToolCallNamesTheToolThatRan(t *testing.T) {
 	}
 	if got[0].GetCallerComponent() != "tool:web_search" {
 		t.Errorf("component = %q, want the prefixed name kept as it was", got[0].GetCallerComponent())
+	}
+}
+
+// The adopter's judgement is their code running inside the framework's
+// callback. A panic in it must cost the tool call nothing: the call is recorded
+// as the framework saw it and the panic is counted.
+func TestAJudgementThatPanicsCostsTheToolCallNothing(t *testing.T) {
+	opts := options()
+	opts.ToolFailed = func(string, map[string]any) (bool, string) { panic("adopter bug") }
+
+	var panicked int64
+	got := record(t, func(r *recorder.Recorder) {
+		AfterTool(r, opts)(newToolContext("call-1"), fakeTool{name: "web_search"},
+			nil, map[string]any{"success": false}, nil)
+		panicked = r.Stats().Panicked
+	})
+
+	if len(got) != 1 || got[0].GetStatus() != pb.Activity_OK {
+		t.Fatalf("recorded %v, want the call recorded as the framework saw it", got)
+	}
+	if panicked != 1 {
+		t.Errorf("panicked = %d, want the panic counted", panicked)
 	}
 }
