@@ -1,0 +1,172 @@
+[
+  {
+    "name": "full activity",
+    "message": "BatchCreateActivitiesRequest",
+    "fields": {
+      "parent": "organisations/acme/workspaces/w1",
+      "activities": [
+        {
+          "agent": "organisations/acme/agents/research",
+          "request": "req-1",
+          "session": "sess-1",
+          "user": "8c21e0b4",
+          "caller_service": "sources-service",
+          "caller_component": "asset_summary",
+          "skill": "summaries",
+          "model": "gemini-2.5-pro",
+          "prompt_tokens": -1,
+          "candidate_tokens": 2147483647,
+          "cached_tokens": 3,
+          "cache_write_tokens": 4,
+          "reasoning_tokens": 5,
+          "total_tokens": 300,
+          "charges": [
+            {
+              "priceable_unit": "priceableUnits/web-search",
+              "quantity": 2
+            },
+            {
+              "priceable_unit": "priceableUnits/x",
+              "quantity": -7
+            }
+          ],
+          "duration_ms": 1234,
+          "status": 2,
+          "error_code": "RESOURCE_EXHAUSTED",
+          "occurred_at_ns": 1790167065123456789,
+          "project": "matter-1183",
+          "tool": "search",
+          "error_detail": "",
+          "attempt": 2,
+          "retry_of": "activities/prev",
+          "result_bytes": 9007199254740993,
+          "result_tokens": 17,
+          "empty_result": true,
+          "args_bytes": 64,
+          "args_fingerprint": "ab12",
+          "billed_by": "ANTHROPIC",
+          "usage_format": "ANTHROPIC",
+          "reported_usage": [
+            {
+              "unit": "cache_read_input_tokens",
+              "quantity": 21847
+            },
+            {
+              "unit": "input_tokens",
+              "quantity": 4211
+            }
+          ],
+          "service_tier": "standard",
+          "cache_write_ttl_seconds": 3600,
+          "provider_cost_micros": 1500,
+          "error_format": "ANTHROPIC",
+          "reported_error": [
+            {
+              "name": "http_status",
+              "value": "429"
+            },
+            {
+              "name": "type",
+              "value": "rate_limit_error"
+            }
+          ]
+        }
+      ],
+      "request_id": ""
+    },
+    "hex": "0a206f7267616e69736174696f6e732f61636d652f776f726b7370616365732f773112de0312226f7267616e69736174696f6e732f61636d652f6167656e74732f72657365617263681a057265712d312206736573732d312a083863323165306234320f736f75726365732d736572766963653a0d61737365745f73756d6d617279420973756d6d61726965734a0e67656d696e692d322e352d70726f58ffffffffffffffffff0160ffffffff076803700478058001ac02a2011d0a19707269636561626c65556e6974732f7765622d7365617263681002a2011d0a10707269636561626c65556e6974732f7810f9ffffffffffffffff01a801d209b00102ba01125245534f555243455f455848415553544544c2010b089990cfd50610959aef3aca010b6d61747465722d31313833d20106736561726368e80102f2010f616374697669746965732f70726576f80181808080808080108002118802019002409a020461623132a20209414e5448524f504943aa0209414e5448524f504943b2021d0a1763616368655f726561645f696e7075745f746f6b656e7310d7aa01b202110a0c696e7075745f746f6b656e7310f320ba02087374616e64617264c002901cc802dc0bd20209414e5448524f504943da02120a0b687474705f7374617475731203343239da02180a04747970651210726174655f6c696d69745f6572726f72"
+  },
+  {
+    "name": "several activities and a request id",
+    "message": "BatchCreateActivitiesRequest",
+    "fields": {
+      "parent": "organisations/acme",
+      "activities": [
+        {
+          "agent": "organisations/acme/agents/é",
+          "request": "请求-𝄞",
+          "occurred_at_ns": 1000000000
+        },
+        {}
+      ],
+      "request_id": "batch-1"
+    },
+    "hex": "0a126f7267616e69736174696f6e732f61636d651230121c6f7267616e69736174696f6e732f61636d652f6167656e74732fc3a91a0be8afb7e6b1822df09d849ec20102080112001a0762617463682d31"
+  },
+  {
+    "name": "users",
+    "message": "BatchUpsertUsersRequest",
+    "fields": {
+      "parent": "organisations/acme/workspaces/w1",
+      "users": [
+        {
+          "name": "organisations/acme/workspaces/w1/users/u1",
+          "display_name": "Ada",
+          "email": "ada@example.com"
+        },
+        {
+          "name": "organisations/acme/workspaces/w1/users/u2"
+        }
+      ]
+    },
+    "hex": "0a206f7267616e69736174696f6e732f61636d652f776f726b7370616365732f773112410a296f7267616e69736174696f6e732f61636d652f776f726b7370616365732f77312f75736572732f753112034164611a0f616461406578616d706c652e636f6d122b0a296f7267616e69736174696f6e732f61636d652f776f726b7370616365732f77312f75736572732f7532"
+  },
+  {
+    "name": "decide request",
+    "message": "DecideRequest",
+    "fields": {
+      "parent": "organisations/acme",
+      "agent": "organisations/acme/agents/research",
+      "user": "u1",
+      "workspace": "organisations/acme/workspaces/w1",
+      "project": "p",
+      "requested_provider": "VERTEX_AI",
+      "requested_model": "gemini-2.5-pro"
+    },
+    "hex": "0a126f7267616e69736174696f6e732f61636d6512226f7267616e69736174696f6e732f61636d652f6167656e74732f7265736561726368220275312a206f7267616e69736174696f6e732f61636d652f776f726b7370616365732f77313201703a095645525445585f4149420e67656d696e692d322e352d70726f"
+  },
+  {
+    "name": "rate card page",
+    "message": "ListPriceableUnitsResponse",
+    "fields": {
+      "priceable_units": [
+        {
+          "name": "priceableUnits/gemini-in",
+          "display_name": "Gemini input",
+          "provider": "VERTEX_AI",
+          "model": "gemini-2.5-pro",
+          "kind": 1,
+          "unit_cost_nanos": 1250,
+          "effective_from_ns": 1767225600000000000,
+          "rate_card_version": "2026-01"
+        },
+        {
+          "name": "priceableUnits/batch-long",
+          "provider": "VERTEX_AI",
+          "kind": 1,
+          "unit_cost_nanos": 3000,
+          "service_tier": "BATCH",
+          "min_prompt_tokens": 200000,
+          "min_cache_write_ttl_seconds": 3600,
+          "modality": "AUDIO",
+          "effective_from_ns": 1767225600000000000,
+          "effective_to_ns": 1798761600500000000
+        }
+      ],
+      "next_page_token": "page-2"
+    },
+    "hex": "0a590a18707269636561626c65556e6974732f67656d696e692d696e120c47656d696e6920696e7075741a095645525445585f4149220e67656d696e692d322e352d70726f28013a060880f2d6ca064a07323032362d303158e2090a560a19707269636561626c65556e6974732f62617463682d6c6f6e671a095645525445585f414928013a060880f2d6ca06420c0880d9dbd9061080cab5ee0158b8176205424154434868c09a0c70901c7a05415544494f1206706167652d32"
+  },
+  {
+    "name": "decide response",
+    "message": "DecideResponse",
+    "fields": {
+      "decision": 3,
+      "reason": "over budget",
+      "policy_version": "v7",
+      "replacement_provider": "VERTEX_AI",
+      "replacement_model": "gemini-2.5-flash"
+    },
+    "hex": "0803120b6f766572206275646765741a02763722095645525445585f41492a1067656d696e692d322e352d666c617368"
+  }
+]
