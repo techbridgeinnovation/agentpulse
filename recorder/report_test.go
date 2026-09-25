@@ -68,6 +68,9 @@ func TestAServiceReportsWithoutNamingWhatItAlreadyToldUs(t *testing.T) {
 	if got.GetOccurredAt() == nil {
 		t.Error("no occurred_at, so the record cannot be priced against the rates that applied")
 	}
+	if got.GetObservedAs() != pb.Agent_SERVICE {
+		t.Errorf("observed_as = %v, want SERVICE: the call was made directly on a client", got.GetObservedAs())
+	}
 }
 
 func TestEachKindOfTokenIsKeptApart(t *testing.T) {

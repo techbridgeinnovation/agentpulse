@@ -3,7 +3,7 @@
 // Source: techbridge/ap/governance/v1/decision.proto
 // Plugin version: v0.0.1
 //
-// Generated on: 2026-09-21 12:51:33 UTC
+// Generated on: 2026-09-23 19:15:36 UTC
 
 package governance
 

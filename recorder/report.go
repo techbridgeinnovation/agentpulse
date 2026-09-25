@@ -304,6 +304,7 @@ func (rp *Reporter) activity(ctx context.Context, component string, duration tim
 		CallerComponent: component,
 		Skill:           rp.attribution.Skill,
 		BilledBy:        rp.attribution.billedBy(),
+		ObservedAs:      pb.Agent_SERVICE,
 		DurationMs:      duration.Milliseconds(),
 		Status:          pb.Activity_OK,
 		OccurredAt:      timestamppb.Now(),

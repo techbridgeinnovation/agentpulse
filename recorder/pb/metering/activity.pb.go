@@ -257,12 +257,14 @@ type Activity struct {
 	// A registered resource rather than a free string, so that spend can always
 	// be attributed to something with a known owner.
 	Agent string `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
-	// Opaque identifier of the end-user request this activity belongs to.
+	// Opaque identifier of the end-user request this activity belongs to, as the caller's own tracing names it.
 	//
 	// Every activity produced while serving one user request carries the same
 	// value, including across a handoff from one agent to another. This is what
 	// makes cost per unit of business work possible: outcomes attach to the
 	// request, and the request's activities sum to its cost.
+	//
+	// Optional. A call made outside any request, such as a service generating a report on a schedule, carries none and is recorded all the same, attributed by its agent, component, user and workspace. It counts towards no request and no outcome, and is never refused for the lack of one: the spend is real whether or not it can be tied to a unit of work.
 	Request string `protobuf:"bytes,3,opt,name=request,proto3" json:"request,omitempty"`
 	// Opaque identifier of the conversation or session, where the product has
 	// one. Empty for work that is not conversational.
@@ -419,6 +421,16 @@ type Activity struct {
 	//
 	// Some of this is unreachable through a framework that flattens an error to its message before a recorder sees it. Such a record carries what survived and says so, rather than carrying a guess.
 	ReportedError []*ReportedField `protobuf:"bytes,43,rep,name=reported_error,json=reportedError,proto3" json:"reported_error,omitempty"`
+	// How the failure on this record reads to a person: a label, one sentence, the one value that makes it specific, and everything kept about it. Empty for a record that did not fail.
+	//
+	// Written by the server on every read, from `error_format`, `reported_error` and `error_code`, so every product's dashboard shows the same failure in the same words and none has to translate five providers' vocabularies for itself. Worked out rather than stored, so a wording corrected here reads back on records already written.
+	Failure *FailureDescription `protobuf:"bytes,44,opt,name=failure,proto3" json:"failure,omitempty"`
+	// Whether the recorder observed this call through an agent framework or from a service's own code: `AGENT` where it was listening to an agent's callbacks, `SERVICE` where the call was made directly on an instrumented client.
+	//
+	// Stated by the recorder because it is the one thing that knows which way it was set up, and nothing else on a record tells the two apart. It is what an agent is listed as until an administrator says otherwise: the kind an agent was registered with wins, then this, and a record that carries neither reads as `AGENT`.
+	//
+	// Left unset by a recorder that does not state it.
+	ObservedAs Agent_Kind `protobuf:"varint,45,opt,name=observed_as,json=observedAs,proto3,enum=techbridge.ap.metering.v1.Agent_Kind" json:"observed_as,omitempty"`
 	// The unit of work inside a workspace that this call served, e.g. `acme-q3-refresh`, `matter-1183`.
 	//
 	// A product's own identifier for a piece of work, set once on the request context beside the person, and empty for a product that has no such concept. Grouped and filtered like any other dimension.
@@ -733,6 +745,20 @@ func (x *Activity) GetReportedError() []*ReportedField {
 	return nil
 }
 
+func (x *Activity) GetFailure() *FailureDescription {
+	if x != nil {
+		return x.Failure
+	}
+	return nil
+}
+
+func (x *Activity) GetObservedAs() Agent_Kind {
+	if x != nil {
+		return x.ObservedAs
+	}
+	return Agent_KIND_UNSPECIFIED
+}
+
 func (x *Activity) GetProject() string {
 	if x != nil {
 		return x.Project
@@ -892,6 +918,167 @@ func (x *Charge) GetEstimatedCostMicros() int64 {
 	return 0
 }
 
+// How one failure reads to a person, the same whichever provider it came from.
+//
+// Nothing here is a provider's message, because none is stored: a provider's error text routinely quotes the prompt. Every value is an identifier, a code, a count or a name, and the sentences are ours.
+type FailureDescription struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The failure in a few words, e.g. `Rate limit exceeded`, `Invalid request`, `Tool execution failed`. One per `error_class`, and fixed, so a list of failures can be read and grouped by eye.
+	Label string `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
+	// One sentence saying what the failure means and whether retrying helps, e.g. `The provider rejected the request as sent. It fails the same way until the request changes.` One per `error_class`.
+	Explanation string `protobuf:"bytes,2,opt,name=explanation,proto3" json:"explanation,omitempty"`
+	// The one value that makes the label specific, e.g. `retry in 34s`, `tools[11].function.name`, `lookup_listing`, `authentication`.
+	//
+	// Empty where the provider stated nothing it could be taken from, which is common: OpenAI often leaves the parameter out, and Anthropic names one only inside its message, which is never stored. Never guessed.
+	Detail string `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
+	// Whose convention `facts` are in, e.g. `Google`, `OpenAI`, `Anthropic`. Empty for a failure no provider reported, such as a spend limit refusing the call.
+	Provider string `protobuf:"bytes,4,opt,name=provider,proto3" json:"provider,omitempty"`
+	// What the provider called the failure, on one line, e.g. `RESOURCE_EXHAUSTED · 429`, `string_above_max_length · 400`. For looking the failure up in the provider's own documentation.
+	ProviderCode string `protobuf:"bytes,5,opt,name=provider_code,json=providerCode,proto3" json:"provider_code,omitempty"`
+	// Everything kept about the failure, in reading order, under names a person reads, e.g. `Quota`, `Retry after`, `Parameter`, `Request ID`.
+	//
+	// Which facts appear depends on what the provider stated. A convention the server has no reader for is shown under the provider's own names rather than dropped.
+	Facts []*FailureFact `protobuf:"bytes,6,rep,name=facts,proto3" json:"facts,omitempty"`
+	// Whose failure it is, so a reader knows whether it is theirs to fix: `ours` for a request that was wrong or not allowed, such as an invalid request, access denied or a context window exceeded; `provider` for the provider refusing or failing, such as a rate limit, an outage or a timeout; `unknown` where the kind cannot say. Empty for a record that did not fail.
+	Owner         string `protobuf:"bytes,7,opt,name=owner,proto3" json:"owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FailureDescription) Reset() {
+	*x = FailureDescription{}
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FailureDescription) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FailureDescription) ProtoMessage() {}
+
+func (x *FailureDescription) ProtoReflect() protoreflect.Message {
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FailureDescription.ProtoReflect.Descriptor instead.
+func (*FailureDescription) Descriptor() ([]byte, []int) {
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *FailureDescription) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *FailureDescription) GetExplanation() string {
+	if x != nil {
+		return x.Explanation
+	}
+	return ""
+}
+
+func (x *FailureDescription) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+func (x *FailureDescription) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *FailureDescription) GetProviderCode() string {
+	if x != nil {
+		return x.ProviderCode
+	}
+	return ""
+}
+
+func (x *FailureDescription) GetFacts() []*FailureFact {
+	if x != nil {
+		return x.Facts
+	}
+	return nil
+}
+
+func (x *FailureDescription) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+// One thing known about a failure.
+type FailureFact struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What it is, e.g. `Quota`, `Retry after`, `Parameter`.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Its value, e.g. `GenerateRequestsPerMinutePerProjectPerModel`, `34s`, `tools[11].function.name`.
+	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FailureFact) Reset() {
+	*x = FailureFact{}
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FailureFact) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FailureFact) ProtoMessage() {}
+
+func (x *FailureFact) ProtoReflect() protoreflect.Message {
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FailureFact.ProtoReflect.Descriptor instead.
+func (*FailureFact) Descriptor() ([]byte, []int) {
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *FailureFact) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *FailureFact) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
 // One quantity a provider reported, in the provider's own words.
 type ReportedQuantity struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -907,7 +1094,7 @@ type ReportedQuantity struct {
 
 func (x *ReportedQuantity) Reset() {
 	*x = ReportedQuantity{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[2]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -919,7 +1106,7 @@ func (x *ReportedQuantity) String() string {
 func (*ReportedQuantity) ProtoMessage() {}
 
 func (x *ReportedQuantity) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[2]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -932,7 +1119,7 @@ func (x *ReportedQuantity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportedQuantity.ProtoReflect.Descriptor instead.
 func (*ReportedQuantity) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{2}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ReportedQuantity) GetUnit() string {
@@ -968,7 +1155,7 @@ type ReportedField struct {
 
 func (x *ReportedField) Reset() {
 	*x = ReportedField{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[3]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -980,7 +1167,7 @@ func (x *ReportedField) String() string {
 func (*ReportedField) ProtoMessage() {}
 
 func (x *ReportedField) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[3]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -993,7 +1180,7 @@ func (x *ReportedField) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportedField.ProtoReflect.Descriptor instead.
 func (*ReportedField) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{3}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ReportedField) GetName() string {
@@ -1029,7 +1216,7 @@ type CreateActivityRequest struct {
 
 func (x *CreateActivityRequest) Reset() {
 	*x = CreateActivityRequest{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[4]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1041,7 +1228,7 @@ func (x *CreateActivityRequest) String() string {
 func (*CreateActivityRequest) ProtoMessage() {}
 
 func (x *CreateActivityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[4]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1054,7 +1241,7 @@ func (x *CreateActivityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateActivityRequest.ProtoReflect.Descriptor instead.
 func (*CreateActivityRequest) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{4}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CreateActivityRequest) GetParent() string {
@@ -1098,7 +1285,7 @@ type BatchCreateActivitiesRequest struct {
 
 func (x *BatchCreateActivitiesRequest) Reset() {
 	*x = BatchCreateActivitiesRequest{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[5]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1110,7 +1297,7 @@ func (x *BatchCreateActivitiesRequest) String() string {
 func (*BatchCreateActivitiesRequest) ProtoMessage() {}
 
 func (x *BatchCreateActivitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[5]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1123,7 +1310,7 @@ func (x *BatchCreateActivitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchCreateActivitiesRequest.ProtoReflect.Descriptor instead.
 func (*BatchCreateActivitiesRequest) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{5}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *BatchCreateActivitiesRequest) GetParent() string {
@@ -1158,7 +1345,7 @@ type BatchCreateActivitiesResponse struct {
 
 func (x *BatchCreateActivitiesResponse) Reset() {
 	*x = BatchCreateActivitiesResponse{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[6]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1170,7 +1357,7 @@ func (x *BatchCreateActivitiesResponse) String() string {
 func (*BatchCreateActivitiesResponse) ProtoMessage() {}
 
 func (x *BatchCreateActivitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[6]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1183,7 +1370,7 @@ func (x *BatchCreateActivitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchCreateActivitiesResponse.ProtoReflect.Descriptor instead.
 func (*BatchCreateActivitiesResponse) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{6}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *BatchCreateActivitiesResponse) GetActivities() []*Activity {
@@ -1205,7 +1392,7 @@ type GetActivityRequest struct {
 
 func (x *GetActivityRequest) Reset() {
 	*x = GetActivityRequest{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[7]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1217,7 +1404,7 @@ func (x *GetActivityRequest) String() string {
 func (*GetActivityRequest) ProtoMessage() {}
 
 func (x *GetActivityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[7]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1230,7 +1417,7 @@ func (x *GetActivityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActivityRequest.ProtoReflect.Descriptor instead.
 func (*GetActivityRequest) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{7}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetActivityRequest) GetName() string {
@@ -1270,7 +1457,7 @@ type ListActivitiesRequest struct {
 
 func (x *ListActivitiesRequest) Reset() {
 	*x = ListActivitiesRequest{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[8]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1282,7 +1469,7 @@ func (x *ListActivitiesRequest) String() string {
 func (*ListActivitiesRequest) ProtoMessage() {}
 
 func (x *ListActivitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[8]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1295,7 +1482,7 @@ func (x *ListActivitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActivitiesRequest.ProtoReflect.Descriptor instead.
 func (*ListActivitiesRequest) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{8}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListActivitiesRequest) GetParent() string {
@@ -1360,7 +1547,7 @@ type ListActivitiesResponse struct {
 
 func (x *ListActivitiesResponse) Reset() {
 	*x = ListActivitiesResponse{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[9]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1372,7 +1559,7 @@ func (x *ListActivitiesResponse) String() string {
 func (*ListActivitiesResponse) ProtoMessage() {}
 
 func (x *ListActivitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[9]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1385,7 +1572,7 @@ func (x *ListActivitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActivitiesResponse.ProtoReflect.Descriptor instead.
 func (*ListActivitiesResponse) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{9}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListActivitiesResponse) GetActivities() []*Activity {
@@ -1417,7 +1604,7 @@ type StreamListActivitiesRequest struct {
 
 func (x *StreamListActivitiesRequest) Reset() {
 	*x = StreamListActivitiesRequest{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[10]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1429,7 +1616,7 @@ func (x *StreamListActivitiesRequest) String() string {
 func (*StreamListActivitiesRequest) ProtoMessage() {}
 
 func (x *StreamListActivitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[10]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1442,7 +1629,7 @@ func (x *StreamListActivitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamListActivitiesRequest.ProtoReflect.Descriptor instead.
 func (*StreamListActivitiesRequest) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{10}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StreamListActivitiesRequest) GetParent() string {
@@ -1470,7 +1657,7 @@ type AggregateActivitiesRequest struct {
 	// Dimensions to group by, e.g. `["agent", "model"]`.
 	//
 	// Valid dimensions are `workspace`, `project`, `agent`, `model`, `provider`, `user`,
-	// `caller_service`, `caller_component`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind`, `date` and `hour`. `kind` is `model`, `tool` or `call`: a tool call is one recorded under a `tool:` component, a model call one that names a model or counted tokens, and a call is anything else. `date` and `hour` are UTC. Grouping by `workspace` under an organisation is one row per tenant; under a single workspace it is one row. An empty list returns a single total for whatever `parent` named.
+	// `caller_service`, `caller_component`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `date` and `hour`. `kind` is `model`, `tool` or `call`: a tool call is one recorded under a `tool:` component, a model call one that names a model or counted tokens, and a call is anything else. `agent_kind` is `agent` or `service`: the kind the activity's agent was registered with, or where it was registered with none, the activity's `observed_as`, and an agent with neither is an agent. `date` and `hour` are UTC. Grouping by `workspace` under an organisation is one row per tenant; under a single workspace it is one row. An empty list returns a single total for whatever `parent` named.
 	GroupBy []string `protobuf:"bytes,2,rep,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"`
 	// Optional filter, with the same terms as [ListActivitiesRequest.filter], so a panel asks for exactly the rows it draws: `user = "8c21e0b4"` grouped by `date` is one person's spend by day, without the rest of the organisation's rows being read and discarded. Cannot widen the organisation. `agent` below is the same as a filter term on `agent`, kept for callers that only ever confine to one.
 	Filter string `protobuf:"bytes,3,opt,name=filter,proto3" json:"filter,omitempty"`
@@ -1495,7 +1682,7 @@ type AggregateActivitiesRequest struct {
 
 func (x *AggregateActivitiesRequest) Reset() {
 	*x = AggregateActivitiesRequest{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[11]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1507,7 +1694,7 @@ func (x *AggregateActivitiesRequest) String() string {
 func (*AggregateActivitiesRequest) ProtoMessage() {}
 
 func (x *AggregateActivitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[11]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1520,7 +1707,7 @@ func (x *AggregateActivitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AggregateActivitiesRequest.ProtoReflect.Descriptor instead.
 func (*AggregateActivitiesRequest) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{11}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AggregateActivitiesRequest) GetParent() string {
@@ -1592,7 +1779,7 @@ type AggregateActivitiesResponse struct {
 
 func (x *AggregateActivitiesResponse) Reset() {
 	*x = AggregateActivitiesResponse{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[12]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1604,7 +1791,7 @@ func (x *AggregateActivitiesResponse) String() string {
 func (*AggregateActivitiesResponse) ProtoMessage() {}
 
 func (x *AggregateActivitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[12]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1617,7 +1804,7 @@ func (x *AggregateActivitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AggregateActivitiesResponse.ProtoReflect.Descriptor instead.
 func (*AggregateActivitiesResponse) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{12}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *AggregateActivitiesResponse) GetRows() []*AggregateRow {
@@ -1666,7 +1853,7 @@ type AggregateRow struct {
 	// A tool call carries no model, so a row grouped by `model` holds the tool calls under an empty value rather than leaving them out.
 	ModelCalls int64 `protobuf:"varint,14,opt,name=model_calls,json=modelCalls,proto3" json:"model_calls,omitempty"`
 	ToolCalls  int64 `protobuf:"varint,15,opt,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`
-	// How many distinct requests and people the activities belong to. Exact for the window asked for, and not additive across windows: a person active on two days is one person in a two-day window.
+	// How many distinct requests and people the activities belong to. Exact for the window asked for, and not additive across windows: a person active on two days is one person in a two-day window. Activities that carry no request count towards no request, and those that carry no person towards no person.
 	DistinctRequests int64 `protobuf:"varint,16,opt,name=distinct_requests,json=distinctRequests,proto3" json:"distinct_requests,omitempty"`
 	DistinctUsers    int64 `protobuf:"varint,17,opt,name=distinct_users,json=distinctUsers,proto3" json:"distinct_users,omitempty"`
 	// Duration at the 50th and 95th percentile, in milliseconds, over the activities that reported one. Approximate, and not additive across windows.
@@ -1697,13 +1884,27 @@ type AggregateRow struct {
 	//
 	// Their quantities are stored as reported and priced at nothing. Counted here so that a figure known to be incomplete says so on the row, rather than reading as spend that did not happen.
 	UnnormalisedCount int64 `protobuf:"varint,28,opt,name=unnormalised_count,json=unnormalisedCount,proto3" json:"unnormalised_count,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The label for the row's `error_class`, e.g. `Rate limit exceeded`, where the rows are grouped by it; the same label `Activity.failure` carries, so a failures panel and a single failure read in the same words.
+	ErrorClassLabel string `protobuf:"bytes,29,opt,name=error_class_label,json=errorClassLabel,proto3" json:"error_class_label,omitempty"`
+	// The sentence for the row's `error_class` where the rows are grouped by it, e.g. `The provider rejected the request as sent. It fails the same way until the request changes.`; the same one `Activity.failure` carries.
+	ErrorClassExplanation string `protobuf:"bytes,32,opt,name=error_class_explanation,json=errorClassExplanation,proto3" json:"error_class_explanation,omitempty"`
+	// Whose the row's `error_class` is, where the rows are grouped by it: `ours`, `provider` or `unknown`. See `FailureDescription.owner`.
+	ErrorClassOwner string `protobuf:"bytes,33,opt,name=error_class_owner,json=errorClassOwner,proto3" json:"error_class_owner,omitempty"`
+	// How many of the requests the activities belong to had at least one call that failed or was denied, whether or not the request went on to finish.
+	//
+	// Weighed by the request rather than the call because a failed call that works on retry still left the user with an answer, and what a person reading a report needs to know is how many of their users' requests were touched by a failure.
+	FailedRequests int64 `protobuf:"varint,30,opt,name=failed_requests,json=failedRequests,proto3" json:"failed_requests,omitempty"`
+	// How many of the requests ended in failure: the last call recorded for the request, across the whole window rather than this row alone, failed or was denied.
+	//
+	// The one figure that says a user was left without an answer. A request whose calls fall partly outside the window is judged by its last call inside it. Activities that carry no request count towards neither this nor `failed_requests`.
+	EndedInFailureRequests int64 `protobuf:"varint,31,opt,name=ended_in_failure_requests,json=endedInFailureRequests,proto3" json:"ended_in_failure_requests,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *AggregateRow) Reset() {
 	*x = AggregateRow{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[13]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1715,7 +1916,7 @@ func (x *AggregateRow) String() string {
 func (*AggregateRow) ProtoMessage() {}
 
 func (x *AggregateRow) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[13]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1728,7 +1929,7 @@ func (x *AggregateRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AggregateRow.ProtoReflect.Descriptor instead.
 func (*AggregateRow) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{13}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AggregateRow) GetDimensions() map[string]string {
@@ -1927,6 +2128,41 @@ func (x *AggregateRow) GetUnnormalisedCount() int64 {
 	return 0
 }
 
+func (x *AggregateRow) GetErrorClassLabel() string {
+	if x != nil {
+		return x.ErrorClassLabel
+	}
+	return ""
+}
+
+func (x *AggregateRow) GetErrorClassExplanation() string {
+	if x != nil {
+		return x.ErrorClassExplanation
+	}
+	return ""
+}
+
+func (x *AggregateRow) GetErrorClassOwner() string {
+	if x != nil {
+		return x.ErrorClassOwner
+	}
+	return ""
+}
+
+func (x *AggregateRow) GetFailedRequests() int64 {
+	if x != nil {
+		return x.FailedRequests
+	}
+	return 0
+}
+
+func (x *AggregateRow) GetEndedInFailureRequests() int64 {
+	if x != nil {
+		return x.EndedInFailureRequests
+	}
+	return 0
+}
+
 // Sum of one charged line over the activities in a row.
 type ChargeTotal struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1943,7 +2179,7 @@ type ChargeTotal struct {
 
 func (x *ChargeTotal) Reset() {
 	*x = ChargeTotal{}
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[14]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1955,7 +2191,7 @@ func (x *ChargeTotal) String() string {
 func (*ChargeTotal) ProtoMessage() {}
 
 func (x *ChargeTotal) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[14]
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1968,7 +2204,7 @@ func (x *ChargeTotal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChargeTotal.ProtoReflect.Descriptor instead.
 func (*ChargeTotal) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{14}
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ChargeTotal) GetPriceableUnit() string {
@@ -1996,11 +2232,11 @@ var File_techbridge_ap_metering_v1_activity_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\n" +
-	"(techbridge/ap/metering/v1/activity.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd5\x14\n" +
+	"(techbridge/ap/metering/v1/activity.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a%techbridge/ap/metering/v1/agent.proto\"\xe6\x15\n" +
 	"\bActivity\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x1e\n" +
-	"\arequest\x18\x03 \x01(\tB\x04\xe2A\x01\x02R\arequest\x12\x18\n" +
+	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x18\n" +
+	"\arequest\x18\x03 \x01(\tR\arequest\x12\x18\n" +
 	"\asession\x18\x04 \x01(\tR\asession\x12\x12\n" +
 	"\x04user\x18\x05 \x01(\tR\x04user\x12%\n" +
 	"\x0ecaller_service\x18\x06 \x01(\tR\rcallerService\x12)\n" +
@@ -2034,7 +2270,10 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"errorClass\x12!\n" +
 	"\ferror_detail\x18\x1c \x01(\tR\verrorDetail\x12!\n" +
 	"\ferror_format\x18* \x01(\tR\verrorFormat\x12O\n" +
-	"\x0ereported_error\x18+ \x03(\v2(.techbridge.ap.metering.v1.ReportedFieldR\rreportedError\x12\x18\n" +
+	"\x0ereported_error\x18+ \x03(\v2(.techbridge.ap.metering.v1.ReportedFieldR\rreportedError\x12M\n" +
+	"\afailure\x18, \x01(\v2-.techbridge.ap.metering.v1.FailureDescriptionB\x04\xe2A\x01\x03R\afailure\x12F\n" +
+	"\vobserved_as\x18- \x01(\x0e2%.techbridge.ap.metering.v1.Agent.KindR\n" +
+	"observedAs\x12\x18\n" +
 	"\aproject\x18\x19 \x01(\tR\aproject\x12\x12\n" +
 	"\x04tool\x18\x1a \x01(\tR\x04tool\x12\x18\n" +
 	"\aattempt\x18\x1d \x01(\x05R\aattempt\x12\x19\n" +
@@ -2088,7 +2327,18 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\x06Charge\x12+\n" +
 	"\x0epriceable_unit\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\rpriceableUnit\x12 \n" +
 	"\bquantity\x18\x02 \x01(\x03B\x04\xe2A\x01\x02R\bquantity\x128\n" +
-	"\x15estimated_cost_micros\x18\x03 \x01(\x03B\x04\xe2A\x01\x03R\x13estimatedCostMicros\"N\n" +
+	"\x15estimated_cost_micros\x18\x03 \x01(\x03B\x04\xe2A\x01\x03R\x13estimatedCostMicros\"\xf9\x01\n" +
+	"\x12FailureDescription\x12\x14\n" +
+	"\x05label\x18\x01 \x01(\tR\x05label\x12 \n" +
+	"\vexplanation\x18\x02 \x01(\tR\vexplanation\x12\x16\n" +
+	"\x06detail\x18\x03 \x01(\tR\x06detail\x12\x1a\n" +
+	"\bprovider\x18\x04 \x01(\tR\bprovider\x12#\n" +
+	"\rprovider_code\x18\x05 \x01(\tR\fproviderCode\x12<\n" +
+	"\x05facts\x18\x06 \x03(\v2&.techbridge.ap.metering.v1.FailureFactR\x05facts\x12\x14\n" +
+	"\x05owner\x18\a \x01(\tR\x05owner\"7\n" +
+	"\vFailureFact\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"N\n" +
 	"\x10ReportedQuantity\x12\x18\n" +
 	"\x04unit\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x04unit\x12 \n" +
 	"\bquantity\x18\x02 \x01(\x03B\x04\xe2A\x01\x02R\bquantity\"E\n" +
@@ -2144,8 +2394,7 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\x05agent\x18\b \x01(\tR\x05agent\"\x82\x01\n" +
 	"\x1bAggregateActivitiesResponse\x12;\n" +
 	"\x04rows\x18\x01 \x03(\v2'.techbridge.ap.metering.v1.AggregateRowR\x04rows\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xce\n" +
-	"\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xe0\f\n" +
 	"\fAggregateRow\x12W\n" +
 	"\n" +
 	"dimensions\x18\x01 \x03(\v27.techbridge.ap.metering.v1.AggregateRow.DimensionsEntryR\n" +
@@ -2179,7 +2428,12 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\x11first_occurred_at\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampR\x0ffirstOccurredAt\x12D\n" +
 	"\x10last_occurred_at\x18\x15 \x01(\v2\x1a.google.protobuf.TimestampR\x0elastOccurredAt\x12@\n" +
 	"\acharges\x18\x1b \x03(\v2&.techbridge.ap.metering.v1.ChargeTotalR\acharges\x12-\n" +
-	"\x12unnormalised_count\x18\x1c \x01(\x03R\x11unnormalisedCount\x1a=\n" +
+	"\x12unnormalised_count\x18\x1c \x01(\x03R\x11unnormalisedCount\x120\n" +
+	"\x11error_class_label\x18\x1d \x01(\tB\x04\xe2A\x01\x03R\x0ferrorClassLabel\x12<\n" +
+	"\x17error_class_explanation\x18  \x01(\tB\x04\xe2A\x01\x03R\x15errorClassExplanation\x120\n" +
+	"\x11error_class_owner\x18! \x01(\tB\x04\xe2A\x01\x03R\x0ferrorClassOwner\x12-\n" +
+	"\x0ffailed_requests\x18\x1e \x01(\x03B\x04\xe2A\x01\x03R\x0efailedRequests\x12?\n" +
+	"\x19ended_in_failure_requests\x18\x1f \x01(\x03B\x04\xe2A\x01\x03R\x16endedInFailureRequests\x1a=\n" +
 	"\x0fDimensionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x84\x01\n" +
@@ -2208,69 +2462,75 @@ func file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP() []byte {
 }
 
 var file_techbridge_ap_metering_v1_activity_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_techbridge_ap_metering_v1_activity_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_techbridge_ap_metering_v1_activity_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_techbridge_ap_metering_v1_activity_proto_goTypes = []any{
 	(Activity_Provider)(0),                // 0: techbridge.ap.metering.v1.Activity.Provider
 	(Activity_Status)(0),                  // 1: techbridge.ap.metering.v1.Activity.Status
 	(Activity_ErrorClass)(0),              // 2: techbridge.ap.metering.v1.Activity.ErrorClass
 	(*Activity)(nil),                      // 3: techbridge.ap.metering.v1.Activity
 	(*Charge)(nil),                        // 4: techbridge.ap.metering.v1.Charge
-	(*ReportedQuantity)(nil),              // 5: techbridge.ap.metering.v1.ReportedQuantity
-	(*ReportedField)(nil),                 // 6: techbridge.ap.metering.v1.ReportedField
-	(*CreateActivityRequest)(nil),         // 7: techbridge.ap.metering.v1.CreateActivityRequest
-	(*BatchCreateActivitiesRequest)(nil),  // 8: techbridge.ap.metering.v1.BatchCreateActivitiesRequest
-	(*BatchCreateActivitiesResponse)(nil), // 9: techbridge.ap.metering.v1.BatchCreateActivitiesResponse
-	(*GetActivityRequest)(nil),            // 10: techbridge.ap.metering.v1.GetActivityRequest
-	(*ListActivitiesRequest)(nil),         // 11: techbridge.ap.metering.v1.ListActivitiesRequest
-	(*ListActivitiesResponse)(nil),        // 12: techbridge.ap.metering.v1.ListActivitiesResponse
-	(*StreamListActivitiesRequest)(nil),   // 13: techbridge.ap.metering.v1.StreamListActivitiesRequest
-	(*AggregateActivitiesRequest)(nil),    // 14: techbridge.ap.metering.v1.AggregateActivitiesRequest
-	(*AggregateActivitiesResponse)(nil),   // 15: techbridge.ap.metering.v1.AggregateActivitiesResponse
-	(*AggregateRow)(nil),                  // 16: techbridge.ap.metering.v1.AggregateRow
-	(*ChargeTotal)(nil),                   // 17: techbridge.ap.metering.v1.ChargeTotal
-	nil,                                   // 18: techbridge.ap.metering.v1.AggregateRow.DimensionsEntry
-	(*timestamppb.Timestamp)(nil),         // 19: google.protobuf.Timestamp
+	(*FailureDescription)(nil),            // 5: techbridge.ap.metering.v1.FailureDescription
+	(*FailureFact)(nil),                   // 6: techbridge.ap.metering.v1.FailureFact
+	(*ReportedQuantity)(nil),              // 7: techbridge.ap.metering.v1.ReportedQuantity
+	(*ReportedField)(nil),                 // 8: techbridge.ap.metering.v1.ReportedField
+	(*CreateActivityRequest)(nil),         // 9: techbridge.ap.metering.v1.CreateActivityRequest
+	(*BatchCreateActivitiesRequest)(nil),  // 10: techbridge.ap.metering.v1.BatchCreateActivitiesRequest
+	(*BatchCreateActivitiesResponse)(nil), // 11: techbridge.ap.metering.v1.BatchCreateActivitiesResponse
+	(*GetActivityRequest)(nil),            // 12: techbridge.ap.metering.v1.GetActivityRequest
+	(*ListActivitiesRequest)(nil),         // 13: techbridge.ap.metering.v1.ListActivitiesRequest
+	(*ListActivitiesResponse)(nil),        // 14: techbridge.ap.metering.v1.ListActivitiesResponse
+	(*StreamListActivitiesRequest)(nil),   // 15: techbridge.ap.metering.v1.StreamListActivitiesRequest
+	(*AggregateActivitiesRequest)(nil),    // 16: techbridge.ap.metering.v1.AggregateActivitiesRequest
+	(*AggregateActivitiesResponse)(nil),   // 17: techbridge.ap.metering.v1.AggregateActivitiesResponse
+	(*AggregateRow)(nil),                  // 18: techbridge.ap.metering.v1.AggregateRow
+	(*ChargeTotal)(nil),                   // 19: techbridge.ap.metering.v1.ChargeTotal
+	nil,                                   // 20: techbridge.ap.metering.v1.AggregateRow.DimensionsEntry
+	(Agent_Kind)(0),                       // 21: techbridge.ap.metering.v1.Agent.Kind
+	(*timestamppb.Timestamp)(nil),         // 22: google.protobuf.Timestamp
 }
 var file_techbridge_ap_metering_v1_activity_proto_depIdxs = []int32{
 	0,  // 0: techbridge.ap.metering.v1.Activity.provider:type_name -> techbridge.ap.metering.v1.Activity.Provider
-	5,  // 1: techbridge.ap.metering.v1.Activity.reported_usage:type_name -> techbridge.ap.metering.v1.ReportedQuantity
+	7,  // 1: techbridge.ap.metering.v1.Activity.reported_usage:type_name -> techbridge.ap.metering.v1.ReportedQuantity
 	4,  // 2: techbridge.ap.metering.v1.Activity.charges:type_name -> techbridge.ap.metering.v1.Charge
 	1,  // 3: techbridge.ap.metering.v1.Activity.status:type_name -> techbridge.ap.metering.v1.Activity.Status
 	2,  // 4: techbridge.ap.metering.v1.Activity.error_class:type_name -> techbridge.ap.metering.v1.Activity.ErrorClass
-	6,  // 5: techbridge.ap.metering.v1.Activity.reported_error:type_name -> techbridge.ap.metering.v1.ReportedField
-	19, // 6: techbridge.ap.metering.v1.Activity.occurred_at:type_name -> google.protobuf.Timestamp
-	19, // 7: techbridge.ap.metering.v1.Activity.create_time:type_name -> google.protobuf.Timestamp
-	19, // 8: techbridge.ap.metering.v1.Activity.update_time:type_name -> google.protobuf.Timestamp
-	3,  // 9: techbridge.ap.metering.v1.CreateActivityRequest.activity:type_name -> techbridge.ap.metering.v1.Activity
-	3,  // 10: techbridge.ap.metering.v1.BatchCreateActivitiesRequest.activities:type_name -> techbridge.ap.metering.v1.Activity
-	3,  // 11: techbridge.ap.metering.v1.BatchCreateActivitiesResponse.activities:type_name -> techbridge.ap.metering.v1.Activity
-	19, // 12: techbridge.ap.metering.v1.ListActivitiesRequest.start_time:type_name -> google.protobuf.Timestamp
-	19, // 13: techbridge.ap.metering.v1.ListActivitiesRequest.end_time:type_name -> google.protobuf.Timestamp
-	3,  // 14: techbridge.ap.metering.v1.ListActivitiesResponse.activities:type_name -> techbridge.ap.metering.v1.Activity
-	19, // 15: techbridge.ap.metering.v1.AggregateActivitiesRequest.start_time:type_name -> google.protobuf.Timestamp
-	19, // 16: techbridge.ap.metering.v1.AggregateActivitiesRequest.end_time:type_name -> google.protobuf.Timestamp
-	16, // 17: techbridge.ap.metering.v1.AggregateActivitiesResponse.rows:type_name -> techbridge.ap.metering.v1.AggregateRow
-	18, // 18: techbridge.ap.metering.v1.AggregateRow.dimensions:type_name -> techbridge.ap.metering.v1.AggregateRow.DimensionsEntry
-	19, // 19: techbridge.ap.metering.v1.AggregateRow.first_occurred_at:type_name -> google.protobuf.Timestamp
-	19, // 20: techbridge.ap.metering.v1.AggregateRow.last_occurred_at:type_name -> google.protobuf.Timestamp
-	17, // 21: techbridge.ap.metering.v1.AggregateRow.charges:type_name -> techbridge.ap.metering.v1.ChargeTotal
-	7,  // 22: techbridge.ap.metering.v1.ActivitiesService.CreateActivity:input_type -> techbridge.ap.metering.v1.CreateActivityRequest
-	8,  // 23: techbridge.ap.metering.v1.ActivitiesService.BatchCreateActivities:input_type -> techbridge.ap.metering.v1.BatchCreateActivitiesRequest
-	10, // 24: techbridge.ap.metering.v1.ActivitiesService.GetActivity:input_type -> techbridge.ap.metering.v1.GetActivityRequest
-	11, // 25: techbridge.ap.metering.v1.ActivitiesService.ListActivities:input_type -> techbridge.ap.metering.v1.ListActivitiesRequest
-	14, // 26: techbridge.ap.metering.v1.ActivitiesService.AggregateActivities:input_type -> techbridge.ap.metering.v1.AggregateActivitiesRequest
-	13, // 27: techbridge.ap.metering.v1.ActivitiesService.StreamListActivities:input_type -> techbridge.ap.metering.v1.StreamListActivitiesRequest
-	3,  // 28: techbridge.ap.metering.v1.ActivitiesService.CreateActivity:output_type -> techbridge.ap.metering.v1.Activity
-	9,  // 29: techbridge.ap.metering.v1.ActivitiesService.BatchCreateActivities:output_type -> techbridge.ap.metering.v1.BatchCreateActivitiesResponse
-	3,  // 30: techbridge.ap.metering.v1.ActivitiesService.GetActivity:output_type -> techbridge.ap.metering.v1.Activity
-	12, // 31: techbridge.ap.metering.v1.ActivitiesService.ListActivities:output_type -> techbridge.ap.metering.v1.ListActivitiesResponse
-	15, // 32: techbridge.ap.metering.v1.ActivitiesService.AggregateActivities:output_type -> techbridge.ap.metering.v1.AggregateActivitiesResponse
-	3,  // 33: techbridge.ap.metering.v1.ActivitiesService.StreamListActivities:output_type -> techbridge.ap.metering.v1.Activity
-	28, // [28:34] is the sub-list for method output_type
-	22, // [22:28] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	8,  // 5: techbridge.ap.metering.v1.Activity.reported_error:type_name -> techbridge.ap.metering.v1.ReportedField
+	5,  // 6: techbridge.ap.metering.v1.Activity.failure:type_name -> techbridge.ap.metering.v1.FailureDescription
+	21, // 7: techbridge.ap.metering.v1.Activity.observed_as:type_name -> techbridge.ap.metering.v1.Agent.Kind
+	22, // 8: techbridge.ap.metering.v1.Activity.occurred_at:type_name -> google.protobuf.Timestamp
+	22, // 9: techbridge.ap.metering.v1.Activity.create_time:type_name -> google.protobuf.Timestamp
+	22, // 10: techbridge.ap.metering.v1.Activity.update_time:type_name -> google.protobuf.Timestamp
+	6,  // 11: techbridge.ap.metering.v1.FailureDescription.facts:type_name -> techbridge.ap.metering.v1.FailureFact
+	3,  // 12: techbridge.ap.metering.v1.CreateActivityRequest.activity:type_name -> techbridge.ap.metering.v1.Activity
+	3,  // 13: techbridge.ap.metering.v1.BatchCreateActivitiesRequest.activities:type_name -> techbridge.ap.metering.v1.Activity
+	3,  // 14: techbridge.ap.metering.v1.BatchCreateActivitiesResponse.activities:type_name -> techbridge.ap.metering.v1.Activity
+	22, // 15: techbridge.ap.metering.v1.ListActivitiesRequest.start_time:type_name -> google.protobuf.Timestamp
+	22, // 16: techbridge.ap.metering.v1.ListActivitiesRequest.end_time:type_name -> google.protobuf.Timestamp
+	3,  // 17: techbridge.ap.metering.v1.ListActivitiesResponse.activities:type_name -> techbridge.ap.metering.v1.Activity
+	22, // 18: techbridge.ap.metering.v1.AggregateActivitiesRequest.start_time:type_name -> google.protobuf.Timestamp
+	22, // 19: techbridge.ap.metering.v1.AggregateActivitiesRequest.end_time:type_name -> google.protobuf.Timestamp
+	18, // 20: techbridge.ap.metering.v1.AggregateActivitiesResponse.rows:type_name -> techbridge.ap.metering.v1.AggregateRow
+	20, // 21: techbridge.ap.metering.v1.AggregateRow.dimensions:type_name -> techbridge.ap.metering.v1.AggregateRow.DimensionsEntry
+	22, // 22: techbridge.ap.metering.v1.AggregateRow.first_occurred_at:type_name -> google.protobuf.Timestamp
+	22, // 23: techbridge.ap.metering.v1.AggregateRow.last_occurred_at:type_name -> google.protobuf.Timestamp
+	19, // 24: techbridge.ap.metering.v1.AggregateRow.charges:type_name -> techbridge.ap.metering.v1.ChargeTotal
+	9,  // 25: techbridge.ap.metering.v1.ActivitiesService.CreateActivity:input_type -> techbridge.ap.metering.v1.CreateActivityRequest
+	10, // 26: techbridge.ap.metering.v1.ActivitiesService.BatchCreateActivities:input_type -> techbridge.ap.metering.v1.BatchCreateActivitiesRequest
+	12, // 27: techbridge.ap.metering.v1.ActivitiesService.GetActivity:input_type -> techbridge.ap.metering.v1.GetActivityRequest
+	13, // 28: techbridge.ap.metering.v1.ActivitiesService.ListActivities:input_type -> techbridge.ap.metering.v1.ListActivitiesRequest
+	16, // 29: techbridge.ap.metering.v1.ActivitiesService.AggregateActivities:input_type -> techbridge.ap.metering.v1.AggregateActivitiesRequest
+	15, // 30: techbridge.ap.metering.v1.ActivitiesService.StreamListActivities:input_type -> techbridge.ap.metering.v1.StreamListActivitiesRequest
+	3,  // 31: techbridge.ap.metering.v1.ActivitiesService.CreateActivity:output_type -> techbridge.ap.metering.v1.Activity
+	11, // 32: techbridge.ap.metering.v1.ActivitiesService.BatchCreateActivities:output_type -> techbridge.ap.metering.v1.BatchCreateActivitiesResponse
+	3,  // 33: techbridge.ap.metering.v1.ActivitiesService.GetActivity:output_type -> techbridge.ap.metering.v1.Activity
+	14, // 34: techbridge.ap.metering.v1.ActivitiesService.ListActivities:output_type -> techbridge.ap.metering.v1.ListActivitiesResponse
+	17, // 35: techbridge.ap.metering.v1.ActivitiesService.AggregateActivities:output_type -> techbridge.ap.metering.v1.AggregateActivitiesResponse
+	3,  // 36: techbridge.ap.metering.v1.ActivitiesService.StreamListActivities:output_type -> techbridge.ap.metering.v1.Activity
+	31, // [31:37] is the sub-list for method output_type
+	25, // [25:31] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_techbridge_ap_metering_v1_activity_proto_init() }
@@ -2278,13 +2538,14 @@ func file_techbridge_ap_metering_v1_activity_proto_init() {
 	if File_techbridge_ap_metering_v1_activity_proto != nil {
 		return
 	}
+	file_techbridge_ap_metering_v1_agent_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_techbridge_ap_metering_v1_activity_proto_rawDesc), len(file_techbridge_ap_metering_v1_activity_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

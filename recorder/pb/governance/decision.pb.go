@@ -24,10 +24,14 @@ const (
 
 // How a call may proceed.
 //
-// The architecture defines all four values. Only ALLOW and NOTIFY are
-// produced by the initial implementation; DOWNGRADE and DENY are declared
-// now so the vocabulary is settled before anything is built against it,
-// not because either is implemented yet.
+// The architecture defines all four values. The current implementation
+// produces only ALLOW and DENY. NOTIFY is declared but not yet produced.
+// DOWNGRADE is declared, and this contract now carries the fields it
+// needs — DecideRequest.requested_provider/requested_model,
+// DecideResponse.replacement_provider/replacement_model, and
+// Budget.downgrade_threshold_micros with
+// Budget.replacement_provider/replacement_model — but governance itself
+// does not produce it yet; that is a separate, later change.
 type DecideResponse_Decision int32
 
 const (
@@ -37,8 +41,9 @@ const (
 	DecideResponse_ALLOW DecideResponse_Decision = 1
 	// The call may proceed, and is flagged for someone to see.
 	DecideResponse_NOTIFY DecideResponse_Decision = 2
-	// The call should proceed against a cheaper alternative. Not produced
-	// by any implementation yet.
+	// The call should proceed against the replacement named in
+	// replacement_provider/replacement_model instead of what was
+	// requested. Not produced by any implementation yet.
 	DecideResponse_DOWNGRADE DecideResponse_Decision = 3
 	// The call must not proceed. Not produced by any implementation yet.
 	DecideResponse_DENY DecideResponse_Decision = 4
@@ -119,9 +124,24 @@ type DecideRequest struct {
 	Workspace string `protobuf:"bytes,5,opt,name=workspace,proto3" json:"workspace,omitempty"`
 	// The project the call would be attributed to, matching `Activity.project`.
 	// Empty where the product has no such concept.
-	Project       string `protobuf:"bytes,6,opt,name=project,proto3" json:"project,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Project string `protobuf:"bytes,6,opt,name=project,proto3" json:"project,omitempty"`
+	// The provider the call would be made against, as a stable uppercase
+	// token, e.g. `VERTEX_AI`, `ANTHROPIC`, `OPENAI` — the same vocabulary as
+	// `PriceableUnit.provider` and `Activity.billed_by`.
+	//
+	// Optional: existing callers that do not yet report this leave it empty.
+	// Governance evaluates ALLOW/DENY exactly as before either way; it simply
+	// cannot reach a DOWNGRADE decision for a request that omits it, since a
+	// downgrade is meaningless without knowing what is being downgraded from.
+	RequestedProvider string `protobuf:"bytes,7,opt,name=requested_provider,json=requestedProvider,proto3" json:"requested_provider,omitempty"`
+	// The model the call would be made against, as the provider names it,
+	// e.g. `gemini-2.5-pro` — the same vocabulary as `Activity.model`.
+	//
+	// Optional, for the same reason and with the same fallback as
+	// requested_provider.
+	RequestedModel string `protobuf:"bytes,8,opt,name=requested_model,json=requestedModel,proto3" json:"requested_model,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DecideRequest) Reset() {
@@ -197,6 +217,20 @@ func (x *DecideRequest) GetProject() string {
 	return ""
 }
 
+func (x *DecideRequest) GetRequestedProvider() string {
+	if x != nil {
+		return x.RequestedProvider
+	}
+	return ""
+}
+
+func (x *DecideRequest) GetRequestedModel() string {
+	if x != nil {
+		return x.RequestedModel
+	}
+	return ""
+}
+
 // Response for [DecisionsService.Decide].
 type DecideResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -208,8 +242,20 @@ type DecideResponse struct {
 	// The version of the policy that produced this decision. Recorded so a
 	// later policy change never rewrites what a past decision meant.
 	PolicyVersion string `protobuf:"bytes,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The provider to use instead of the one requested. Set only when
+	// decision is DOWNGRADE, empty otherwise. Same vocabulary as
+	// DecideRequest.requested_provider.
+	//
+	// Governance returns exactly the value configured on the budget that
+	// produced this decision (Budget.replacement_provider) — this phase does
+	// not search for a cheaper alternative itself.
+	ReplacementProvider string `protobuf:"bytes,4,opt,name=replacement_provider,json=replacementProvider,proto3" json:"replacement_provider,omitempty"`
+	// The model to use instead of the one requested. Set only when decision
+	// is DOWNGRADE, empty otherwise. Same vocabulary as
+	// DecideRequest.requested_model and Budget.replacement_model.
+	ReplacementModel string `protobuf:"bytes,5,opt,name=replacement_model,json=replacementModel,proto3" json:"replacement_model,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *DecideResponse) Reset() {
@@ -259,6 +305,20 @@ func (x *DecideResponse) GetReason() string {
 func (x *DecideResponse) GetPolicyVersion() string {
 	if x != nil {
 		return x.PolicyVersion
+	}
+	return ""
+}
+
+func (x *DecideResponse) GetReplacementProvider() string {
+	if x != nil {
+		return x.ReplacementProvider
+	}
+	return ""
+}
+
+func (x *DecideResponse) GetReplacementModel() string {
+	if x != nil {
+		return x.ReplacementModel
 	}
 	return ""
 }
@@ -413,18 +473,22 @@ var File_techbridge_ap_governance_v1_decision_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_governance_v1_decision_proto_rawDesc = "" +
 	"\n" +
-	"*techbridge/ap/governance/v1/decision.proto\x12\x1btechbridge.ap.governance.v1\x1a\x1fgoogle/api/field_behavior.proto\"\xb3\x01\n" +
+	"*techbridge/ap/governance/v1/decision.proto\x12\x1btechbridge.ap.governance.v1\x1a\x1fgoogle/api/field_behavior.proto\"\x8b\x02\n" +
 	"\rDecideRequest\x12\x1c\n" +
 	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\x12\x1a\n" +
 	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x1c\n" +
 	"\aproduct\x18\x03 \x01(\tB\x02\x18\x01R\aproduct\x12\x12\n" +
 	"\x04user\x18\x04 \x01(\tR\x04user\x12\x1c\n" +
 	"\tworkspace\x18\x05 \x01(\tR\tworkspace\x12\x18\n" +
-	"\aproject\x18\x06 \x01(\tR\aproject\"\xf7\x01\n" +
+	"\aproject\x18\x06 \x01(\tR\aproject\x12-\n" +
+	"\x12requested_provider\x18\a \x01(\tR\x11requestedProvider\x12'\n" +
+	"\x0frequested_model\x18\b \x01(\tR\x0erequestedModel\"\xd7\x02\n" +
 	"\x0eDecideResponse\x12P\n" +
 	"\bdecision\x18\x01 \x01(\x0e24.techbridge.ap.governance.v1.DecideResponse.DecisionR\bdecision\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12%\n" +
-	"\x0epolicy_version\x18\x03 \x01(\tR\rpolicyVersion\"T\n" +
+	"\x0epolicy_version\x18\x03 \x01(\tR\rpolicyVersion\x121\n" +
+	"\x14replacement_provider\x18\x04 \x01(\tR\x13replacementProvider\x12+\n" +
+	"\x11replacement_model\x18\x05 \x01(\tR\x10replacementModel\"T\n" +
 	"\bDecision\x12\x18\n" +
 	"\x14DECISION_UNSPECIFIED\x10\x00\x12\t\n" +
 	"\x05ALLOW\x10\x01\x12\n" +
