@@ -70,6 +70,9 @@ func TestAFailedToolRecordsWhyItFailed(t *testing.T) {
 	if got[0].GetCallerComponent() != "tool:web_search" {
 		t.Errorf("component = %q, want tool:web_search", got[0].GetCallerComponent())
 	}
+	if got[0].GetObservedAs() != pb.Agent_AGENT {
+		t.Errorf("observed_as = %v, want AGENT: the call came through an agent's callbacks", got[0].GetObservedAs())
+	}
 }
 
 // A timeout is a tool that ran for its whole limit, and it reads as an ordinary

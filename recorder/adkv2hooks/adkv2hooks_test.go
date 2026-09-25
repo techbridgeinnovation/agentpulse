@@ -104,6 +104,9 @@ func TestEverythingIsDerivedFromTheOneContextType(t *testing.T) {
 	if a.GetBilledBy() != recorder.ProviderVertexAI {
 		t.Errorf("billed_by = %q, want %q by default rather than empty", a.GetBilledBy(), recorder.ProviderVertexAI)
 	}
+	if a.GetObservedAs() != pb.Agent_AGENT {
+		t.Errorf("observed_as = %v, want AGENT: the call came through an agent's callbacks", a.GetObservedAs())
+	}
 }
 
 func TestTokensAreRecordedBrokenOutByKind(t *testing.T) {

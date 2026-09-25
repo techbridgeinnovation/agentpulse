@@ -15,6 +15,12 @@ declare -A FILES=(
   [governance]="decision"
 )
 
+# proto file stems a copied file imports for its types alone: only <stem>.pb.go is copied, so its messages compile and none of its calls can be made.
+declare -A TYPES_ONLY=(
+  [metering]="agent"
+  [governance]=""
+)
+
 for contract in metering governance; do
   module="alis.build/techbridge/ap/$contract"
   dir=$(cd "$AP" && go list -m -f '{{.Dir}}' "$module")
@@ -24,6 +30,9 @@ for contract in metering governance; do
   for stem in ${FILES[$contract]}; do
     # Named one by one rather than globbed: the message file and the two grpc stubs share a stem but not a separator, and a glob on the stem alone would also take any other file that happens to start the same way.
     cp "$dir/$stem.pb.go" "$dir/${stem}_grpc.pb.go" "$dir/${stem}_grpc.meta.pb.go" "$target/"
+  done
+  for stem in ${TYPES_ONLY[$contract]}; do
+    cp "$dir/$stem.pb.go" "$target/"
   done
   chmod u+w "$target"/*.go
   echo "$contract $version"
