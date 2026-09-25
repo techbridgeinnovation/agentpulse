@@ -17,7 +17,9 @@ go get github.com/techbridgeinnovation/agentpulse/recorder
 ```
 
 ```bash
-pip install "techbridge-agentpulse @ git+https://github.com/techbridgeinnovation/agentpulse@python/v0.1.0#subdirectory=python"
+pip install "techbridge-agentpulse @ git+https://github.com/techbridgeinnovation/agentpulse@python/v0.1.1#subdirectory=python"
 ```
+
+Each Python release is a `python/v<version>` tag, listed on the [releases page](https://github.com/techbridgeinnovation/agentpulse/releases). Pin to the newest one. A release is made by bumping `python/src/agentpulse/_version.py` in the pull request that carries the change: merging it tags and publishes the release.
 
 Start with [what Agent Pulse records](docs/what-agent-pulse-records.md), then [recording](docs/recording-what-an-agent-spends.md) and [reading it back](docs/reading-your-spend.md). The libraries' own notes are in [`recorder/README.md`](recorder/README.md) and [`python/README.md`](python/README.md).
