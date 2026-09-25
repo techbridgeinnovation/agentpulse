@@ -306,3 +306,44 @@ def test_a_governed_reporter_starts_following_changes_on_its_first_decision():
         assert rp._subscriber is not None and rp._subscriber._thread is None
     finally:
         fake.close()
+
+
+def test_decisions_run_on_threads_that_are_kept_so_their_connections_are_reused():
+    from agentpulse import governance as g
+
+    seen = set()
+
+    class Decider:
+        def decide(self, request, timeout):
+            seen.add(threading.get_ident())
+            return _wire.DecideResponse(decision=1)
+
+    for _ in range(20):
+        g.ask(Decider(), _wire.DecideRequest(parent="organisations/acme", agent="organisations/acme/agents/a"), 1.0)
+    # A new thread per decision would be a new connection, and a new TLS handshake, per decision.
+    assert 1 <= len(seen) <= g._DECISION_WORKERS
+
+
+def test_a_decision_that_hangs_holds_up_no_other_past_its_own_timeout():
+    from agentpulse import governance as g
+
+    release = threading.Event()
+
+    class Hangs:
+        def decide(self, request, timeout):
+            release.wait(5)
+            return _wire.DecideResponse(decision=1)
+
+    class Answers:
+        def decide(self, request, timeout):
+            return _wire.DecideResponse(decision=1)
+
+    try:
+        for _ in range(g._DECISION_WORKERS - 1):
+            with pytest.raises(TimeoutError):
+                g.ask(Hangs(), _wire.DecideRequest(parent="organisations/acme", agent="organisations/acme/agents/a"), 0.05)
+        started = time.monotonic()
+        assert g.ask(Answers(), _wire.DecideRequest(parent="organisations/acme", agent="organisations/acme/agents/a"), 1.0).decision == g.ALLOW
+        assert time.monotonic() - started < 1.0
+    finally:
+        release.set()
