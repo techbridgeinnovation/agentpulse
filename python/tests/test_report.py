@@ -153,3 +153,28 @@ def test_a_reporter_that_cannot_build_a_record_counts_it_and_does_not_raise():
     rp.model_call(ModelCall(model="m", charges=[object()]))  # type: ignore[list-item]
     recorded(rp, sink)
     assert rp.recorder.stats().panicked == 1
+
+
+def test_a_call_made_inside_an_agent_framework_names_the_sub_agent_that_made_it():
+    from agentpulse import _wire
+    from agentpulse.report import _Framework
+
+    rp, _ = reporter()
+    activity = rp._activity("tool:search_meet_transcripts", 0.1, None, (), _Framework(request="inv-1", agent="meetings_researcher"))
+    assert activity.sub_agent == "meetings_researcher"
+    # Field 46, a string: the key is 46 << 3 | 2 = 370, written as the varint f2 02.
+    assert _wire.Activity(sub_agent="m").encode().endswith(b"\xf2\x02\x01m")
+    assert rp._activity("tool:web_search", 0.1, None, ()).sub_agent == ""
+
+
+def test_a_call_says_whether_it_was_observed_from_an_agent_or_a_service():
+    from agentpulse import _wire
+    from agentpulse.report import _Framework
+
+    rp, _ = reporter()
+    assert rp._activity("assistant", 0.1, None, (), _Framework(agent="assistant")).observed_as == _wire.KIND_AGENT
+    # LiteLLM carries who a call was for but names no agent: a direct call.
+    assert rp._activity("summary", 0.1, None, (), _Framework(request="r1")).observed_as == _wire.KIND_SERVICE
+    assert rp._activity("summary", 0.1, None, ()).observed_as == _wire.KIND_SERVICE
+    # Field 45, a varint: the key is 45 << 3 = 360, written as e8 02.
+    assert b"\xe8\x02\x02" in _wire.Activity(observed_as=_wire.KIND_SERVICE).encode()

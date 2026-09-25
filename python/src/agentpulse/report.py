@@ -101,11 +101,12 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class _Framework:
-    """What an agent framework knows about a call, used where the product set nothing on the context: the framework's own id for the turn, its session and its user."""
+    """What an agent framework knows about a call, used where the product set nothing on the context: the framework's own id for the turn, its session, its user, and the agent inside the run that made the call."""
 
     request: str = ""
     session: str = ""
     user: str = ""
+    agent: str = ""
 
 
 def _user_id(framework: _Framework | None) -> str:
@@ -323,6 +324,9 @@ class Reporter:
             project=current_project(),
             caller_service=self.attribution.service,
             caller_component=component,
+            sub_agent=framework.agent if framework else "",
+            # Seen through an agent framework's callbacks, or made directly from the service's own code: what an agent nobody registered is listed as. Only an agent framework names the agent it is running; LiteLLM hands over who a call was for but calls the model directly.
+            observed_as=_wire.KIND_AGENT if framework and framework.agent else _wire.KIND_SERVICE,
             skill=self.attribution.skill,
             billed_by=self.attribution.billed_by or PROVIDER_VERTEX_AI,
             duration_ms=max(0, int(duration * 1000)),

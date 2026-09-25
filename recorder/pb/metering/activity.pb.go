@@ -290,6 +290,12 @@ type Activity struct {
 	// declare in `Agent.components` are still accepted, and reported, so that
 	// drift is visible rather than silent.
 	CallerComponent string `protobuf:"bytes,7,opt,name=caller_component,json=callerComponent,proto3" json:"caller_component,omitempty"`
+	// The agent inside a multi-agent run that made this call, as the framework names it, e.g. `meetings_researcher`: the specialist a parallel or delegating agent handed the work to, or the root agent where nothing was handed on.
+	//
+	// Set on model calls and tool calls alike, so a tool call is filed under the sub-agent that ran it. `caller_component` cannot say this for a tool call, which it names `tool:` and the tool, and changing that would break every reader that tells a tool call apart by its prefix.
+	//
+	// Derived by the recorder from the framework's own context, so adopting teams set nothing. Empty for a call made outside an agent framework, and on records from a recorder that does not state it.
+	SubAgent string `protobuf:"bytes,46,opt,name=sub_agent,json=subAgent,proto3" json:"sub_agent,omitempty"`
 	// The area of the product the person was using, e.g. `canvas`,
 	// `doc_viewer`, `social`.
 	//
@@ -558,6 +564,13 @@ func (x *Activity) GetCallerService() string {
 func (x *Activity) GetCallerComponent() string {
 	if x != nil {
 		return x.CallerComponent
+	}
+	return ""
+}
+
+func (x *Activity) GetSubAgent() string {
+	if x != nil {
+		return x.SubAgent
 	}
 	return ""
 }
@@ -1441,7 +1454,7 @@ type ListActivitiesRequest struct {
 	PageToken string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	// Optional filter, confining the page to activities matching every term.
 	//
-	// A filter is one or more terms joined by `AND`, each `field = value`, e.g. `agent = "organisations/acme/agents/atlas" AND status = FAILED`. A value may be quoted; it must be when it holds a space. The fields are the ones activities can be grouped by: `workspace`, `project`, `agent`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `skill`, `tool`, `status`, `error_code`, `error_class` and `kind`. Only equality is served, and only `AND`; the window is `start_time` and `end_time`, not a term. An unknown field or any other operator is refused rather than ignored.
+	// A filter is one or more terms joined by `AND`, each `field = value`, e.g. `agent = "organisations/acme/agents/atlas" AND status = FAILED`. A value may be quoted; it must be when it holds a space. The fields are the ones activities can be grouped by: `workspace`, `project`, `agent`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `sub_agent`, `skill`, `tool`, `status`, `error_code`, `error_class` and `kind`. Only equality is served, and only `AND`; the window is `start_time` and `end_time`, not a term. An unknown field or any other operator is refused rather than ignored.
 	//
 	// Cannot widen the organisation: scope always comes from `parent`, and a term naming an agent outside it matches nothing.
 	Filter string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
@@ -1657,7 +1670,7 @@ type AggregateActivitiesRequest struct {
 	// Dimensions to group by, e.g. `["agent", "model"]`.
 	//
 	// Valid dimensions are `workspace`, `project`, `agent`, `model`, `provider`, `user`,
-	// `caller_service`, `caller_component`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `date` and `hour`. `kind` is `model`, `tool` or `call`: a tool call is one recorded under a `tool:` component, a model call one that names a model or counted tokens, and a call is anything else. `agent_kind` is `agent` or `service`: the kind the activity's agent was registered with, or where it was registered with none, the activity's `observed_as`, and an agent with neither is an agent. `date` and `hour` are UTC. Grouping by `workspace` under an organisation is one row per tenant; under a single workspace it is one row. An empty list returns a single total for whatever `parent` named.
+	// `caller_service`, `caller_component`, `sub_agent`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `date` and `hour`. `kind` is `model`, `tool` or `call`: a tool call is one recorded under a `tool:` component, a model call one that names a model or counted tokens, and a call is anything else. `agent_kind` is `agent` or `service`: the kind the activity's agent was registered with, or where it was registered with none, the activity's `observed_as`, and an agent with neither is an agent. `date` and `hour` are UTC. Grouping by `workspace` under an organisation is one row per tenant; under a single workspace it is one row. An empty list returns a single total for whatever `parent` named.
 	GroupBy []string `protobuf:"bytes,2,rep,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"`
 	// Optional filter, with the same terms as [ListActivitiesRequest.filter], so a panel asks for exactly the rows it draws: `user = "8c21e0b4"` grouped by `date` is one person's spend by day, without the rest of the organisation's rows being read and discarded. Cannot widen the organisation. `agent` below is the same as a filter term on `agent`, kept for callers that only ever confine to one.
 	Filter string `protobuf:"bytes,3,opt,name=filter,proto3" json:"filter,omitempty"`
@@ -2232,7 +2245,7 @@ var File_techbridge_ap_metering_v1_activity_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\n" +
-	"(techbridge/ap/metering/v1/activity.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a%techbridge/ap/metering/v1/agent.proto\"\xe6\x15\n" +
+	"(techbridge/ap/metering/v1/activity.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a%techbridge/ap/metering/v1/agent.proto\"\x83\x16\n" +
 	"\bActivity\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x18\n" +
@@ -2240,7 +2253,8 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\asession\x18\x04 \x01(\tR\asession\x12\x12\n" +
 	"\x04user\x18\x05 \x01(\tR\x04user\x12%\n" +
 	"\x0ecaller_service\x18\x06 \x01(\tR\rcallerService\x12)\n" +
-	"\x10caller_component\x18\a \x01(\tR\x0fcallerComponent\x12\x14\n" +
+	"\x10caller_component\x18\a \x01(\tR\x0fcallerComponent\x12\x1b\n" +
+	"\tsub_agent\x18. \x01(\tR\bsubAgent\x12\x14\n" +
 	"\x05skill\x18\b \x01(\tR\x05skill\x12\x14\n" +
 	"\x05model\x18\t \x01(\tR\x05model\x12\x1b\n" +
 	"\tbilled_by\x18$ \x01(\tR\bbilledBy\x12!\n" +

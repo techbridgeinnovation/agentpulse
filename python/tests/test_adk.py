@@ -110,6 +110,9 @@ def test_a_turn_is_one_record_per_model_call_and_per_tool_call():
     assert usage(first) == {"promptTokenCount": 10, "cachedContentTokenCount": 4, "candidatesTokenCount": 2, "totalTokenCount": 12}
     assert (tool.caller_component, tool.tool, tool.status) == ("tool:lookup", "lookup", _wire.STATUS_OK)
     assert last.model == "gemini-2.5-pro-002"
+    # The tool is filed under the agent that ran it, as its model calls are, and every call was seen through an agent's callbacks.
+    assert {a.sub_agent for a in sink.activities} == {"researcher"}
+    assert {a.observed_as for a in sink.activities} == {_wire.KIND_AGENT}
     # One turn, one request and one session across every record.
     assert len({a.request for a in sink.activities}) == 1 and len({a.session for a in sink.activities}) == 1
     assert all(a.request and a.session for a in sink.activities)

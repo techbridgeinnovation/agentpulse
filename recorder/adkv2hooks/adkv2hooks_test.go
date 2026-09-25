@@ -107,6 +107,9 @@ func TestEverythingIsDerivedFromTheOneContextType(t *testing.T) {
 	if a.GetObservedAs() != pb.Agent_AGENT {
 		t.Errorf("observed_as = %v, want AGENT: the call came through an agent's callbacks", a.GetObservedAs())
 	}
+	if a.GetSubAgent() != "pulseagent-v1" {
+		t.Errorf("sub_agent = %q, want the agent that made the call", a.GetSubAgent())
+	}
 }
 
 func TestTokensAreRecordedBrokenOutByKind(t *testing.T) {

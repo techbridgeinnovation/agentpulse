@@ -73,6 +73,9 @@ func TestAFailedToolRecordsWhyItFailed(t *testing.T) {
 	if got[0].GetObservedAs() != pb.Agent_AGENT {
 		t.Errorf("observed_as = %v, want AGENT: the call came through an agent's callbacks", got[0].GetObservedAs())
 	}
+	if got[0].GetSubAgent() != "atlas" {
+		t.Errorf("sub_agent = %q, want atlas: a tool call is filed under the agent that ran it", got[0].GetSubAgent())
+	}
 }
 
 // A timeout is a tool that ran for its whole limit, and it reads as an ordinary
