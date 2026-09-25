@@ -1,0 +1,60 @@
+# Releases the Python recorder when its version changes on main.
+#
+# Bump `python/src/agentpulse/_version.py` in the pull request that carries the change, and merging it is the release: this tags the merge `python/v<version>` and publishes a release for it. A version already tagged is left alone, so re-running or pushing again never moves a release.
+name: Release Python recorder
+
+on:
+  push:
+    branches: [main]
+    paths: [python/src/agentpulse/_version.py]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read the version
+        id: version
+        run: |
+          version=$(python -c "import re,pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('python/src/agentpulse/_version.py').read_text()).group(1))")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=python/v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Skip a version already released
+        id: exists
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.version.outputs.tag }} already exists; nothing to release"
+          fi
+
+      - name: Test what is about to be released
+        if: steps.exists.outputs.released != 'true'
+        working-directory: python
+        run: |
+          pip install -q -e '.[test]'
+          python -m pytest -q
+
+      - name: Tag and publish the release
+        if: steps.exists.outputs.released != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # A 0.x version is published as a pre-release: not yet proven in production.
+          prerelease=""
+          case "$VERSION" in 0.*) prerelease="--prerelease" ;; esac
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "Python recorder v$VERSION" --generate-notes $prerelease \
+            --notes-start-tag "$(git tag --list 'python/v*' --sort=-v:refname | head -n1)"
