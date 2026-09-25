@@ -60,6 +60,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			User:            userOf(r, ctx),
 			CallerService:   opts.Service,
 			ObservedAs:      pb.Agent_AGENT,
+			SubAgent:        ctx.AgentName(),
 			CallerComponent: "tool:" + name,
 			Tool:            name,
 			Skill:           opts.Skill,

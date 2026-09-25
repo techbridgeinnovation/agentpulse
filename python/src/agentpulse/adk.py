@@ -86,6 +86,8 @@ def _framework(ctx: Any) -> _Framework:
         request=getattr(ctx, "invocation_id", "") or "",
         session=getattr(session, "id", "") or "",
         user=getattr(ctx, "user_id", "") or "",
+        # The agent the framework is running, on tool calls as on model calls, so a tool is filed under the sub-agent that ran it.
+        agent=getattr(ctx, "agent_name", "") or "",
     )
 
 

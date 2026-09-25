@@ -3,3 +3,8 @@
 *.env
 .idea/
 .vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

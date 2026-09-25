@@ -17,6 +17,10 @@ _LENGTH = 2
 _FIXED32 = 5
 
 # Activity.Status, as the contract numbers it.
+# Agent.Kind: how the recorder observed a call.
+KIND_AGENT = 1
+KIND_SERVICE = 2
+
 STATUS_OK = 1
 STATUS_FAILED = 2
 STATUS_DENIED = 3
@@ -151,6 +155,8 @@ class Activity:
     provider_cost_micros: int = 0
     error_format: str = ""
     reported_error: list[ReportedField] = field(default_factory=list)
+    sub_agent: str = ""
+    observed_as: int = 0
 
     def copy(self) -> "Activity":
         return dataclasses.replace(
@@ -204,6 +210,8 @@ class Activity:
             _string(42, self.error_format),
         ]
         parts += [_message(43, reported.encode()) for reported in self.reported_error]
+        parts.append(_integer(45, self.observed_as))
+        parts.append(_string(46, self.sub_agent))
         return b"".join(parts)
 
 
