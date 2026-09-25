@@ -7,6 +7,8 @@ Only a genuine DENY stops a call. Every other answer, and no answer at all — g
 
 from __future__ import annotations
 
+import os
+import queue
 import threading
 import time
 from dataclasses import dataclass
@@ -213,23 +215,69 @@ class CachingDecider:
                 del self._entries[key]
 
 
-def _bounded(fn: Callable[[], _wire.DecideResponse], timeout: float) -> _wire.DecideResponse:
-    """Runs a decision on its own thread and stops waiting for it at the deadline.
+# How many decisions can be in flight at once. Each worker keeps its own connection to the gateway, so a decision is one request on a warm connection rather than a new TLS handshake: the handshake was most of what a decision cost, and from far from the gateway it alone outlasted the default timeout.
+_DECISION_WORKERS = 4
 
-    A socket timeout bounds each read and each write on its own, not the whole exchange, and not the name lookup before it. The only way to promise a call waits no longer than its timeout, whatever the network does, is to stop waiting. The thread is a daemon and finishes or times out on its own, so neither a slow governance nor interpreter exit waits on it, and only a call that missed the cache comes here.
+
+class _Workers:
+    """A few long-lived daemon threads that run decisions, so each reuses the connection its thread already holds.
+
+    Daemon threads for the reason one thread per call was: neither a slow governance nor interpreter exit waits on them. A decision whose caller has already stopped waiting is skipped rather than sent, so a governance that hangs does not leave a backlog of stale questions behind it.
     """
-    done = threading.Event()
-    outcome: list = []
 
-    def run() -> None:
-        try:
-            outcome.append((fn(), None))
-        except BaseException as err:
-            outcome.append((None, err))
-        finally:
-            done.set()
+    def __init__(self, count: int) -> None:
+        self._count = count
+        self._lock = threading.Lock()
+        self._queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._started = 0
 
-    threading.Thread(target=run, name="agentpulse-decide", daemon=True).start()
+    def submit(self, fn: Callable[[], _wire.DecideResponse], deadline: float) -> tuple[threading.Event, list]:
+        done = threading.Event()
+        outcome: list = []
+        self._ensure_started()
+        self._queue.put((fn, deadline, done, outcome))
+        return done, outcome
+
+    def _ensure_started(self) -> None:
+        if self._started >= self._count:
+            return
+        with self._lock:
+            while self._started < self._count:
+                threading.Thread(target=self._run, name=f"agentpulse-decide-{self._started}", daemon=True).start()
+                self._started += 1
+
+    def _run(self) -> None:
+        while True:
+            fn, deadline, done, outcome = self._queue.get()
+            if time.monotonic() >= deadline:
+                continue
+            try:
+                outcome.append((fn(), None))
+            except BaseException as err:
+                outcome.append((None, err))
+            finally:
+                done.set()
+
+
+_workers = _Workers(_DECISION_WORKERS)
+
+
+def _reset_after_fork() -> None:
+    # A forked child has none of the parent's threads, so it starts workers of its own.
+    global _workers
+    _workers = _Workers(_DECISION_WORKERS)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
+def _bounded(fn: Callable[[], _wire.DecideResponse], timeout: float) -> _wire.DecideResponse:
+    """Runs a decision on a worker and stops waiting for it at the deadline.
+
+    A socket timeout bounds each read and each write on its own, not the whole exchange, and not the name lookup before it. The only way to promise a call waits no longer than its timeout, whatever the network does, is to stop waiting. Only a call that missed the cache comes here.
+    """
+    done, outcome = _workers.submit(fn, time.monotonic() + timeout)
     if not done.wait(timeout):
         raise TimeoutError("governance did not answer in time")
     response, error = outcome[0]
