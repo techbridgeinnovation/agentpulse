@@ -19,9 +19,11 @@ from __future__ import annotations
 import contextvars
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import _wire, governance
 from .adk import _InFlight
+from .clients import region_of
 from .context import User, scope
 from .failure import blocked_finish, truncated_finish
 from .report import Reporter, _Framework
@@ -142,6 +144,7 @@ def _build_callback_class() -> type:
                 # Who served the call is LiteLLM's to say, since it routes each call; the reporter's own setting stands only where LiteLLM named nobody.
                 provider = billed_by_of(payload.get("custom_llm_provider") or (kwargs.get("litellm_params") or {}).get("custom_llm_provider"))
                 activity.billed_by = provider or rp.attribution.billed_by
+                activity.region = _region(kwargs, payload)
                 usage = reported_from(getattr(response, "usage", None))
                 if usage:
                     activity.usage_format = FORMAT_LITELLM
@@ -206,6 +209,24 @@ def _scope_from(metadata: dict, user_id: str) -> dict:
     if user_id and _str(metadata.get("agentpulse_user")):
         named["user"] = User(id=user_id, name=_str(metadata.get("agentpulse_user_name")), email=_str(metadata.get("agentpulse_user_email")))
     return named
+
+
+def _region(kwargs: dict, payload: dict) -> str:
+    """Where LiteLLM sent the call: the Vertex location it was given, else what the endpoint's URL names. Empty where neither says."""
+    try:
+        params = kwargs.get("litellm_params") or {}
+        optional = kwargs.get("optional_params") or {}
+        for source in (params, optional, kwargs):
+            location = _str(source.get("vertex_location")) if isinstance(source, dict) else ""
+            if location:
+                return location
+        base = _str(payload.get("api_base")) or _str(params.get("api_base"))
+        if base:
+            url = urlsplit(base)
+            return region_of(url.hostname or "", url.path)
+    except Exception:
+        pass
+    return ""
 
 
 def _finish_reason(response: Any) -> str:

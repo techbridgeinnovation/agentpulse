@@ -77,6 +77,8 @@ class ModelCall:
     cost_micros: int = 0
     # How the call was served, where the same tokens are priced differently by tier, e.g. "BATCH". Stated by the caller because it does not come back on the response.
     tier: str = ""
+    # Where the call was processed, as the client named it, e.g. "us-central1", "eu" or "global". A regional endpoint is charged a premium.
+    region: str = ""
     # Read for whether the call failed and for its code. The message is never recorded: a provider error routinely quotes the prompt back.
     error: BaseException | None = None
     # A call that hit a limit and did partial work, kept apart from a failure because it was charged for what it did.
@@ -274,6 +276,7 @@ class Reporter:
             activity.usage_format = call.format
             activity.reported_usage = reported_quantities(call.reported)
             activity.service_tier = call.tier
+            activity.region = call.region if isinstance(call.region, str) else ""
             activity.provider_cost_micros = int(call.cost_micros)
             activity.cache_write_ttl_seconds = int(call.cache_write_ttl)
 

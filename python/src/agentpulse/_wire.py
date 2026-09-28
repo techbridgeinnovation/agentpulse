@@ -152,6 +152,7 @@ class Activity:
     reported_usage: list[ReportedQuantity] = field(default_factory=list)
     service_tier: str = ""
     cache_write_ttl_seconds: int = 0
+    region: str = ""
     provider_cost_micros: int = 0
     error_format: str = ""
     reported_error: list[ReportedField] = field(default_factory=list)
@@ -212,6 +213,7 @@ class Activity:
         parts += [_message(43, reported.encode()) for reported in self.reported_error]
         parts.append(_integer(45, self.observed_as))
         parts.append(_string(46, self.sub_agent))
+        parts.append(_string(48, self.region))
         return b"".join(parts)
 
 

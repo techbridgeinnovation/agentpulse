@@ -174,3 +174,23 @@ def test_a_proxy_whose_governance_is_down_forwards_everything():
     rp, _, callback = proxy_hook(Down())
     assert asyncio.run(callback.async_pre_call_hook(None, None, {"model": "openai/gpt-5"}, "completion")) is None
     assert rp.recorder.stats().decision_errors == 1
+
+
+def test_the_region_is_the_vertex_location_litellm_was_given_or_what_its_endpoint_names():
+    from agentpulse.litellm import _region
+
+    assert _region({"litellm_params": {"vertex_location": "europe-west4"}}, {}) == "europe-west4"
+    assert _region({"optional_params": {"vertex_location": "global"}}, {}) == "global"
+    vertex = "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
+    assert _region({}, {"api_base": vertex}) == "us-central1"
+    assert _region({"litellm_params": {"api_base": "https://eu.api.openai.com/v1"}}, {}) == "eu"
+    assert _region({}, {"api_base": "https://api.openai.com/v1"}) == ""
+    assert _region({"litellm_params": None, "optional_params": "nonsense"}, {"api_base": 7}) == ""
+
+
+def test_a_call_to_an_endpoint_that_names_no_region_records_none(provider, recorded):
+    rp, sink, flush = recorded
+    provider.json(CHAT)
+    litellm.completion(model="openai/gpt-5", api_base=provider.url + "/v1", api_key="k", messages=[{"role": "user", "content": "x"}])
+    [a] = flush()
+    assert a.region == ""

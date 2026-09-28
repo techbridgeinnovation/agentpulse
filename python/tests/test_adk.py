@@ -66,13 +66,14 @@ class Answers:
         return self.response
 
 
-def run(replies, *, decider=None, streaming=False, prompt="SECRET PROMPT", scope=None, plugin_options=None, tools=(lookup, broken)):
+def run(replies, *, decider=None, streaming=False, prompt="SECRET PROMPT", scope=None, plugin_options=None, tools=(lookup, broken), model=None):
     sink = MemorySink()
     rec = agentpulse.Recorder(agentpulse.Config(sinks=[sink], exit_timeout=0, flush_every=60))
     rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=AGENT, service="research-agent", skill="research"))
     if decider is not None:
         rp = rp.governed(decider, cache_ttl=0)
-    model = Scripted(model="gemini-2.5-pro", replies=list(replies), asked=[])
+    model = model or Scripted(model="gemini-2.5-pro")
+    model.replies, model.asked = list(replies), []
     agent = LlmAgent(name="researcher", model=model, instruction="Answer.", tools=list(tools))
     app = App(name="probe", root_agent=agent, plugins=[rp.adk_plugin(**(plugin_options or {}))])
     events = []
@@ -230,3 +231,23 @@ def test_a_plugin_that_breaks_never_breaks_the_turn(monkeypatch):
     _, rp, model, events, error = run([calls("lookup", city="Nairobi"), text("done")])
     assert error is None and len(model.asked) == 2 and events
     assert rp.recorder.stats().panicked >= 3
+
+
+
+class OnVertex(Scripted):
+    """A scripted model whose client says it calls Vertex in a given location."""
+
+    location: str = ""
+
+    @property
+    def api_client(self):
+        inner = type("ApiClient", (), {"location": self.location})()
+        return type("Client", (), {"vertexai": True, "_api_client": inner})()
+
+
+def test_a_model_call_on_vertex_records_the_client_location():
+    sink, _, _, _, error = run([text("done")], model=OnVertex(model="gemini-2.5-pro", location="europe-west4"))
+    assert error is None and sink.activities[0].region == "europe-west4"
+
+    sink, _, _, _, _ = run([text("done")])
+    assert sink.activities[0].region == ""

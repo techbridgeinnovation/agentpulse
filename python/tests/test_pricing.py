@@ -196,3 +196,34 @@ def test_the_rate_card_is_read_page_by_page_through_the_gateway():
         assert fake.calls[0].path == "/techbridge.ap.metering.v1.PriceableUnitsService/ListPriceableUnits"
     finally:
         fake.close()
+
+
+def test_a_regional_rate_never_prices_a_call_with_no_region_and_a_regional_call_takes_it():
+    card = [rate("global", KIND_PROMPT_TOKENS, 1000), rate("regional", KIND_PROMPT_TOKENS, 1100, region="REGIONAL")]
+    assert price_of(card, call(prompt_tokens=1000)) == 1000
+    assert price_of(card, call(prompt_tokens=1000, region="global")) == 1000
+    assert price_of(card, call(prompt_tokens=1000, region="us-central1")) == 1100
+    assert price_of(list(reversed(card)), call(prompt_tokens=1000, region="us-central1")) == 1100
+
+
+def test_a_residency_rate_holds_only_for_its_own_region_whatever_the_case():
+    card = [rate("any", KIND_PROMPT_TOKENS, 1000, provider="OPENAI"), rate("us", KIND_PROMPT_TOKENS, 1100, provider="OPENAI", region="us")]
+    assert price_of(card, call(billed_by="OPENAI", prompt_tokens=1000, region="US")) == 1100
+    assert price_of(card, call(billed_by="OPENAI", prompt_tokens=1000, region="eu")) == 1000
+    assert price_of(card, call(billed_by="OPENAI", prompt_tokens=1000)) == 1000
+
+
+def test_a_regional_rate_alone_prices_nothing_for_a_call_with_no_region():
+    assert price_of([rate("regional", KIND_PROMPT_TOKENS, 1100, region="REGIONAL")], call(prompt_tokens=1000)) == 0
+
+
+def test_a_named_model_still_beats_a_named_region():
+    card = [rate("model", KIND_PROMPT_TOKENS, 1000), rate("region", KIND_PROMPT_TOKENS, 1100, model="", region="REGIONAL")]
+    assert price_of(card, call(prompt_tokens=1000, region="europe-west4")) == 1000
+
+
+def test_of_two_rates_with_the_same_conditions_the_later_one_prices():
+    older = rate("older", KIND_PROMPT_TOKENS, 1000)
+    newer = PriceableUnit(name="priceableUnits/newer", provider="VERTEX_AI", model=MODEL, kind=KIND_PROMPT_TOKENS, unit_cost_nanos=1200, effective_from_ns=HOUR_AGO + 1)
+    assert price_of([older, newer], call(prompt_tokens=1000)) == 1200
+    assert price_of([newer, older], call(prompt_tokens=1000)) == 1200
