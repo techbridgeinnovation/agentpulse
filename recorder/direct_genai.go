@@ -141,3 +141,29 @@ func (genaiProtocol) failure(body []byte, status int, _ http.Header, _ string) R
 func (genaiProtocol) denied(*http.Request) (*http.Response, error) {
 	return nil, ErrDenied
 }
+
+// downgrade rewrites the models/{model} segment of the request URL,
+// mirroring exactly how call above parses it out — the same path shape,
+// whether or not it carries a projects/.../publishers/google prefix ahead
+// of models/.
+func (genaiProtocol) downgrade(req *http.Request, model string) bool {
+	if req.URL == nil {
+		return false
+	}
+	path := req.URL.Path
+	colon := strings.LastIndex(path, ":")
+	if colon < 0 {
+		return false
+	}
+	head := path[:colon]
+	i := strings.LastIndex(head, "models/")
+	if i < 0 {
+		return false
+	}
+	newPath := head[:i+len("models/")] + model + path[colon:]
+	req.URL.Path = newPath
+	if req.URL.RawPath != "" {
+		req.URL.RawPath = newPath
+	}
+	return true
+}

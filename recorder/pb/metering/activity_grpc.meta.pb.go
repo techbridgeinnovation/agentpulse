@@ -3,7 +3,7 @@
 // Source: techbridge/ap/metering/v1/activity.proto
 // Plugin version: v0.0.1
 //
-// Generated on: 2026-09-25 14:38:50 UTC
+// Generated on: 2026-09-28 13:38:04 UTC
 
 package metering
 
@@ -18,6 +18,8 @@ const (
 	ActivitiesService_ListActivities_FullMethodDescription = "Lists activities under an organisation, most recent first by default."
 	// ActivitiesService_AggregateActivities_FullMethodDescription returns the description of the techbridge.ap.metering.v1.ActivitiesService.AggregateActivities method.
 	ActivitiesService_AggregateActivities_FullMethodDescription = "Returns spend grouped by one or more dimensions. This is what cost dashboards read. Results are always confined to the\n organisation named in `parent`; the organisation is never taken from\n `filter`, so a caller cannot widen its own scope."
+	// ActivitiesService_PriceActivitiesAs_FullMethodDescription returns the description of the techbridge.ap.metering.v1.ActivitiesService.PriceActivitiesAs method.
+	ActivitiesService_PriceActivitiesAs_FullMethodDescription = "Prices a window's activities as though one model had served all of them. The question a team asks when a model turns out to be expensive: what would this same work\n have cost somewhere else. It is answered as arithmetic over what was recorded, never as a\n recommendation — nothing here knows whether the other model's answers would have been any use."
 	// ActivitiesService_StreamListActivities_FullMethodDescription returns the description of the techbridge.ap.metering.v1.ActivitiesService.StreamListActivities method.
 	ActivitiesService_StreamListActivities_FullMethodDescription = "Streams activities under an organisation. For exports and backfills, where a paginated list would require the caller\n to hold a cursor across a long run."
 )

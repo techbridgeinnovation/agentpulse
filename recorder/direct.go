@@ -49,6 +49,14 @@ type protocol interface {
 	denied(req *http.Request) (*http.Response, error)
 	// failure reads a reply that refused the call.
 	failure(body []byte, status int, header http.Header, billedBy string) ReportedFailure
+	// downgrade rewrites req in place to call model instead of the model
+	// originally requested, reporting whether it could. A protocol that
+	// cannot determine or safely rewrite the outbound call's model from
+	// here — because the model lives somewhere this does not parse, or
+	// rewriting it would mean re-signing or re-framing the request in a way
+	// this is not prepared to do correctly — changes nothing and returns
+	// false, never a request that only looks rewritten.
+	downgrade(req *http.Request, model string) bool
 }
 
 // observed is what one call said about itself.
@@ -100,15 +108,32 @@ func (rp *Reporter) observe(p protocol, req *http.Request, next func(*http.Reque
 		billedBy = p.billedBy(req)
 	}
 	billedBy = BilledByOf(billedBy, rp.attribution.Provider) //nolint:staticcheck // see above
-	if !rp.allowed(ctx) {
+	outcome := rp.decide(ctx, billedBy, requested)
+	if !outcome.proceed {
 		rp.recordDenied(ctx, component, requested, billedBy)
 		return p.denied(req)
+	}
+	if outcome.replacementModel != "" {
+		switch {
+		case outcome.replacementProvider != "" && !strings.EqualFold(outcome.replacementProvider, billedBy):
+			// The configured replacement is served by a different provider
+			// than this client talks to at all — rewriting only the model
+			// name would send this call to the wrong endpoint entirely, so
+			// it is never attempted. Falls open to the original model.
+			rp.recorder.NoteDowngradeNotApplied()
+		case p.downgrade(req, outcome.replacementModel):
+			requested = outcome.replacementModel
+			rp.recorder.NoteDowngradeApplied()
+		default:
+			rp.recorder.NoteDowngradeNotApplied()
+		}
 	}
 
 	c := &call{
 		rp: rp, p: p, ctx: ctx, start: start, component: component, billedBy: billedBy,
 		format:  p.format(req, billedBy),
 		attempt: attemptOf(req),
+		region:  regionOf(req),
 	}
 	c.o.model = requested
 
@@ -134,6 +159,26 @@ func (rp *Reporter) observe(p protocol, req *http.Request, next func(*http.Reque
 	return resp, nil
 }
 
+// regionOf reads where a call is processed from its address: the location in a Vertex path, or the us or eu host OpenAI uses for data residency. Empty where the address says neither.
+func regionOf(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ""
+	}
+	parts := strings.Split(req.URL.Path, "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "locations" && parts[i+1] != "" {
+			return parts[i+1]
+		}
+	}
+	host := req.URL.Hostname()
+	for _, region := range []string{"us", "eu"} {
+		if strings.HasPrefix(host, region+".api.") {
+			return region
+		}
+	}
+	return ""
+}
+
 // safeCall asks a protocol whether a request is a model call, and treats one that panics as not.
 func safeCall(p protocol, req *http.Request) (recordable bool, model string) {
 	defer func() {
@@ -154,6 +199,7 @@ type call struct {
 	billedBy  string
 	format    string
 	attempt   int32
+	region    string
 
 	status     int
 	header     http.Header
@@ -327,6 +373,7 @@ func (rp *Reporter) recordObserved(c *call, o observed) {
 	activity.BilledBy = c.billedBy
 	activity.Attempt = c.attempt
 	activity.ServiceTier = o.tier
+	activity.Region = c.region
 	if len(o.reported) > 0 {
 		activity.UsageFormat = c.format
 		activity.ReportedUsage = reportedQuantities(o.reported)

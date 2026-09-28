@@ -119,3 +119,32 @@ func (anthropicProtocol) failure(body []byte, status int, header http.Header, bi
 func (anthropicProtocol) denied(req *http.Request) (*http.Response, error) {
 	return deniedReply(req, `{"type":"error","error":{"type":"`+deniedType+`","message":"`+ErrDenied.Error()+`"}}`), nil
 }
+
+// downgrade rewrites the model segment of a Vertex-routed request's URL —
+// the one shape of Anthropic request this package reads a model from
+// before sending, per call above. A native /v1/messages request names its
+// model in the JSON request body instead, which this does not read or
+// rewrite, so that shape always returns false and falls open to the model
+// originally requested.
+func (anthropicProtocol) downgrade(req *http.Request, model string) bool {
+	if req.URL == nil {
+		return false
+	}
+	const prefix = "/publishers/anthropic/models/"
+	path := req.URL.Path
+	i := strings.Index(path, prefix)
+	if i < 0 {
+		return false
+	}
+	rest := path[i+len(prefix):]
+	colon := strings.Index(rest, ":")
+	if colon < 0 {
+		return false
+	}
+	newPath := path[:i+len(prefix)] + model + rest[colon:]
+	req.URL.Path = newPath
+	if req.URL.RawPath != "" {
+		req.URL.RawPath = newPath
+	}
+	return true
+}

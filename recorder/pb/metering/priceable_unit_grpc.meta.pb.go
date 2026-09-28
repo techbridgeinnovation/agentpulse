@@ -3,7 +3,7 @@
 // Source: techbridge/ap/metering/v1/priceable_unit.proto
 // Plugin version: v0.0.1
 //
-// Generated on: 2026-09-25 14:38:50 UTC
+// Generated on: 2026-09-28 13:38:04 UTC
 
 package metering
 

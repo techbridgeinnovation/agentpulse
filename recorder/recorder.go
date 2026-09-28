@@ -64,6 +64,28 @@ type Counters struct {
 	// policy is still undecided.
 	DecisionErrors atomic.Int64
 
+	// Downgraded counts every Decide call that came back DOWNGRADE,
+	// regardless of whether this integration could actually apply the
+	// replacement to the outbound call — see DowngradeApplied and
+	// DowngradeNotApplied for that split. The model call always proceeds:
+	// DOWNGRADE, like NOTIFY, never stops it.
+	Downgraded atomic.Int64
+
+	// DowngradeApplied counts every DOWNGRADE this integration rewrote the
+	// outbound call to use — the replacement governance named actually went
+	// out on the wire in place of what was originally requested.
+	DowngradeApplied atomic.Int64
+
+	// DowngradeNotApplied counts every DOWNGRADE this integration could not
+	// safely apply — the requested model could not be read, could not be
+	// rewritten, or the replacement's provider does not match the one this
+	// call would be made to. The original request proceeds unchanged: a
+	// downgrade that cannot be safely applied falls open to the original
+	// model, never to a denial, and this counter is the visible signal that
+	// a configured downgrade is not actually taking effect for this
+	// integration.
+	DowngradeNotApplied atomic.Int64
+
 	// RateFetchErrors counts every rate card refresh that failed.
 	//
 	// Above zero and still climbing means the running total is being priced against a card that is going stale, or against no card at all if none ever arrived. Both read as an agent spending nothing, which is exactly the shape of silence this counter exists to break.
@@ -106,6 +128,16 @@ type Stats struct {
 	// DecisionErrors is how many Decide calls could not be completed. See
 	// Counters.DecisionErrors.
 	DecisionErrors int64
+	// Downgraded is how many Decide calls came back DOWNGRADE. See
+	// Counters.Downgraded.
+	Downgraded int64
+	// DowngradeApplied is how many DOWNGRADE calls this integration
+	// actually rewrote the outbound call for. See Counters.DowngradeApplied.
+	DowngradeApplied int64
+	// DowngradeNotApplied is how many DOWNGRADE calls this integration
+	// could not safely apply, and so proceeded with the original model
+	// instead. See Counters.DowngradeNotApplied.
+	DowngradeNotApplied int64
 	// RateFetchErrors is how many rate card refreshes failed. Above zero and still climbing means the running total is priced against a stale card, or against none. See Counters.RateFetchErrors.
 	RateFetchErrors int64
 	// TotalsEvicted is how many running totals were dropped because more requests were in flight at once than the recorder keeps totals for. Above zero means SpentOn is an undercount for some request that is still running.
@@ -183,19 +215,22 @@ func (r *Recorder) Stats() Stats {
 		return Stats{}
 	}
 	return Stats{
-		Recorded:        r.counters.Recorded.Load(),
-		Dropped:         r.counters.Dropped.Load(),
-		Delivered:       r.counters.Delivered.Load(),
-		Failed:          r.counters.Failed.Load(),
-		Panicked:        r.counters.Panicked.Load(),
-		Notified:        r.counters.Notified.Load(),
-		Denied:          r.counters.Denied.Load(),
-		DecisionErrors:  r.counters.DecisionErrors.Load(),
-		RateFetchErrors: r.counters.RateFetchErrors.Load(),
-		TotalsEvicted:   r.totals.evictedCount(),
-		Named:           r.counters.Named.Load(),
-		NamesDropped:    r.counters.NamesDropped.Load(),
-		NamesFailed:     r.counters.NamesFailed.Load(),
+		Recorded:            r.counters.Recorded.Load(),
+		Dropped:             r.counters.Dropped.Load(),
+		Delivered:           r.counters.Delivered.Load(),
+		Failed:              r.counters.Failed.Load(),
+		Panicked:            r.counters.Panicked.Load(),
+		Notified:            r.counters.Notified.Load(),
+		Denied:              r.counters.Denied.Load(),
+		DecisionErrors:      r.counters.DecisionErrors.Load(),
+		Downgraded:          r.counters.Downgraded.Load(),
+		DowngradeApplied:    r.counters.DowngradeApplied.Load(),
+		DowngradeNotApplied: r.counters.DowngradeNotApplied.Load(),
+		RateFetchErrors:     r.counters.RateFetchErrors.Load(),
+		TotalsEvicted:       r.totals.evictedCount(),
+		Named:               r.counters.Named.Load(),
+		NamesDropped:        r.counters.NamesDropped.Load(),
+		NamesFailed:         r.counters.NamesFailed.Load(),
 	}
 }
 
@@ -252,6 +287,38 @@ func (r *Recorder) NoteDecisionError() {
 		return
 	}
 	r.counters.DecisionErrors.Add(1)
+}
+
+// NoteDowngraded records that a Decide call returned DOWNGRADE. See
+// Counters.Downgraded.
+//
+// Exported for the same reason NoteNotified is: the adk and adkv2 adapters
+// report into this Counters/Stats surface rather than keeping one of their
+// own.
+func (r *Recorder) NoteDowngraded() {
+	if r == nil {
+		return
+	}
+	r.counters.Downgraded.Add(1)
+}
+
+// NoteDowngradeApplied records that a DOWNGRADE was rewritten onto the
+// outbound call. See Counters.DowngradeApplied.
+func (r *Recorder) NoteDowngradeApplied() {
+	if r == nil {
+		return
+	}
+	r.counters.DowngradeApplied.Add(1)
+}
+
+// NoteDowngradeNotApplied records that a DOWNGRADE could not be safely
+// applied, and the original request proceeded instead. See
+// Counters.DowngradeNotApplied.
+func (r *Recorder) NoteDowngradeNotApplied() {
+	if r == nil {
+		return
+	}
+	r.counters.DowngradeNotApplied.Add(1)
 }
 
 // Close stops the recorder and makes a final attempt to deliver what is queued.

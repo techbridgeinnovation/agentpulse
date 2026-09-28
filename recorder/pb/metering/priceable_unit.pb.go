@@ -140,6 +140,10 @@ type PriceableUnit struct {
 	//
 	// Empty is text, and is what an ordinary rate states. Audio and image tokens are counted in the same classes as text and charged at several times the rate, so a card with no modality on it prices a voice turn as though it had been typed.
 	Modality string `protobuf:"bytes,15,opt,name=modality,proto3" json:"modality,omitempty"`
+	// The processing region this rate is for, matched against `Activity.region`, e.g. `us`, `eu`.
+	//
+	// Empty applies to any region. `REGIONAL` applies to any region other than empty or `global`, which is how Vertex prices a regional endpoint.
+	Region string `protobuf:"bytes,16,opt,name=region,proto3" json:"region,omitempty"`
 	// When this rate takes effect, inclusive.
 	EffectiveFrom *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=effective_from,json=effectiveFrom,proto3" json:"effective_from,omitempty"`
 	// When this rate stops applying, exclusive. Empty while it is current.
@@ -264,6 +268,13 @@ func (x *PriceableUnit) GetMinCacheWriteTtlSeconds() int32 {
 func (x *PriceableUnit) GetModality() string {
 	if x != nil {
 		return x.Modality
+	}
+	return ""
+}
+
+func (x *PriceableUnit) GetRegion() string {
+	if x != nil {
+		return x.Region
 	}
 	return ""
 }
@@ -599,7 +610,7 @@ var File_techbridge_ap_metering_v1_priceable_unit_proto protoreflect.FileDescrip
 
 const file_techbridge_ap_metering_v1_priceable_unit_proto_rawDesc = "" +
 	"\n" +
-	".techbridge/ap/metering/v1/priceable_unit.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa6\b\n" +
+	".techbridge/ap/metering/v1/priceable_unit.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbe\b\n" +
 	"\rPriceableUnit\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12'\n" +
 	"\fdisplay_name\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\vdisplayName\x12 \n" +
@@ -611,7 +622,8 @@ const file_techbridge_ap_metering_v1_priceable_unit_proto_rawDesc = "" +
 	"\fservice_tier\x18\f \x01(\tR\vserviceTier\x12*\n" +
 	"\x11min_prompt_tokens\x18\r \x01(\x05R\x0fminPromptTokens\x12<\n" +
 	"\x1bmin_cache_write_ttl_seconds\x18\x0e \x01(\x05R\x17minCacheWriteTtlSeconds\x12\x1a\n" +
-	"\bmodality\x18\x0f \x01(\tR\bmodality\x12G\n" +
+	"\bmodality\x18\x0f \x01(\tR\bmodality\x12\x16\n" +
+	"\x06region\x18\x10 \x01(\tR\x06region\x12G\n" +
 	"\x0eeffective_from\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\x04\xe2A\x01\x02R\reffectiveFrom\x12=\n" +
 	"\feffective_to\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\veffectiveTo\x120\n" +
 	"\x11rate_card_version\x18\t \x01(\tB\x04\xe2A\x01\x02R\x0frateCardVersion\x12\x16\n" +

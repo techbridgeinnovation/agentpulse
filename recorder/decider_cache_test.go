@@ -409,6 +409,63 @@ func TestACachedVerdictIsNotReusedForAnotherWorkspaceOrProject(t *testing.T) {
 	}
 }
 
+// A DOWNGRADE verdict names a replacement for the model that was asked
+// about, so two calls that differ only in requested model are two
+// questions — reusing one call's cached verdict for a different model would
+// let a caller read a replacement_model that has nothing to do with what it
+// is now asking about. Requested provider is part of the same key for the
+// same reason.
+func TestACachedVerdictIsNotReusedForAnotherRequestedModelOrProvider(t *testing.T) {
+	inner := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	clock := newFakeClock(time.Now())
+	cache := newCachingDecider(inner, time.Minute, clock.Now)
+
+	gpt5 := testRequest()
+	gpt5.RequestedProvider, gpt5.RequestedModel = "OPENAI", "gpt-5"
+
+	gpt5Mini := testRequest()
+	gpt5Mini.RequestedProvider, gpt5Mini.RequestedModel = "OPENAI", "gpt-5-mini"
+
+	sameModelOtherProvider := testRequest()
+	sameModelOtherProvider.RequestedProvider, sameModelOtherProvider.RequestedModel = "VERTEX_AI", "gpt-5"
+
+	for _, req := range []*governancepb.DecideRequest{gpt5, gpt5Mini, sameModelOtherProvider, gpt5} {
+		if _, err := cache.Decide(context.Background(), req); err != nil {
+			t.Fatalf("Decide: %v", err)
+		}
+	}
+
+	if inner.callCount() != 3 {
+		t.Fatalf("wrapped Decider called %d times, want one per distinct (provider, model), and none for the repeat", inner.callCount())
+	}
+}
+
+// A DOWNGRADE cached for one model must never be handed back for a call
+// naming no model at all, or a different one — proves the cache separates
+// on the field governance now uses to decide what to replace, not just on
+// whether it happens to be empty in both requests.
+func TestACachedDowngradeIsNotReusedForACallWithNoRequestedModel(t *testing.T) {
+	inner := &fakeDecider{resp: &governancepb.DecideResponse{
+		Decision: governancepb.DecideResponse_DOWNGRADE, ReplacementProvider: "VERTEX_AI", ReplacementModel: "gemini-2.5-flash",
+	}}
+	cache := newCachingDecider(inner, time.Minute, time.Now)
+
+	withModel := testRequest()
+	withModel.RequestedProvider, withModel.RequestedModel = "OPENAI", "gpt-5"
+	withoutModel := testRequest()
+
+	if _, err := cache.Decide(context.Background(), withModel); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if _, err := cache.Decide(context.Background(), withoutModel); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+
+	if inner.callCount() != 2 {
+		t.Fatalf("wrapped Decider called %d times, want 2 — a verdict cached for a specific requested model must not answer a call naming none", inner.callCount())
+	}
+}
+
 // A scope from governance clears every tenant's verdict within it. That costs a
 // call to ask again; keeping one would cost money.
 func TestInvalidateScopeClearsAWorkspacesVerdictToo(t *testing.T) {

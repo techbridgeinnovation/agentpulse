@@ -24,6 +24,7 @@ const (
 	ActivitiesService_GetActivity_FullMethodName           = "/techbridge.ap.metering.v1.ActivitiesService/GetActivity"
 	ActivitiesService_ListActivities_FullMethodName        = "/techbridge.ap.metering.v1.ActivitiesService/ListActivities"
 	ActivitiesService_AggregateActivities_FullMethodName   = "/techbridge.ap.metering.v1.ActivitiesService/AggregateActivities"
+	ActivitiesService_PriceActivitiesAs_FullMethodName     = "/techbridge.ap.metering.v1.ActivitiesService/PriceActivitiesAs"
 	ActivitiesService_StreamListActivities_FullMethodName  = "/techbridge.ap.metering.v1.ActivitiesService/StreamListActivities"
 )
 
@@ -72,6 +73,12 @@ type ActivitiesServiceClient interface {
 	// organisation named in `parent`; the organisation is never taken from
 	// `filter`, so a caller cannot widen its own scope.
 	AggregateActivities(ctx context.Context, in *AggregateActivitiesRequest, opts ...grpc.CallOption) (*AggregateActivitiesResponse, error)
+	// Prices a window's activities as though one model had served all of them.
+	//
+	// The question a team asks when a model turns out to be expensive: what would this same work
+	// have cost somewhere else. It is answered as arithmetic over what was recorded, never as a
+	// recommendation — nothing here knows whether the other model's answers would have been any use.
+	PriceActivitiesAs(ctx context.Context, in *PriceActivitiesAsRequest, opts ...grpc.CallOption) (*PriceActivitiesAsResponse, error)
 	// Streams activities under an organisation.
 	//
 	// For exports and backfills, where a paginated list would require the caller
@@ -131,6 +138,16 @@ func (c *activitiesServiceClient) AggregateActivities(ctx context.Context, in *A
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AggregateActivitiesResponse)
 	err := c.cc.Invoke(ctx, ActivitiesService_AggregateActivities_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *activitiesServiceClient) PriceActivitiesAs(ctx context.Context, in *PriceActivitiesAsRequest, opts ...grpc.CallOption) (*PriceActivitiesAsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PriceActivitiesAsResponse)
+	err := c.cc.Invoke(ctx, ActivitiesService_PriceActivitiesAs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +218,12 @@ type ActivitiesServiceServer interface {
 	// organisation named in `parent`; the organisation is never taken from
 	// `filter`, so a caller cannot widen its own scope.
 	AggregateActivities(context.Context, *AggregateActivitiesRequest) (*AggregateActivitiesResponse, error)
+	// Prices a window's activities as though one model had served all of them.
+	//
+	// The question a team asks when a model turns out to be expensive: what would this same work
+	// have cost somewhere else. It is answered as arithmetic over what was recorded, never as a
+	// recommendation — nothing here knows whether the other model's answers would have been any use.
+	PriceActivitiesAs(context.Context, *PriceActivitiesAsRequest) (*PriceActivitiesAsResponse, error)
 	// Streams activities under an organisation.
 	//
 	// For exports and backfills, where a paginated list would require the caller
@@ -230,6 +253,9 @@ func (UnimplementedActivitiesServiceServer) ListActivities(context.Context, *Lis
 }
 func (UnimplementedActivitiesServiceServer) AggregateActivities(context.Context, *AggregateActivitiesRequest) (*AggregateActivitiesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AggregateActivities not implemented")
+}
+func (UnimplementedActivitiesServiceServer) PriceActivitiesAs(context.Context, *PriceActivitiesAsRequest) (*PriceActivitiesAsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PriceActivitiesAs not implemented")
 }
 func (UnimplementedActivitiesServiceServer) StreamListActivities(*StreamListActivitiesRequest, grpc.ServerStreamingServer[Activity]) error {
 	return status.Error(codes.Unimplemented, "method StreamListActivities not implemented")
@@ -345,6 +371,24 @@ func _ActivitiesService_AggregateActivities_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ActivitiesService_PriceActivitiesAs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PriceActivitiesAsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ActivitiesServiceServer).PriceActivitiesAs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ActivitiesService_PriceActivitiesAs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ActivitiesServiceServer).PriceActivitiesAs(ctx, req.(*PriceActivitiesAsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ActivitiesService_StreamListActivities_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamListActivitiesRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -382,6 +426,10 @@ var ActivitiesService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AggregateActivities",
 			Handler:    _ActivitiesService_AggregateActivities_Handler,
+		},
+		{
+			MethodName: "PriceActivitiesAs",
+			Handler:    _ActivitiesService_PriceActivitiesAs_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

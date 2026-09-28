@@ -63,6 +63,9 @@ type Options struct {
 	// A string so that calling a provider this library has never heard of needs no release of it. Recognised or not, the value reaches the rate card as written.
 	BilledBy string
 
+	// Region is where the model calls are processed, e.g. "us-central1" or "global". Defaults to the Vertex location in GOOGLE_CLOUD_LOCATION when the agent runs on Vertex.
+	Region string
+
 	// Deprecated: set BilledBy. Kept so an agent configured before it existed still attributes its spend correctly.
 	Provider pb.Activity_Provider
 
@@ -133,6 +136,13 @@ func (o Options) deniedMessage() string {
 		return DefaultDeniedMessage
 	}
 	return o.DeniedMessage
+}
+
+func (o Options) region() string {
+	if o.Region != "" {
+		return o.Region
+	}
+	return recorder.DefaultRegion(o.billedBy())
 }
 
 func (o Options) billedBy() string {
@@ -235,6 +245,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			Project:         recorder.ProjectFrom(ctx),
 			Model:           modelOf(response, known),
 			BilledBy:        opts.billedBy(),
+			Region:          opts.region(),
 			DurationMs:      millisSince(known.startedAt, time.Now),
 			Status:          statusOf(response, callErr),
 			ErrorCode:       errorCodeOf(response, callErr),
@@ -276,13 +287,17 @@ func AfterAgent(r *recorder.Recorder, _ Options) agent.AfterAgentCallback {
 // counter first, since it is advisory and must never block. DENY is the one
 // verdict that preempts the call — BeforeModel returns a synthetic response
 // in that case, which is what makes ADK skip the model call entirely (see
-// llmagent's own doc on BeforeModelCallbacks). Everything else — a nil
+// llmagent's own doc on BeforeModelCallbacks). Every other outcome — a nil
 // Decider, a malformed opts.Agent, a Decide call that timed out or errored,
-// and any decision value this build does not recognize (including
-// DOWNGRADE, which is not implemented here) — proceeds exactly like ALLOW.
-// An unrecognized or failed decision is never treated as DENY: fail-open
-// means the call proceeds when governance cannot be asked, not when it
-// answers with something this version does not understand.
+// ALLOW, and any decision value this build does not recognize — proceeds.
+// DOWNGRADE proceeds too, and is never treated as DENY: request.Model is
+// rewritten to the replacement governance named, in place, before the
+// framework ever sends the call, when the replacement's provider matches
+// opts.billedBy() — rewriting only the model name for a different provider
+// would ask this agent's own model client for a model it cannot serve. Where
+// it does not match, or governance named no replacement at all, the call
+// proceeds with the model it originally asked for; Stats.DowngradeApplied
+// and Stats.DowngradeNotApplied report which happened.
 //
 // If opts.DecideCacheTTL is positive, opts.Decider is wrapped in a
 // recorder.CachingDecider exactly once, here, before the callback is
@@ -299,7 +314,6 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 		if request == nil {
 			return nil, nil
 		}
-		inFlight.requested(callKey(ctx), request.Model)
 
 		labels := map[string]string{}
 		if user := labelValue(userIDOf(ctx)); user != "" {
@@ -324,23 +338,50 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 			}
 		}
 
-		if denied := decide(ctx, r, opts, decider); denied != nil {
+		outcome := decide(ctx, r, opts, decider, request.Model)
+		if outcome.denied != nil {
 			// AfterModel never runs for a short-circuited response — ADK
 			// skips it along with the model call — so this is the only
 			// place a denied call is recorded, and the only place this
 			// call's in-flight entry is cleared.
 			inFlight.take(callKey(ctx))
-			return denied, nil
+			return outcome.denied, nil
 		}
+		if outcome.replacementModel != "" {
+			if outcome.replacementProvider != "" && !strings.EqualFold(outcome.replacementProvider, opts.billedBy()) {
+				r.NoteDowngradeNotApplied()
+			} else {
+				request.Model = outcome.replacementModel
+				r.NoteDowngradeApplied()
+			}
+		}
+		// Noted once, here, after any downgrade has already been applied to
+		// request.Model, so a call whose provider reports no model at all
+		// falls back to what was actually sent — the replacement, where one
+		// was applied — never to the model that was asked for before it was
+		// overridden.
+		inFlight.requested(callKey(ctx), request.Model)
 		return nil, nil
 	}
 }
 
-// decide asks governance whether ctx's call may proceed, using decider,
-// when one is configured. It returns a non-nil response only on a genuine
-// DENY verdict — the synthetic response BeforeModel should return to skip
-// the model call — and nil in every other case, including one this build
-// does not recognize.
+// decideOutcome is what governance decided about one call, and what
+// BeforeModel could learn from it before the framework sends the call.
+type decideOutcome struct {
+	// denied is non-nil only on a genuine DENY verdict — the synthetic
+	// response BeforeModel returns to skip the model call.
+	denied *adkmodel.LLMResponse
+
+	// replacementProvider and replacementModel are what DOWNGRADE named,
+	// both empty unless decision was DOWNGRADE. Whether they can actually be
+	// applied to request.Model is BeforeModel's own decision, not decide's —
+	// it is the one place opts.billedBy() and request are both in scope.
+	replacementProvider string
+	replacementModel    string
+}
+
+// decide asks governance whether a call naming requestedModel may proceed,
+// using decider, when one is configured.
 //
 // decider is BeforeModel's precomputed value — opts.Decider itself, or
 // opts.Decider wrapped in a cache — rather than opts.Decider read fresh
@@ -349,51 +390,55 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 // Bounded by opts.decideTimeout() against ctx itself (not a detached
 // context.Background()), so a cancelled turn cancels this call too rather
 // than outliving it. A nil decider, a malformed opts.Agent, a Decide error,
-// a NOTIFY verdict, and any decision value that is not exactly DENY are all
-// handled without ever stopping the model call — see BeforeModel's own doc
-// for why.
+// and a NOTIFY verdict are all handled without ever stopping the model
+// call — see BeforeModel's own doc for why, and for how DOWNGRADE is
+// applied once this returns.
 //
 // The workspace and the project are asked about because a budget can be narrowed to either, and a call is only held to a budget that names the tenant it is for. A turn that names no workspace asks about the organisation's default, which is what the same call spends against.
-func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decider recorder.Decider) *adkmodel.LLMResponse {
+func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decider recorder.Decider, requestedModel string) decideOutcome {
 	if decider == nil {
-		return nil
+		return decideOutcome{}
 	}
 
 	organisation, err := organisationOf(opts.Agent)
 	if err != nil {
 		r.NoteDecisionError()
-		return nil
+		return decideOutcome{}
 	}
 
 	dctx, cancel := context.WithTimeout(ctx, opts.decideTimeout())
 	defer cancel()
 
 	resp, err := decider.Decide(dctx, &governancepb.DecideRequest{
-		Parent:    organisation,
-		Agent:     opts.Agent,
-		User:      userIDOf(ctx),
-		Workspace: recorder.WorkspaceName(organisation, recorder.WorkspaceFrom(ctx)),
-		Project:   recorder.ProjectFrom(ctx),
+		Parent:            organisation,
+		Agent:             opts.Agent,
+		User:              userIDOf(ctx),
+		Workspace:         recorder.WorkspaceName(organisation, recorder.WorkspaceFrom(ctx)),
+		Project:           recorder.ProjectFrom(ctx),
+		RequestedProvider: opts.billedBy(),
+		RequestedModel:    requestedModel,
 	})
 	if err != nil {
 		r.NoteDecisionError()
-		return nil
+		return decideOutcome{}
 	}
 
 	switch resp.GetDecision() {
 	case governancepb.DecideResponse_NOTIFY:
 		r.NoteNotified()
-		return nil
+		return decideOutcome{}
 	case governancepb.DecideResponse_DENY:
 		r.NoteDenied()
 		recordDenied(r, ctx, opts)
-		return deniedResponse(opts)
+		return decideOutcome{denied: deniedResponse(opts)}
+	case governancepb.DecideResponse_DOWNGRADE:
+		r.NoteDowngraded()
+		return decideOutcome{replacementProvider: resp.GetReplacementProvider(), replacementModel: resp.GetReplacementModel()}
 	default:
-		// ALLOW, and anything this build does not recognize (including
-		// DOWNGRADE, which this integration does not implement yet),
-		// proceeds exactly like ALLOW. An unrecognized value is never
-		// treated as DENY.
-		return nil
+		// ALLOW, and anything this build does not recognize, proceeds
+		// exactly like ALLOW. An unrecognized value is never treated as
+		// DENY.
+		return decideOutcome{}
 	}
 }
 
@@ -424,6 +469,7 @@ func recordDenied(r *recorder.Recorder, ctx agent.CallbackContext, opts Options)
 		Skill:           opts.Skill,
 		Project:         recorder.ProjectFrom(ctx),
 		BilledBy:        opts.billedBy(),
+		Region:          opts.region(),
 		Status:          pb.Activity_DENIED,
 		OccurredAt:      timestamppb.Now(),
 	})

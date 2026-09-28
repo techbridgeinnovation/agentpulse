@@ -39,6 +39,8 @@ type Governance struct {
 //
 // A call governance refuses is never sent, and is recorded as refused. Every other answer, and no answer — governance unreachable, slow, or saying something this build does not know — lets the call go ahead: a spend decision that cannot be made must not be the reason the product stops working.
 //
+// A DOWNGRADE is applied to the outbound call where the instrumented client's protocol can safely rewrite the model this call names — see protocol.downgrade in direct.go for exactly which clients that covers today. Where it cannot, the original request proceeds unchanged rather than being silently claimed as downgraded; Stats.DowngradeApplied and Stats.DowngradeNotApplied report which happened. A DOWNGRADE is decided once, from this single call's own request — nothing here asks governance again for the replacement.
+//
 // The caller sees a refusal as an error. From a genai client it is ErrDenied; from an OpenAI or Anthropic client it is the sdk's own error, raised from a refusal the sdk is told not to retry. Denied recognises all three.
 func (rp *Reporter) Governed(g Governance) *Reporter {
 	if rp == nil {
@@ -65,45 +67,69 @@ func Denied(err error) bool {
 	return errors.As(err, &sdk) && strings.Contains(sdk.RawJSON(), `"`+deniedType+`"`)
 }
 
-// allowed asks governance whether a call may proceed. Only a genuine refusal says no.
-func (rp *Reporter) allowed(ctx context.Context) (allow bool) {
+// decideOutcome is what governance decided about one call, and what this
+// reporter learned that a caller can act on before sending it.
+type decideOutcome struct {
+	// proceed is false only for a genuine DENY. Every other outcome — ALLOW,
+	// DOWNGRADE, NOTIFY, or no answer at all — proceeds; DOWNGRADE is never
+	// treated as DENY.
+	proceed bool
+
+	// replacementProvider and replacementModel are what DOWNGRADE named,
+	// both empty unless decision was DOWNGRADE. Whether they can actually be
+	// applied to the outbound call is a question for the protocol, not this
+	// type — see protocol.downgrade.
+	replacementProvider string
+	replacementModel    string
+}
+
+// decide asks governance whether a call naming requestedProvider and
+// requestedModel may proceed. Only a genuine DENY refuses it.
+func (rp *Reporter) decide(ctx context.Context, requestedProvider, requestedModel string) (out decideOutcome) {
+	out.proceed = true
 	if rp.decider == nil {
-		return true
+		return out
 	}
 	// A decider is the host's to supply, and one that panics must cost the call nothing.
 	defer func() {
 		if recover() != nil {
 			rp.recorder.NotePanicked()
-			allow = true
+			out = decideOutcome{proceed: true}
 		}
 	}()
 	organisation, _, found := strings.Cut(rp.attribution.Agent, "/agents/")
 	if !found || organisation == "" {
 		rp.recorder.NoteDecisionError()
-		return true
+		return out
 	}
 
 	dctx, cancel := context.WithTimeout(ctx, rp.decideTimeout)
 	defer cancel()
 	resp, err := rp.decider.Decide(dctx, &governancepb.DecideRequest{
-		Parent:    organisation,
-		Agent:     rp.attribution.Agent,
-		User:      UserFrom(ctx).ID,
-		Workspace: WorkspaceName(organisation, WorkspaceFrom(ctx)),
-		Project:   ProjectFrom(ctx),
+		Parent:            organisation,
+		Agent:             rp.attribution.Agent,
+		User:              UserFrom(ctx).ID,
+		Workspace:         WorkspaceName(organisation, WorkspaceFrom(ctx)),
+		Project:           ProjectFrom(ctx),
+		RequestedProvider: requestedProvider,
+		RequestedModel:    requestedModel,
 	})
 	if err != nil {
 		rp.recorder.NoteDecisionError()
-		return true
+		return out
 	}
 	switch resp.GetDecision() {
 	case governancepb.DecideResponse_NOTIFY:
 		rp.recorder.NoteNotified()
 	case governancepb.DecideResponse_DENY:
 		rp.recorder.NoteDenied()
-		return false
+		out.proceed = false
+	case governancepb.DecideResponse_DOWNGRADE:
+		rp.recorder.NoteDowngraded()
+		out.replacementProvider = resp.GetReplacementProvider()
+		out.replacementModel = resp.GetReplacementModel()
 	}
-	return true
+	return out
 }
 
 // recordDenied files a refused call. Nothing was spent, but a refusal still has to be countable.
