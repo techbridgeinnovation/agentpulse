@@ -5,7 +5,7 @@ go 1.26.6
 replace github.com/techbridgeinnovation/agentpulse/recorder => ../
 
 require (
-	github.com/techbridgeinnovation/agentpulse/recorder v0.0.0-00010101000000-000000000000
+	github.com/techbridgeinnovation/agentpulse/recorder v0.1.0
 	google.golang.org/adk/v2 v2.0.0
 	google.golang.org/genai v1.71.0
 	google.golang.org/protobuf v1.36.12
