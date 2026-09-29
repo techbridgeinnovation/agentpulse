@@ -82,9 +82,9 @@ Every method is a GET. The question goes in the query string — a dimension rep
 
 ## What you can group by
 
-`workspace` · `project` · `agent` · `model` · `provider` · `user` · `caller_service` · `caller_component` · `skill` · `tool` · `status` · `error_code` · `error_class` · `kind` · `date` · `hour`
+`workspace` · `project` · `agent` · `model` · `provider` · `user` · `caller_service` · `caller_component` · `skill` · `tool` · `status` · `error_code` · `error_class` · `kind` · `agent_kind` · `date` · `hour`
 
-`date` and `hour` are UTC. `kind` is `model`, `tool` or `call`. An empty `groupBy` returns a single total for the window.
+`date` and `hour` are UTC. `kind` is `model`, `tool` or `call`. `agent_kind` is `agent` or `service`, from how each was listed; one never listed is an agent. An empty `groupBy` returns a single total for the window.
 
 `error_code` is what the provider called a failure and `error_class` is what every provider's name for it collapses to, so `RESOURCE_EXHAUSTED`, `rate_limit_error` and `HTTP_429` are one row of `ERROR_CLASS_RATE_LIMITED` rather than three rows of nothing in particular. Group on the class to count failures, and read the code to look one up.
 
@@ -133,7 +133,7 @@ Every method, parameter and field is in the [API reference](/docs/reference), ge
 
 Join `ListUsers` against the identifiers your rows carry, or resolve them against your own user table.
 
-`ListUsers` holds only what your agents have sent, through the recorder's `recorder.User{ID, Name, Email}`. An organisation that sends nothing sees identifiers, and that is correct rather than broken.
+`ListUsers` holds only what your agents have sent, through the recorder's `recorder.User{ID, Name, Email}` in Go or `agentpulse.User(id, name, email)` in Python. An organisation that sends nothing sees identifiers, and that is correct rather than broken.
 
 ## Limits
 

@@ -1,6 +1,7 @@
 """The plugin in a real Agent Development Kit run, with a scripted model in place of a provider. Skipped where the framework is not installed."""
 
 import asyncio
+import importlib.metadata
 
 import pytest
 
@@ -121,6 +122,11 @@ def test_a_turn_is_one_record_per_model_call_and_per_tool_call():
     assert rp.recorder.stats().panicked == 0
 
 
+def test_every_record_names_the_framework_and_the_version_installed():
+    sink, _, _, _, _ = run([calls("lookup", city="Nairobi"), text("done")])
+    assert {(a.framework, a.framework_version) for a in sink.activities} == {("google/adk-python", importlib.metadata.version("google-adk"))}
+
+
 def test_the_person_and_tenant_the_product_set_win_over_the_framework_user():
     sink, _, _, _, _ = run([text("done")], scope={"request": "req-1", "user": agentpulse.User("u-42", "Ada"), "workspace": "acme"})
     [a] = sink.activities
@@ -185,6 +191,7 @@ def test_a_denied_call_never_reaches_the_model_and_the_user_reads_the_product_wo
     [a] = sink.activities
     assert (a.status, a.model, a.caller_component) == (_wire.STATUS_DENIED, "gemini-2.5-pro", "researcher")
     assert rp.recorder.stats().denied == 1
+    assert (a.framework, a.framework_version) == ("google/adk-python", importlib.metadata.version("google-adk"))
 
 
 def test_a_downgrade_changes_the_model_the_framework_sends():

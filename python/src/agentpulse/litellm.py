@@ -26,7 +26,7 @@ from .adk import _InFlight
 from .clients import region_of
 from .context import User, scope
 from .failure import blocked_finish, truncated_finish
-from .report import Reporter, _Framework
+from .report import Reporter, _Framework, _installed_version
 from .usage import FORMAT_LITELLM, reported_from, reported_quantities
 
 # LiteLLM's name for who serves a call, as the rate card names who bills for it. A provider not listed is billed under its own name upper-cased, so a provider nobody has priced yet is recorded and visible rather than filed under someone else.
@@ -40,6 +40,7 @@ _BILLED_BY = {
     "perplexity": "PERPLEXITY",
 }
 
+FRAMEWORK = "BerriAI/litellm"
 DENIED_TYPE = "agentpulse_denied"
 DEFAULT_DENIED_MESSAGE = "This request was declined because it would exceed a configured spending limit."
 
@@ -136,6 +137,8 @@ def _build_callback_class() -> type:
                     request=_str(payload.get("trace_id")) or _str(kwargs.get("litellm_call_id")),
                     session=_str(payload.get("session_id")),
                     user=user_id,
+                    name=FRAMEWORK,
+                    version=_installed_version("litellm"),
                 )
                 component = _str(metadata.get("agentpulse_component")) or _str(metadata.get("user_api_key_alias")) or _str(payload.get("call_type")) or "litellm"
                 duration = (end_time - start_time).total_seconds() if isinstance(start_time, datetime) and isinstance(end_time, datetime) else 0.0
@@ -191,7 +194,7 @@ def _build_callback_class() -> type:
                     model,
                     provider=_provider_of(model) or self._reporter.attribution.billed_by,
                     component=_str(metadata.get("agentpulse_component")) or "litellm",
-                    framework=_Framework(request=_str(metadata.get("agentpulse_request")), user=user_id),
+                    framework=_Framework(request=_str(metadata.get("agentpulse_request")), user=user_id, name=FRAMEWORK, version=_installed_version("litellm")),
                 )
             return verdict, metadata
 

@@ -17,7 +17,7 @@ from typing import Any, Callable
 from . import _wire
 from .context import current_component, current_request
 from .failure import blocked_finish
-from .report import Reporter, _Framework, _user_id
+from .report import Reporter, _Framework, _installed_version, _user_id
 from .usage import FORMAT_VERTEX, reported_from_genai, reported_quantities
 
 # What a caller sees when governance answers DENY and no message was given. Generic on purpose: the words a product's user reads on a refusal are product copy this library has no basis to guess.
@@ -80,6 +80,9 @@ def _tool_key(ctx: Any, name: str) -> tuple:
     return ("tool", getattr(ctx, "invocation_id", ""), name)
 
 
+FRAMEWORK = "google/adk-python"
+
+
 def _framework(ctx: Any) -> _Framework:
     session = getattr(ctx, "session", None)
     return _Framework(
@@ -88,6 +91,8 @@ def _framework(ctx: Any) -> _Framework:
         user=getattr(ctx, "user_id", "") or "",
         # The agent the framework is running, on tool calls as on model calls, so a tool is filed under the sub-agent that ran it.
         agent=getattr(ctx, "agent_name", "") or "",
+        name=FRAMEWORK,
+        version=_installed_version("google-adk"),
     )
 
 

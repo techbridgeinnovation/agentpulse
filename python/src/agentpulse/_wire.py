@@ -158,6 +158,8 @@ class Activity:
     reported_error: list[ReportedField] = field(default_factory=list)
     sub_agent: str = ""
     observed_as: int = 0
+    framework: str = ""
+    framework_version: str = ""
 
     def copy(self) -> "Activity":
         return dataclasses.replace(
@@ -214,6 +216,8 @@ class Activity:
         parts.append(_integer(45, self.observed_as))
         parts.append(_string(46, self.sub_agent))
         parts.append(_string(48, self.region))
+        parts.append(_string(49, self.framework))
+        parts.append(_string(50, self.framework_version))
         return b"".join(parts)
 
 

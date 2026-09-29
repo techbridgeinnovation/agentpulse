@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // fakeToolContext stands in for what the framework hands a tool callback: a

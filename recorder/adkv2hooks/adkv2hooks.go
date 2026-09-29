@@ -22,9 +22,9 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -33,7 +33,7 @@ import (
 // path. This is a recorder-side bound chosen for that reason, not a
 // governance service SLO. Kept identical to adkhooks' own constant so the
 // two integrations behave the same by default.
-const defaultDecideTimeout = 500 * time.Millisecond
+const defaultDecideTimeout = 1500 * time.Millisecond
 
 // DefaultDeniedMessage is what a caller sees on a DENY verdict when
 // Options.DeniedMessage is empty. Generic on purpose: the actual words a
@@ -124,6 +124,14 @@ type Options struct {
 	DeniedMessage string
 }
 
+// framework is the framework these hooks run in, recorded so its news can reach the teams that use it.
+const framework = "google/adk-go"
+
+// frameworkVersion is the ADK release built into the agent.
+func frameworkVersion() string {
+	return recorder.ModuleVersion("google.golang.org/adk/v2")
+}
+
 func (o Options) region() string {
 	if o.Region != "" {
 		return o.Region
@@ -205,24 +213,26 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 		reported := recorder.ReportedErrorFor(callErr, opts.billedBy())
 
 		activity := &pb.Activity{
-			Agent:           opts.Agent,
-			Request:         requestOf(ctx),
-			Session:         ctx.SessionID(),
-			User:            userOf(r, ctx),
-			CallerService:   opts.Service,
-			ObservedAs:      pb.Agent_AGENT,
-			SubAgent:        ctx.AgentName(),
-			CallerComponent: componentOf(ctx),
-			Skill:           opts.Skill,
-			Project:         recorder.ProjectFrom(ctx),
-			Model:           modelOf(ctx, response, opts),
-			BilledBy:        opts.billedBy(),
-			Region:          opts.region(),
-			Status:          statusOf(response, callErr),
-			ErrorCode:       errorCodeOf(response, callErr),
-			ErrorFormat:     reported.Format,
-			ReportedError:   reported.Fields,
-			OccurredAt:      timestamppb.Now(),
+			Agent:            opts.Agent,
+			Request:          requestOf(ctx),
+			Session:          ctx.SessionID(),
+			User:             userOf(r, ctx),
+			CallerService:    opts.Service,
+			ObservedAs:       pb.Agent_AGENT,
+			SubAgent:         ctx.AgentName(),
+			CallerComponent:  componentOf(ctx),
+			Skill:            opts.Skill,
+			Project:          recorder.ProjectFrom(ctx),
+			Model:            modelOf(ctx, response, opts),
+			BilledBy:         opts.billedBy(),
+			Region:           opts.region(),
+			Framework:        framework,
+			FrameworkVersion: frameworkVersion(),
+			Status:           statusOf(response, callErr),
+			ErrorCode:        errorCodeOf(response, callErr),
+			ErrorFormat:      reported.Format,
+			ReportedError:    reported.Fields,
+			OccurredAt:       timestamppb.Now(),
 		}
 		applyUsage(activity, response.UsageMetadata)
 
@@ -246,22 +256,24 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 		status, code := toolOutcome(r, opts, name, result, callErr)
 
 		r.RecordIn(ctx, &pb.Activity{
-			Agent:           opts.Agent,
-			Request:         requestOf(ctx),
-			Session:         ctx.SessionID(),
-			User:            userOf(r, ctx),
-			CallerService:   opts.Service,
-			ObservedAs:      pb.Agent_AGENT,
-			SubAgent:        ctx.AgentName(),
-			CallerComponent: "tool:" + name,
-			Tool:            name,
-			Skill:           opts.Skill,
-			Project:         recorder.ProjectFrom(ctx),
-			BilledBy:        opts.billedBy(),
-			Region:          opts.region(),
-			Status:          status,
-			ErrorCode:       code,
-			OccurredAt:      timestamppb.Now(),
+			Agent:            opts.Agent,
+			Request:          requestOf(ctx),
+			Session:          ctx.SessionID(),
+			User:             userOf(r, ctx),
+			CallerService:    opts.Service,
+			ObservedAs:       pb.Agent_AGENT,
+			SubAgent:         ctx.AgentName(),
+			CallerComponent:  "tool:" + name,
+			Tool:             name,
+			Skill:            opts.Skill,
+			Project:          recorder.ProjectFrom(ctx),
+			BilledBy:         opts.billedBy(),
+			Region:           opts.region(),
+			Framework:        framework,
+			FrameworkVersion: frameworkVersion(),
+			Status:           status,
+			ErrorCode:        code,
+			OccurredAt:       timestamppb.Now(),
 		})
 		return nil, nil
 	}
@@ -308,7 +320,7 @@ func AfterAgent(r *recorder.Recorder, _ Options) agent.AfterAgentCallback {
 // returned — so the same cache is reused for every model call this agent
 // makes for the rest of its process lifetime.
 func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallback {
-	decider := opts.Decider
+	decider := recorder.RememberRefusals(opts.Decider)
 	if decider != nil && opts.DecideCacheTTL > 0 {
 		decider = recorder.NewCachingDecider(decider, opts.DecideCacheTTL)
 	}
@@ -443,20 +455,22 @@ func deniedResponse(opts Options) *adkmodel.LLMResponse {
 // recorded.
 func recordDenied(r *recorder.Recorder, ctx agent.Context, opts Options) {
 	r.RecordIn(ctx, &pb.Activity{
-		Agent:           opts.Agent,
-		Request:         requestOf(ctx),
-		Session:         ctx.SessionID(),
-		User:            userOf(r, ctx),
-		CallerService:   opts.Service,
-		ObservedAs:      pb.Agent_AGENT,
-		SubAgent:        ctx.AgentName(),
-		CallerComponent: componentOf(ctx),
-		Skill:           opts.Skill,
-		Project:         recorder.ProjectFrom(ctx),
-		BilledBy:        opts.billedBy(),
-		Region:          opts.region(),
-		Status:          pb.Activity_DENIED,
-		OccurredAt:      timestamppb.Now(),
+		Agent:            opts.Agent,
+		Request:          requestOf(ctx),
+		Session:          ctx.SessionID(),
+		User:             userOf(r, ctx),
+		CallerService:    opts.Service,
+		ObservedAs:       pb.Agent_AGENT,
+		SubAgent:         ctx.AgentName(),
+		CallerComponent:  componentOf(ctx),
+		Skill:            opts.Skill,
+		Project:          recorder.ProjectFrom(ctx),
+		BilledBy:         opts.billedBy(),
+		Region:           opts.region(),
+		Framework:        framework,
+		FrameworkVersion: frameworkVersion(),
+		Status:           pb.Activity_DENIED,
+		OccurredAt:       timestamppb.Now(),
 	})
 }
 

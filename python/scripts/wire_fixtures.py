@@ -61,6 +61,8 @@ FULL_ACTIVITY = {
     "provider_cost_micros": 1500,
     "error_format": "ANTHROPIC",
     "reported_error": [{"name": "http_status", "value": "429"}, {"name": "type", "value": "rate_limit_error"}],
+    "framework": "google/adk-python",
+    "framework_version": "1.15.0",
 }
 
 UNICODE_ACTIVITY = {"agent": "organisations/acme/agents/é", "request": "请求-𝄞", "occurred_at_ns": 1_000_000_000}

@@ -372,6 +372,11 @@ type Activity struct {
 	//
 	// Empty or `global` is the provider's default. Recorded because a regional endpoint or a data-residency region is charged a premium, about a tenth more on Vertex and OpenAI.
 	Region string `protobuf:"bytes,48,opt,name=region,proto3" json:"region,omitempty"`
+	// The agent framework or SDK that made the call and its version, e.g. `google/adk-go` and `v1.7.0`, as the recorder observed it.
+	//
+	// Empty where the call was reported directly. Recorded so news about a framework can be shown to the teams that run it.
+	Framework        string `protobuf:"bytes,49,opt,name=framework,proto3" json:"framework,omitempty"`
+	FrameworkVersion string `protobuf:"bytes,50,opt,name=framework_version,json=frameworkVersion,proto3" json:"framework_version,omitempty"`
 	// What the provider itself said the call cost, in millionths of a US dollar.
 	//
 	// Where a provider returns a price there is no reason to estimate one over the top of it. Zero where the provider said nothing, which is all but one of them today.
@@ -695,6 +700,20 @@ func (x *Activity) GetCacheWriteTtlSeconds() int32 {
 func (x *Activity) GetRegion() string {
 	if x != nil {
 		return x.Region
+	}
+	return ""
+}
+
+func (x *Activity) GetFramework() string {
+	if x != nil {
+		return x.Framework
+	}
+	return ""
+}
+
+func (x *Activity) GetFrameworkVersion() string {
+	if x != nil {
+		return x.FrameworkVersion
 	}
 	return ""
 }
@@ -2379,9 +2398,7 @@ type PriceActivitiesAsResponse struct {
 	UnpricedCount int64 `protobuf:"varint,4,opt,name=unpriced_count,json=unpricedCount,proto3" json:"unpriced_count,omitempty"`
 	// The largest prompt in the set, in tokens.
 	//
-	// A model whose context window is smaller than this could not have served the window at all. No
-	// rate card states a context window, so this is the figure that lets a reader judge it rather
-	// than a claim this service makes.
+	// A model whose context window is smaller than this could not have served the window at all. Compare it with `Model.max_input_tokens`.
 	MaxPromptTokens int64 `protobuf:"varint,5,opt,name=max_prompt_tokens,json=maxPromptTokens,proto3" json:"max_prompt_tokens,omitempty"`
 	// False when the window held more activities than one read could reprice, so a partial answer is
 	// never read as a whole one.
@@ -2466,7 +2483,7 @@ var File_techbridge_ap_metering_v1_activity_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\n" +
-	"(techbridge/ap/metering/v1/activity.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a%techbridge/ap/metering/v1/agent.proto\"\xbd\x16\n" +
+	"(techbridge/ap/metering/v1/activity.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a%techbridge/ap/metering/v1/agent.proto\"\x88\x17\n" +
 	"\bActivity\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x18\n" +
@@ -2492,7 +2509,9 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\x0ereported_usage\x18& \x03(\v2+.techbridge.ap.metering.v1.ReportedQuantityR\rreportedUsage\x12!\n" +
 	"\fservice_tier\x18' \x01(\tR\vserviceTier\x125\n" +
 	"\x17cache_write_ttl_seconds\x18( \x01(\x05R\x14cacheWriteTtlSeconds\x12\x16\n" +
-	"\x06region\x180 \x01(\tR\x06region\x120\n" +
+	"\x06region\x180 \x01(\tR\x06region\x12\x1c\n" +
+	"\tframework\x181 \x01(\tR\tframework\x12+\n" +
+	"\x11framework_version\x182 \x01(\tR\x10frameworkVersion\x120\n" +
 	"\x14provider_cost_micros\x18) \x01(\x03R\x12providerCostMicros\x128\n" +
 	"\x15estimated_cost_micros\x18\x11 \x01(\x03B\x04\xe2A\x01\x03R\x13estimatedCostMicros\x122\n" +
 	"\x12billed_cost_micros\x18\x12 \x01(\x03B\x04\xe2A\x01\x03R\x10billedCostMicros\x120\n" +

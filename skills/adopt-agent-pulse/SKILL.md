@@ -85,6 +85,8 @@ recording := adkv2hooks.Options{
 	Agent:   agent,
 	Service: "<service-name>",
 	Model:   "<model the agent is configured with>",
+	// Asks the organisation's budgets before every model call, so a limit stops calls as well as counting them. Leave it out and budgets only count.
+	Decider: recorder.NewGRPCDecider(conn),
 }
 
 agentConfig := llmagent.Config{
@@ -260,7 +262,7 @@ The same rules as Go: `id` is bare, the workspace is the bare tenant identifier,
 **An agent built on Google ADK.** Register the plugin on the app:
 
 ```python
-app = App(name="<app>", root_agent=agent, plugins=[reporter.adk_plugin(denied_message="<the words your user reads when a budget refuses a call>")])
+app = App(name="<app>", root_agent=agent, plugins=[reporter.governed().adk_plugin(denied_message="<the words your user reads when a budget refuses a call>")])
 ```
 
 **Code that calls a model client directly.** Instrument each client once, where it is built:

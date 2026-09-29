@@ -300,6 +300,8 @@ def test_a_gemini_call_is_recorded_under_the_rest_names(provider):
     [a] = recorded(rp, sink)
     assert (a.model, a.billed_by, a.usage_format, a.service_tier) == ("gemini-2.5-pro-002", "VERTEX_AI", "VERTEX", "ON_DEMAND")
     assert usage(a) == {"promptTokenCount": 1000, "cachedContentTokenCount": 800, "candidatesTokenCount": 200, "thoughtsTokenCount": 150, "totalTokenCount": 1350, "promptTokensDetails.AUDIO": 300}
+    # A client called directly has no framework around it.
+    assert (a.framework, a.framework_version) == ("", "")
 
 
 def test_a_gemini_prompt_refused_before_the_model_saw_it_is_a_failure(provider):
