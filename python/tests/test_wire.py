@@ -63,3 +63,9 @@ def test_reads_a_rate_card_page_the_official_runtime_wrote(case):
     units = [PriceableUnit.decode(v) for n, v in _wire.fields(bytes.fromhex(case["hex"])) if n == 1]
     wanted = [{k: v for k, v in u.items() if k not in ("display_name", "rate_card_version")} for u in case["fields"]["priceable_units"]]
     assert [PriceableUnit(**w) for w in wanted] == units
+
+
+def test_the_framework_and_its_version_are_fields_49_and_50():
+    # Keys 49 << 3 | 2 = 394 and 50 << 3 | 2 = 402, written as the varints 8a 03 and 92 03.
+    assert _wire.Activity(framework="f", framework_version="1").encode() == b"\x8a\x03\x01f\x92\x03\x011"
+    assert _wire.Activity().encode() == b""

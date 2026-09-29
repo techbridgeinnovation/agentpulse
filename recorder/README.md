@@ -56,7 +56,8 @@ rec := recorder.New(recorder.Config{
     Sinks: []recorder.Sink{recorder.NewGRPCSink(conn, organisation)},
 })
 
-opts := adkhooks.Options{Agent: agentName, Service: "atlas-agent"}
+// Decider makes budgets stop calls as well as count them; leave it out and they only count.
+opts := adkhooks.Options{Agent: agentName, Service: "atlas-agent", Decider: recorder.NewGRPCDecider(conn)}
 // register adkhooks.BeforeModel, adkhooks.AfterModel, adkhooks.BeforeTool, adkhooks.AfterTool and adkhooks.AfterAgent on the agent
 ```
 

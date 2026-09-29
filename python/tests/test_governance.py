@@ -347,3 +347,12 @@ def test_a_decision_that_hangs_holds_up_no_other_past_its_own_timeout():
         assert time.monotonic() - started < 1.0
     finally:
         release.set()
+
+
+def test_a_refusal_is_repeated_when_governance_does_not_answer():
+    answers = Answers(_wire.DECISION_DENY)
+    rp, _ = governed(answers)
+    assert not rp.decide(model="m").proceed
+    answers.error = TimeoutError("slow")
+    assert not rp.decide(model="m").proceed
+    assert rp.decide(model="another").proceed

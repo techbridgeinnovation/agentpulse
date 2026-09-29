@@ -147,7 +147,7 @@ A verdict is reused for `cache_ttl` seconds, 30 by default, for exactly the same
 
 A governed reporter asking governance through the gateway also follows its stream of changed budgets, started by the first decision, and drops the verdicts a change covers at once rather than when they expire. It clears every tenant's verdicts within the changed scope, which errs towards asking again. The stream is an improvement on the cache's own lifetime and never a guarantee: it reopens on its own when it ends, backs off while governance is unreachable, and without it a changed budget still arrives within `cache_ttl`. `follow_changes=False` turns it off.
 
-A call waits at most `timeout` seconds, half a second by default, for an answer. That wait is enforced by no longer waiting rather than by socket timeouts, which bound each read and write on their own and not the whole exchange.
+A call waits at most `timeout` seconds, a second and a half by default, for an answer, and a call governance refused within the hour is refused again when no answer comes in time. That wait is enforced by no longer waiting rather than by socket timeouts, which bound each read and write on their own and not the whole exchange.
 
 ## The running total
 

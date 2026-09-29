@@ -20,7 +20,10 @@ from .gateway import Gateway
 _DECIDE = "/techbridge.ap.governance.v1.DecisionsService/Decide"
 
 # How long a call waits for an answer before it goes ahead without one.
-DEFAULT_DECIDE_TIMEOUT = 0.5
+DEFAULT_DECIDE_TIMEOUT = 1.5
+
+# How long, in seconds, a refusal is still honoured when governance does not answer. A budget that ran out rarely comes back within the hour, and a check slowed by governance waking from idle must not let the call through.
+REFUSAL_WINDOW = 3600.0
 
 # How long, in seconds, a question that just failed is not asked again. Without it a governance that is down costs every call the whole timeout for as long as the outage lasts, which is the host being slowed by the thing that is meant to watch it; with it, an outage costs one timeout per question per interval.
 DEFAULT_FAILURE_BACKOFF = 5.0
@@ -286,8 +289,7 @@ def _bounded(fn: Callable[[], _wire.DecideResponse], timeout: float) -> _wire.De
     return response
 
 
-def ask(decider: Decider, request: _wire.DecideRequest, timeout: float) -> Verdict:
-    """Asks `decider`, waiting no longer than `timeout` seconds. Raises on any failure, a timeout included."""
+def _answer(decider: Decider, request: _wire.DecideRequest, timeout: float) -> _wire.DecideResponse:
     cached = getattr(decider, "cached", None)
     response = cached(request) if callable(cached) else None
     if response is None:
@@ -298,6 +300,40 @@ def ask(decider: Decider, request: _wire.DecideRequest, timeout: float) -> Verdi
             if callable(note_failure):
                 note_failure(request)
             raise
+    return response
+
+
+# Refusals governance gave in this process, by question, for answering when it cannot.
+_refused: dict[_Key, float] = {}
+_refused_lock = threading.Lock()
+
+
+def _remember(request: _wire.DecideRequest, response: _wire.DecideResponse) -> None:
+    key = _key_of(request)
+    with _refused_lock:
+        if response.decision == _wire.DECISION_DENY:
+            if len(_refused) >= _MAX_CACHED_VERDICTS:
+                _refused.clear()
+            _refused[key] = time.monotonic()
+        else:
+            _refused.pop(key, None)
+
+
+def _refused_lately(request: _wire.DecideRequest) -> bool:
+    with _refused_lock:
+        at = _refused.get(_key_of(request))
+    return at is not None and time.monotonic() - at < REFUSAL_WINDOW
+
+
+def ask(decider: Decider, request: _wire.DecideRequest, timeout: float) -> Verdict:
+    """Asks `decider`, waiting no longer than `timeout` seconds. Raises on any failure, a timeout included, unless governance refused the same question within the hour, which is then refused again."""
+    try:
+        response = _answer(decider, request, timeout)
+    except BaseException:
+        if _refused_lately(request):
+            return Verdict(decision=DENY, reason="refused within the hour and governance did not answer in time")
+        raise
+    _remember(request, response)
     return Verdict(
         decision=_NAMES.get(response.decision, UNDECIDED),
         reason=response.reason,

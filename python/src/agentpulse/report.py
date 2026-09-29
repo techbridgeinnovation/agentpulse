@@ -7,6 +7,8 @@ Neither a model call nor a tool call states a cost. A service says what happened
 
 from __future__ import annotations
 
+import functools
+import importlib.metadata
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
@@ -89,6 +91,9 @@ class ModelCall:
     reported_error: ReportedFailure | None = None
     # Costs on this call that tokens do not describe.
     charges: Sequence[_wire.Charge] = field(default_factory=tuple)
+    # The agent framework or SDK that made the call and its version, e.g. "google/adk-python" and "1.15.0", where the caller knows them.
+    framework: str = ""
+    framework_version: str = ""
 
 
 @dataclass
@@ -99,16 +104,30 @@ class ToolCall:
     duration: float = 0.0
     error: BaseException | None = None
     charges: Sequence[_wire.Charge] = field(default_factory=tuple)
+    framework: str = ""
+    framework_version: str = ""
 
 
 @dataclass(frozen=True)
 class _Framework:
-    """What an agent framework knows about a call, used where the product set nothing on the context: the framework's own id for the turn, its session, its user, and the agent inside the run that made the call."""
+    """What an agent framework knows about a call, used where the product set nothing on the context: the framework's own id for the turn, its session, its user, the agent inside the run that made the call, and which framework it is at which version."""
 
     request: str = ""
     session: str = ""
     user: str = ""
     agent: str = ""
+    name: str = ""
+    version: str = ""
+
+
+@functools.lru_cache(maxsize=None)
+def _installed_version(distribution: str) -> str:
+    """The installed version of a package, read once, or empty when it cannot be read."""
+    try:
+        version = importlib.metadata.version(distribution)
+    except Exception:
+        return ""
+    return version if isinstance(version, str) else ""
 
 
 def _user_id(framework: _Framework | None) -> str:
@@ -279,6 +298,8 @@ class Reporter:
             activity.region = call.region if isinstance(call.region, str) else ""
             activity.provider_cost_micros = int(call.cost_micros)
             activity.cache_write_ttl_seconds = int(call.cache_write_ttl)
+            activity.framework = call.framework if isinstance(call.framework, str) else ""
+            activity.framework_version = call.framework_version if isinstance(call.framework_version, str) else ""
 
             # A split the caller made is carried as given, beside the provider's own counts where both are present, which is the cheapest way to prove the server reads a convention the way the caller already did.
             if call.tokens is not None and not call.tokens.empty():
@@ -310,6 +331,8 @@ class Reporter:
         try:
             activity = self._activity(f"tool:{call.tool}", call.duration, call.error, call.charges)
             activity.tool = call.tool
+            activity.framework = call.framework if isinstance(call.framework, str) else ""
+            activity.framework_version = call.framework_version if isinstance(call.framework_version, str) else ""
         except Exception:
             self.recorder._note("panicked")
             return
@@ -330,6 +353,8 @@ class Reporter:
             sub_agent=framework.agent if framework else "",
             # Seen through an agent framework's callbacks, or made directly from the service's own code: what an agent nobody registered is listed as. Only an agent framework names the agent it is running; LiteLLM hands over who a call was for but calls the model directly.
             observed_as=_wire.KIND_AGENT if framework and framework.agent else _wire.KIND_SERVICE,
+            framework=framework.name if framework else "",
+            framework_version=framework.version if framework else "",
             skill=self.attribution.skill,
             billed_by=self.attribution.billed_by or PROVIDER_VERTEX_AI,
             duration_ms=max(0, int(duration * 1000)),

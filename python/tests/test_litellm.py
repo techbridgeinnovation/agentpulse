@@ -1,6 +1,7 @@
 """Calls made through the real LiteLLM, SDK and proxy hook, against a provider on this machine. Skipped where LiteLLM is not installed."""
 
 import asyncio
+import importlib.metadata
 
 import pytest
 
@@ -77,6 +78,7 @@ def test_an_sdk_call_is_recorded_in_litellm_convention_under_the_scope_it_was_ma
     assert (usage["prompt_tokens"], usage["completion_tokens"], usage["prompt_tokens_details.cached_tokens"]) == (100, 50, 80)
     assert sink.batches[0][0] == "acme"
     assert "SECRET" not in repr(sink.batches)
+    assert (a.framework, a.framework_version) == ("BerriAI/litellm", importlib.metadata.version("litellm"))
 
 
 def test_an_anthropic_call_through_litellm_is_priced_with_both_cached_parts_taken_out(provider, recorded):
@@ -156,6 +158,7 @@ def test_the_proxy_refuses_a_call_a_budget_has_run_out_on_before_forwarding_it()
     rp.recorder.flush(timeout=2)
     [a] = sink.activities
     assert a.status == _wire.STATUS_DENIED and sink.batches[0][0] == "acme"
+    assert (a.framework, a.framework_version) == ("BerriAI/litellm", importlib.metadata.version("litellm"))
 
 
 def test_the_proxy_forwards_a_downgrade_s_replacement_and_otherwise_the_call_as_asked():

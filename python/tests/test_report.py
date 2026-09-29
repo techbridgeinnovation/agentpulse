@@ -186,3 +186,37 @@ def test_a_model_call_carries_the_region_the_caller_named():
     rp.model_call(ModelCall(model="gemini-2.5-pro"))
     named, unnamed = recorded(rp, sink)
     assert (named.region, unnamed.region) == ("europe-west4", "")
+
+
+def test_a_call_reported_directly_names_no_framework_unless_the_caller_does():
+    rp, sink = reporter()
+    rp.model_call(ModelCall(model="m"))
+    rp.model_call(ModelCall(model="m", framework="acme/agents", framework_version="2.1.0"))
+    rp.tool_call(ToolCall(tool="search", framework="acme/agents", framework_version="2.1.0"))
+    rp.model_call(ModelCall(model="m", framework=7, framework_version=None))  # type: ignore[arg-type]
+    plain, named, tool, odd = recorded(rp, sink)
+    assert (plain.framework, plain.framework_version) == ("", "")
+    assert (named.framework, named.framework_version) == ("acme/agents", "2.1.0")
+    assert (tool.framework, tool.framework_version) == ("acme/agents", "2.1.0")
+    assert (odd.framework, odd.framework_version) == ("", "")
+
+
+def test_a_framework_version_that_cannot_be_read_is_left_empty_and_read_once(monkeypatch):
+    import importlib.metadata
+
+    from agentpulse.report import _installed_version
+
+    asked = []
+
+    def version(distribution):
+        asked.append(distribution)
+        raise RuntimeError("broken metadata")
+
+    _installed_version.cache_clear()
+    monkeypatch.setattr(importlib.metadata, "version", version)
+    try:
+        assert _installed_version("not-installed-anywhere") == ""
+        assert _installed_version("not-installed-anywhere") == ""
+        assert asked == ["not-installed-anywhere"]
+    finally:
+        _installed_version.cache_clear()

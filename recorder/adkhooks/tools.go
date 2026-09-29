@@ -7,8 +7,8 @@ import (
 	"google.golang.org/adk/tool"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // runningTools holds when each tool call began, until the call ends and is recorded.

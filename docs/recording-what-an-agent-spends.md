@@ -35,7 +35,7 @@ Four settings. None has a default, and the recorder refuses to start without the
 | `AP_API_SECRET` | issued with the key, with **Write** ticked, shown once |
 | `AP_AGENT` | `organisations/<id>/agents/<name>`, a name of your choosing |
 
-The key is public and names the organisation it belongs to, so `recorder.OrganisationOfKey` reads the organisation off it and it is not a separate setting. The secret is the part that authenticates. The two are presented together and resolve only together.
+The key is public and names the organisation it belongs to, so the recorder reads the organisation off it and it is not a separate setting. The secret is the part that authenticates. The two are presented together and resolve only together.
 
 One key serves every agent in the organisation. A record naming a different organisation, or an agent outside it, is refused at the gateway rather than filed somewhere else. The gateway decides that from what the pair resolves to, never from what the key's name claims.
 
@@ -53,13 +53,22 @@ If your product has customers of its own, set the workspace on the request in th
 ctx = recorder.WithProject(recorder.WithWorkspace(ctx, "acme"), "matter-1183")
 ```
 
+```python
+with agentpulse.scope(workspace="acme", project="matter-1183"):
+    handle(request)
+```
+
 The workspace is the bare identifier, `acme`, not a full resource name. Create it once when the customer signs up, from the same code that creates the customer's own record. From then on every call in that request is filed under it, a read of `organisations/<id>/workspaces/acme` sees only that customer, and a read of `organisations/<id>` grouped by `workspace` is one row per customer.
 
 Neither is an argument at a model call site. A value a call site can choose is a value that can attribute one customer's spend to another.
 
 ## Which path applies
 
-**Built on Google ADK?** Register three callbacks and no call site changes.
+**Built on Google ADK?** Register the recorder's callbacks, three in Go and one plugin in Python, and no call site changes. Each model call and tool call is filed under the sub-agent that made it.
+
+```python
+app = App(name="atlas", root_agent=agent, plugins=[reporter.governed().adk_plugin()])
+```
 
 **Calling a model directly?** Instrument the client once, where it is built, and every call through it is recorded, including the ones written later:
 
@@ -71,7 +80,17 @@ anthropic.NewClient(option.WithMiddleware(reporter.AnthropicMiddleware())) // gi
 openai.NewClient(option.WithMiddleware(reporter.OpenAIMiddleware()))       // github.com/openai/openai-go, and Perplexity through it
 ```
 
-Each call is recorded under the user, workspace and project already on its context, and under the function in your code that made it. Name the part of your product instead with `recorder.WithComponent(ctx, "report_generation")` where several functions do one job or every call goes through one shared helper.
+```python
+reporter = agentpulse.connect(service="documents-service")
+
+OpenAI(http_client=reporter.openai_http_client())
+Anthropic(http_client=reporter.anthropic_http_client())
+genai.Client(http_options=reporter.genai_http_options())
+```
+
+In Python, LiteLLM is covered too: one line in the proxy's config, `callbacks: agentpulse.litellm_proxy.handler`, records every model behind it, and `litellm.callbacks = [reporter.litellm_callback()]` does the same for the SDK.
+
+Each call is recorded under the user, workspace and project already on its context, and under the function in your code that made it. Name the part of your product instead with `recorder.WithComponent(ctx, "report_generation")`, or `agentpulse.scope(component="report_generation")` in Python, where several functions do one job or every call goes through one shared helper.
 
 A few things the client cannot see for you:
 
@@ -86,9 +105,13 @@ Its spend counts against your organisation's and your customers' budgets like an
 reporter = reporter.Governed(recorder.Governance{Decider: recorder.NewGRPCDecider(conn)})
 ```
 
-A call a budget refuses is never sent, and your code sees an error `recorder.Denied` recognises. If governance cannot answer, the call goes ahead.
+```python
+reporter = agentpulse.connect(service="documents-service").governed()
+```
 
-Once it has recorded, open it from Agents and set **Listed as** to **Service**, so it is shown apart from your agents. Until then it is recorded exactly the same and listed as an agent.
+A call a budget refuses is never sent, and your code sees an error `recorder.Denied` recognises, or `agentpulse.denied(err)` in Python. If governance cannot answer, the call goes ahead. In Python, build the clients from the governed reporter.
+
+It is listed as a service rather than an agent on its own, because the recorder says which way it observed each call. An administrator can still change how it is listed from its page.
 
 For a provider none of these reach, a reporter records a call you describe yourself.
 
@@ -96,7 +119,10 @@ Both are in the adoption guide in the public repository, which is also a Claude 
 
 ```bash
 go get github.com/techbridgeinnovation/agentpulse/recorder
+pip install "techbridge-agentpulse @ git+https://github.com/techbridgeinnovation/agentpulse@python/v0.3.0#subdirectory=python"
 ```
+
+Each Python release is a `python/v<version>` tag on the [releases page](https://github.com/techbridgeinnovation/agentpulse/releases). Pin to the newest one; the Connect page names it.
 
 ## Who the work was for
 
@@ -110,11 +136,16 @@ ctx = recorder.WithUser(ctx, recorder.User{
 })
 ```
 
+```python
+with agentpulse.scope(user=agentpulse.User(id=claims.subject, name=claims.name, email=claims.email)):
+    handle(request)
+```
+
 The identifier goes on every record. The name and email go once per process to a directory, so a cost report can say who spent what without a name travelling on every call. Give only the identifier and the person is recorded but not named.
 
 ## Knowing it is working
 
-`rec.Stats()` reports what the recorder has done: recorded, delivered, dropped, failed. Log it on shutdown.
+`rec.Stats()` in Go, and `reporter.recorder.stats()` in Python, report what the recorder has done: recorded, delivered, dropped, failed. Log it on shutdown.
 
 `Dropped` above zero means the queue filled and cost data is incomplete — that counter cannot be turned off, because silent loss is worse than visible loss.
 

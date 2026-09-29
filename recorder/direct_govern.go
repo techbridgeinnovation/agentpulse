@@ -21,7 +21,7 @@ var ErrDenied = errors.New("agentpulse: the call was declined because it would e
 const deniedType = "agentpulse_denied"
 
 // defaultDirectDecideTimeout bounds how long a call waits for governance before it goes ahead without an answer.
-const defaultDirectDecideTimeout = 500 * time.Millisecond
+const defaultDirectDecideTimeout = 1500 * time.Millisecond
 
 // Governance is how an instrumented client asks whether a call may proceed.
 type Governance struct {
@@ -31,7 +31,7 @@ type Governance struct {
 	// CacheTTL, when positive, keeps each answer this long, so a service making many calls for one workspace asks once rather than every time.
 	CacheTTL time.Duration
 
-	// Timeout bounds how long a call waits for an answer. Zero is half a second. A call whose answer does not arrive in time goes ahead.
+	// Timeout bounds how long a call waits for an answer. Zero is a second and a half. A call whose answer does not arrive in time goes ahead, unless the same call was refused within the hour.
 	Timeout time.Duration
 }
 
@@ -47,9 +47,9 @@ func (rp *Reporter) Governed(g Governance) *Reporter {
 		return nil
 	}
 	governed := *rp
-	governed.decider = g.Decider
-	if g.Decider != nil && g.CacheTTL > 0 {
-		governed.decider = NewCachingDecider(g.Decider, g.CacheTTL)
+	governed.decider = RememberRefusals(g.Decider)
+	if governed.decider != nil && g.CacheTTL > 0 {
+		governed.decider = NewCachingDecider(governed.decider, g.CacheTTL)
 	}
 	governed.decideTimeout = g.Timeout
 	if governed.decideTimeout <= 0 {
