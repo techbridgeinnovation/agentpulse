@@ -99,6 +99,7 @@ class _Observed:
     failed: bool = False
     code: str = ""
     failure: ReportedFailure = field(default_factory=ReportedFailure)
+    region: str = ""
 
     def set_reported(self, usage: Any) -> None:
         # A streamed reply states its counts more than once, each a running total, so the last one stated is the one that stands.
@@ -266,6 +267,7 @@ class _Anthropic(_Protocol):
         o.finish = _str(field("stop_reason"))
         usage = field("usage")
         o.tier = _str(_dict(usage).get("service_tier"))
+        o.region = _str(_dict(usage).get("inference_geo")) or o.region
         o.set_reported(usage)
 
     def event(self, data, o):
@@ -277,6 +279,7 @@ class _Anthropic(_Protocol):
             o.model = _str(message.get("model")) or o.model
             o.set_reported(message.get("usage"))
             o.tier = _str(_dict(message.get("usage")).get("service_tier")) or o.tier
+            o.region = _str(_dict(message.get("usage")).get("inference_geo")) or o.region
         elif kind == "message_delta":
             o.finish = _str(_dict(e.get("delta")).get("stop_reason")) or o.finish
             o.set_reported(e.get("usage"))
@@ -360,6 +363,24 @@ class _GenAI(_Protocol):
 _PROTOCOLS: tuple[_Protocol, ...] = (_OpenAI(), _Anthropic(), _GenAI())
 
 
+def region_of(host: str, path: str) -> str:
+    """Where a call is processed, as its URL names it: a Vertex location, or an OpenAI data residency region. Empty where the URL does not say."""
+    try:
+        host = (host or "").lower()
+        path = path or ""
+        at = path.find("/locations/")
+        if at >= 0:
+            return path[at + len("/locations/") :].split("/", 1)[0].split(":", 1)[0]
+        for prefix, suffix in (("", "-aiplatform.googleapis.com"), ("aiplatform.", ".rep.googleapis.com"), ("", ".api.openai.com")):
+            if host.startswith(prefix) and host.endswith(suffix):
+                label = host[len(prefix) : -len(suffix)]
+                if label and "." not in label:
+                    return label
+    except Exception:
+        pass
+    return ""
+
+
 def _recognise(method: str, path: str) -> tuple[_Protocol | None, str]:
     for protocol in _PROTOCOLS:
         try:
@@ -374,8 +395,9 @@ def _recognise(method: str, path: str) -> tuple[_Protocol | None, str]:
 class _Call:
     """One model call in flight, recorded once: when the caller reads the reply to its end, closes it, or lets it go unread."""
 
-    def __init__(self, rp: "Reporter", protocol: _Protocol, context: contextvars.Context, component: str, billed_by: str, format: str, attempt: int, model: str):
+    def __init__(self, rp: "Reporter", protocol: _Protocol, context: contextvars.Context, component: str, billed_by: str, format: str, attempt: int, model: str, region: str = ""):
         self.rp = rp
+        self.region = region
         self.protocol = protocol
         self.context = context
         self.component = component
@@ -639,6 +661,7 @@ class _Transport:
                 protocol.format(request.url.path, billed_by),
                 _attempt(request.headers),
                 model,
+                region_of(request.url.host, request.url.path),
             )
             return request, call, None
         except SpendDenied:
@@ -824,6 +847,7 @@ def record_observed(rp: "Reporter", call: _Call, o: _Observed) -> None:
     activity.billed_by = call.billed_by
     activity.attempt = call.attempt
     activity.service_tier = o.tier
+    activity.region = o.region or call.region
     if o.reported:
         activity.usage_format = call.format
         activity.reported_usage = reported_quantities(o.reported)

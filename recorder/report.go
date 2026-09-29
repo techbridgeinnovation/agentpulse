@@ -131,6 +131,9 @@ type ModelCall struct {
 	// Stated by the caller for the same reason as the lifetime: the tier is chosen when the request is made and does not come back on the response. Batch is priced at around half, so a batched call recorded without it is charged about twice what it cost.
 	Tier string
 
+	// Region is where the call was processed, e.g. "us-central1", "us" or "eu". A regional endpoint or data-residency region is charged about a tenth more.
+	Region string
+
 	// Err is read for whether the call failed and for its code. The message is
 	// never recorded: a provider error routinely quotes the prompt back.
 	Err error
@@ -221,6 +224,7 @@ func (rp *Reporter) ModelCall(ctx context.Context, call ModelCall) {
 	activity.UsageFormat = call.Format
 	activity.ReportedUsage = reportedQuantities(call.Reported)
 	activity.ServiceTier = call.Tier
+	activity.Region = call.Region
 	activity.ProviderCostMicros = call.CostMicros
 	activity.CacheWriteTtlSeconds = int32(call.CacheWriteTTL.Seconds())
 

@@ -178,3 +178,11 @@ def test_a_call_says_whether_it_was_observed_from_an_agent_or_a_service():
     assert rp._activity("summary", 0.1, None, ()).observed_as == _wire.KIND_SERVICE
     # Field 45, a varint: the key is 45 << 3 = 360, written as e8 02.
     assert b"\xe8\x02\x02" in _wire.Activity(observed_as=_wire.KIND_SERVICE).encode()
+
+
+def test_a_model_call_carries_the_region_the_caller_named():
+    rp, sink = reporter()
+    rp.model_call(ModelCall(model="gemini-2.5-pro", region="europe-west4"))
+    rp.model_call(ModelCall(model="gemini-2.5-pro"))
+    named, unnamed = recorded(rp, sink)
+    assert (named.region, unnamed.region) == ("europe-west4", "")

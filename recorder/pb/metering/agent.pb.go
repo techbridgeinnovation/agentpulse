@@ -118,6 +118,10 @@ type Agent struct {
 	//
 	// Left unstated, an agent is listed as what its recorder observed it as, `Activity.observed_as`, and as `AGENT` where the recorder states nothing.
 	Kind Agent_Kind `protobuf:"varint,8,opt,name=kind,proto3,enum=techbridge.ap.metering.v1.Agent_Kind" json:"kind,omitempty"`
+	// The environment this agent's records that carry none are read as, e.g. `organisations/acme/environments/development`.
+	//
+	// For the records written before environments existed, and by a key issued for none: an administrator says where the agent actually ran, and its history reads that way from then on. It never overrides a record that carries an environment of its own, and it is applied when read, so changing it moves those records without rewriting any.
+	Environment string `protobuf:"bytes,9,opt,name=environment,proto3" json:"environment,omitempty"`
 	// Entity tag.
 	Etag string `protobuf:"bytes,97,opt,name=etag,proto3" json:"etag,omitempty"`
 	// When this agent was registered.
@@ -213,6 +217,13 @@ func (x *Agent) GetKind() Agent_Kind {
 		return x.Kind
 	}
 	return Agent_KIND_UNSPECIFIED
+}
+
+func (x *Agent) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
 }
 
 func (x *Agent) GetEtag() string {
@@ -528,7 +539,7 @@ var File_techbridge_ap_metering_v1_agent_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_metering_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"%techbridge/ap/metering/v1/agent.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xaf\x04\n" +
+	"%techbridge/ap/metering/v1/agent.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd1\x04\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12'\n" +
 	"\fdisplay_name\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\vdisplayName\x12\x1c\n" +
@@ -539,7 +550,8 @@ const file_techbridge_ap_metering_v1_agent_proto_rawDesc = "" +
 	"components\x18\x06 \x03(\tR\n" +
 	"components\x12\x14\n" +
 	"\x05tools\x18\a \x03(\tR\x05tools\x129\n" +
-	"\x04kind\x18\b \x01(\x0e2%.techbridge.ap.metering.v1.Agent.KindR\x04kind\x12\x18\n" +
+	"\x04kind\x18\b \x01(\x0e2%.techbridge.ap.metering.v1.Agent.KindR\x04kind\x12 \n" +
+	"\venvironment\x18\t \x01(\tR\venvironment\x12\x18\n" +
 	"\x04etag\x18a \x01(\tB\x04\xe2A\x01\x03R\x04etag\x12A\n" +
 	"\vcreate_time\x18b \x01(\v2\x1a.google.protobuf.TimestampB\x04\xe2A\x01\x03R\n" +
 	"createTime\x12A\n" +

@@ -1,6 +1,7 @@
 package recorder
 
 import (
+	"strings"
 	"time"
 
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
@@ -31,22 +32,31 @@ func (c *rateCard) priceOf(a *pb.Activity) int64 {
 		at = a.GetOccurredAt().AsTime()
 	}
 
-	var total int64
+	// One rate per kind, the most specific that applies, as metering chooses it. The card holds a standard, batch, priority, long-prompt and regional rate for the same tokens, and adding them all would count each token several times over.
+	billedBy := BilledByOf(a.GetBilledBy(), a.GetProvider()) //nolint:staticcheck // a record written before billed_by existed states its provider only in the enum
+	var best [8]*pb.PriceableUnit
 	for _, unit := range c.units {
-		if !inForce(unit, at) {
-			continue
-		}
-		if unit.GetProvider() != BilledByOf(a.GetBilledBy(), a.GetProvider()) { //nolint:staticcheck // a record written before billed_by existed states its provider only in the enum
-			continue
-		}
-		// An empty model on a rate means it applies whatever the model.
-		if unit.GetModel() != "" && unit.GetModel() != a.GetModel() {
+		if !inForce(unit, at) || !applies(unit, a, billedBy) {
 			continue
 		}
 		quantity, priced := quantityOf(a, unit.GetKind())
 		if !priced || quantity == 0 {
 			continue
 		}
+		k := int(unit.GetKind())
+		if k < 0 || k >= len(best) {
+			continue
+		}
+		if held := best[k]; held == nil || moreSpecific(unit, held) {
+			best[k] = unit
+		}
+	}
+	var total int64
+	for _, unit := range best {
+		if unit == nil {
+			continue
+		}
+		quantity, _ := quantityOf(a, unit.GetKind())
 		total += costOf(quantity, unit.GetUnitCostNanos())
 	}
 
@@ -64,6 +74,66 @@ func (c *rateCard) priceOf(a *pb.Activity) int64 {
 	}
 
 	return total
+}
+
+// applies mirrors metering's rule for whether a rate is one of the rates for a call.
+func applies(unit *pb.PriceableUnit, a *pb.Activity, billedBy string) bool {
+	if unit.GetProvider() != billedBy {
+		return false
+	}
+	// An empty model on a rate means it applies whatever the model.
+	if unit.GetModel() != "" && unit.GetModel() != a.GetModel() {
+		return false
+	}
+	if unit.GetServiceTier() != "" && unit.GetServiceTier() != a.GetServiceTier() {
+		return false
+	}
+	if int64(unit.GetMinPromptTokens()) > int64(a.GetPromptTokens())+int64(a.GetCachedTokens()) {
+		return false
+	}
+	if unit.GetMinCacheWriteTtlSeconds() > a.GetCacheWriteTtlSeconds() {
+		return false
+	}
+	if !inRegion(unit.GetRegion(), a.GetRegion()) {
+		return false
+	}
+	// Modality rates price quantities an activity does not split out, so none of them applies.
+	return unit.GetModality() == ""
+}
+
+// inRegion mirrors metering: an empty rate region is any region, REGIONAL is any region but the global default, and anything else must match.
+func inRegion(rate, call string) bool {
+	switch {
+	case rate == "":
+		return true
+	case strings.EqualFold(rate, "REGIONAL"):
+		return call != "" && !strings.EqualFold(call, "global")
+	default:
+		return strings.EqualFold(rate, call)
+	}
+}
+
+// moreSpecific mirrors metering's order for choosing between two matching rates.
+func moreSpecific(unit, held *pb.PriceableUnit) bool {
+	if named, wasNamed := unit.GetModel() != "", held.GetModel() != ""; named != wasNamed {
+		return named
+	}
+	if named, wasNamed := unit.GetServiceTier() != "", held.GetServiceTier() != ""; named != wasNamed {
+		return named
+	}
+	if unit.GetMinPromptTokens() != held.GetMinPromptTokens() {
+		return unit.GetMinPromptTokens() > held.GetMinPromptTokens()
+	}
+	if unit.GetMinCacheWriteTtlSeconds() != held.GetMinCacheWriteTtlSeconds() {
+		return unit.GetMinCacheWriteTtlSeconds() > held.GetMinCacheWriteTtlSeconds()
+	}
+	if named, wasNamed := unit.GetRegion() != "", held.GetRegion() != ""; named != wasNamed {
+		return named
+	}
+	if from, heldFrom := unit.GetEffectiveFrom().AsTime(), held.GetEffectiveFrom().AsTime(); !from.Equal(heldFrom) {
+		return from.After(heldFrom)
+	}
+	return unit.GetName() < held.GetName()
 }
 
 // inForce says whether a rate applied at the given moment.

@@ -175,3 +175,15 @@ func (openAIProtocol) failure(body []byte, status int, header http.Header, bille
 func (openAIProtocol) denied(req *http.Request) (*http.Response, error) {
 	return deniedReply(req, `{"error":{"type":"`+deniedType+`","code":"`+deniedType+`","message":"`+ErrDenied.Error()+`"}}`), nil
 }
+
+// downgrade never applies: a Chat Completions or Responses request names
+// its model in the JSON request body, which call above does not parse and
+// this does not rewrite. Rewriting it safely would mean decoding and
+// re-encoding the body and recomputing Content-Length without touching
+// prompt content — out of scope for this phase. Always returns false, so a
+// DOWNGRADE governance returns for an OpenAI-protocol call falls open to
+// the model originally requested rather than being silently claimed as
+// applied.
+func (openAIProtocol) downgrade(*http.Request, string) bool {
+	return false
+}

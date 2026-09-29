@@ -296,6 +296,13 @@ type Activity struct {
 	//
 	// Derived by the recorder from the framework's own context, so adopting teams set nothing. Empty for a call made outside an agent framework, and on records from a recorder that does not state it.
 	SubAgent string `protobuf:"bytes,46,opt,name=sub_agent,json=subAgent,proto3" json:"sub_agent,omitempty"`
+	// The environment the call was made in, e.g. production or staging.
+	// Format: `organisations/{organisation}/environments/{environment}`
+	//
+	// Written by the gateway from the api key the record arrived with, and whatever a recorder put here is replaced, so a record is filed under the environment its key was issued for and no other. Empty where the key was issued for none, and on every record written before environments existed.
+	//
+	// A record with none reads as its agent's `environment`, where an administrator has said where that agent's unlabelled records belong, and as unassigned otherwise. Worked out when read rather than stored, so saying where an agent's history belongs needs nothing rewritten.
+	Environment string `protobuf:"bytes,47,opt,name=environment,proto3" json:"environment,omitempty"`
 	// The area of the product the person was using, e.g. `canvas`,
 	// `doc_viewer`, `social`.
 	//
@@ -361,6 +368,10 @@ type Activity struct {
 	//
 	// Recorded because a longer-lived write is charged a premium: an hour-long entry is priced apart from a five-minute one across much of the Anthropic and Vertex catalogue. Zero where the call wrote no cache, or where the duration was not stated.
 	CacheWriteTtlSeconds int32 `protobuf:"varint,40,opt,name=cache_write_ttl_seconds,json=cacheWriteTtlSeconds,proto3" json:"cache_write_ttl_seconds,omitempty"`
+	// Where the call was processed, as the client named it, e.g. `global`, `us-central1`, `us`, `eu`.
+	//
+	// Empty or `global` is the provider's default. Recorded because a regional endpoint or a data-residency region is charged a premium, about a tenth more on Vertex and OpenAI.
+	Region string `protobuf:"bytes,48,opt,name=region,proto3" json:"region,omitempty"`
 	// What the provider itself said the call cost, in millionths of a US dollar.
 	//
 	// Where a provider returns a price there is no reason to estimate one over the top of it. Zero where the provider said nothing, which is all but one of them today.
@@ -575,6 +586,13 @@ func (x *Activity) GetSubAgent() string {
 	return ""
 }
 
+func (x *Activity) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
 func (x *Activity) GetSkill() string {
 	if x != nil {
 		return x.Skill
@@ -672,6 +690,13 @@ func (x *Activity) GetCacheWriteTtlSeconds() int32 {
 		return x.CacheWriteTtlSeconds
 	}
 	return 0
+}
+
+func (x *Activity) GetRegion() string {
+	if x != nil {
+		return x.Region
+	}
+	return ""
 }
 
 func (x *Activity) GetProviderCostMicros() int64 {
@@ -1454,7 +1479,7 @@ type ListActivitiesRequest struct {
 	PageToken string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	// Optional filter, confining the page to activities matching every term.
 	//
-	// A filter is one or more terms joined by `AND`, each `field = value`, e.g. `agent = "organisations/acme/agents/atlas" AND status = FAILED`. A value may be quoted; it must be when it holds a space. The fields are the ones activities can be grouped by: `workspace`, `project`, `agent`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `sub_agent`, `skill`, `tool`, `status`, `error_code`, `error_class` and `kind`. Only equality is served, and only `AND`; the window is `start_time` and `end_time`, not a term. An unknown field or any other operator is refused rather than ignored.
+	// A filter is one or more terms joined by `AND`, each `field = value`, e.g. `agent = "organisations/acme/agents/atlas" AND status = FAILED`. A value may be quoted; it must be when it holds a space. The fields are the ones activities can be grouped by: `workspace`, `project`, `agent`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `sub_agent`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind` and `environment`. Only equality is served, and only `AND`; the window is `start_time` and `end_time`, not a term. An unknown field or any other operator is refused rather than ignored.
 	//
 	// Cannot widen the organisation: scope always comes from `parent`, and a term naming an agent outside it matches nothing.
 	Filter string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
@@ -1670,7 +1695,7 @@ type AggregateActivitiesRequest struct {
 	// Dimensions to group by, e.g. `["agent", "model"]`.
 	//
 	// Valid dimensions are `workspace`, `project`, `agent`, `model`, `provider`, `user`,
-	// `caller_service`, `caller_component`, `sub_agent`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `date` and `hour`. `kind` is `model`, `tool` or `call`: a tool call is one recorded under a `tool:` component, a model call one that names a model or counted tokens, and a call is anything else. `agent_kind` is `agent` or `service`: the kind the activity's agent was registered with, or where it was registered with none, the activity's `observed_as`, and an agent with neither is an agent. `date` and `hour` are UTC. Grouping by `workspace` under an organisation is one row per tenant; under a single workspace it is one row. An empty list returns a single total for whatever `parent` named.
+	// `caller_service`, `caller_component`, `sub_agent`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `environment`, `date` and `hour`. `environment` is the one the record was filed under, or where it carries none its agent's `environment`, and empty for a record with neither. `kind` is `model`, `tool` or `call`: a tool call is one recorded under a `tool:` component, a model call one that names a model or counted tokens, and a call is anything else. `agent_kind` is `agent` or `service`: the kind the activity's agent was registered with, or where it was registered with none, the activity's `observed_as`, and an agent with neither is an agent. `date` and `hour` are UTC. Grouping by `workspace` under an organisation is one row per tenant; under a single workspace it is one row. An empty list returns a single total for whatever `parent` named.
 	GroupBy []string `protobuf:"bytes,2,rep,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"`
 	// Optional filter, with the same terms as [ListActivitiesRequest.filter], so a panel asks for exactly the rows it draws: `user = "8c21e0b4"` grouped by `date` is one person's spend by day, without the rest of the organisation's rows being read and discarded. Cannot widen the organisation. `agent` below is the same as a filter term on `agent`, kept for callers that only ever confine to one.
 	Filter string `protobuf:"bytes,3,opt,name=filter,proto3" json:"filter,omitempty"`
@@ -2241,11 +2266,207 @@ func (x *ChargeTotal) GetEstimatedCostMicros() int64 {
 	return 0
 }
 
+// Asks what a window's calls would have cost had one model served all of them.
+type PriceActivitiesAsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The organisation or workspace whose activities are repriced.
+	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
+	// Start of the window, inclusive.
+	StartTime *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
+	// End of the window, exclusive.
+	EndTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
+	// Optional filter, with the same terms as [ListActivitiesRequest.filter], so one agent or one
+	// request can be asked about rather than a whole organisation.
+	Filter string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
+	// The model to price against, as the rate card names it.
+	Model string `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
+	// Which provider's rates to use, where the same model is sold by more than one. Empty takes
+	// whichever the card holds for it.
+	BilledBy      string `protobuf:"bytes,6,opt,name=billed_by,json=billedBy,proto3" json:"billed_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PriceActivitiesAsRequest) Reset() {
+	*x = PriceActivitiesAsRequest{}
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PriceActivitiesAsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PriceActivitiesAsRequest) ProtoMessage() {}
+
+func (x *PriceActivitiesAsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PriceActivitiesAsRequest.ProtoReflect.Descriptor instead.
+func (*PriceActivitiesAsRequest) Descriptor() ([]byte, []int) {
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *PriceActivitiesAsRequest) GetParent() string {
+	if x != nil {
+		return x.Parent
+	}
+	return ""
+}
+
+func (x *PriceActivitiesAsRequest) GetStartTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartTime
+	}
+	return nil
+}
+
+func (x *PriceActivitiesAsRequest) GetEndTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EndTime
+	}
+	return nil
+}
+
+func (x *PriceActivitiesAsRequest) GetFilter() string {
+	if x != nil {
+		return x.Filter
+	}
+	return ""
+}
+
+func (x *PriceActivitiesAsRequest) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *PriceActivitiesAsRequest) GetBilledBy() string {
+	if x != nil {
+		return x.BilledBy
+	}
+	return ""
+}
+
+// What a window would have cost on another model, beside what it did cost.
+//
+// Repriced one call at a time rather than from a total, because the rate a call is charged depends
+// on the call: a provider charges a premium above a context threshold and about half for batch
+// traffic. A sum of tokens cannot say how many calls crossed a threshold, so pricing the sum would
+// answer confidently and wrongly for exactly the long-context workloads worth asking about.
+type PriceActivitiesAsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What these calls actually cost, over the same set that was repriced, so the two figures are
+	// comparable without a second read taken a moment apart.
+	ActualCostMicros int64 `protobuf:"varint,1,opt,name=actual_cost_micros,json=actualCostMicros,proto3" json:"actual_cost_micros,omitempty"`
+	// What the same token counts would have cost at the named model's rates.
+	PricedCostMicros int64 `protobuf:"varint,2,opt,name=priced_cost_micros,json=pricedCostMicros,proto3" json:"priced_cost_micros,omitempty"`
+	// How many activities were read.
+	ActivityCount int64 `protobuf:"varint,3,opt,name=activity_count,json=activityCount,proto3" json:"activity_count,omitempty"`
+	// How many carried counts the named model has no rate for. Left out of `priced_cost_micros`
+	// rather than counted as free, so a card missing a line reads as a gap and not as a saving.
+	UnpricedCount int64 `protobuf:"varint,4,opt,name=unpriced_count,json=unpricedCount,proto3" json:"unpriced_count,omitempty"`
+	// The largest prompt in the set, in tokens.
+	//
+	// A model whose context window is smaller than this could not have served the window at all. No
+	// rate card states a context window, so this is the figure that lets a reader judge it rather
+	// than a claim this service makes.
+	MaxPromptTokens int64 `protobuf:"varint,5,opt,name=max_prompt_tokens,json=maxPromptTokens,proto3" json:"max_prompt_tokens,omitempty"`
+	// False when the window held more activities than one read could reprice, so a partial answer is
+	// never read as a whole one.
+	Complete      bool `protobuf:"varint,6,opt,name=complete,proto3" json:"complete,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PriceActivitiesAsResponse) Reset() {
+	*x = PriceActivitiesAsResponse{}
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PriceActivitiesAsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PriceActivitiesAsResponse) ProtoMessage() {}
+
+func (x *PriceActivitiesAsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_techbridge_ap_metering_v1_activity_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PriceActivitiesAsResponse.ProtoReflect.Descriptor instead.
+func (*PriceActivitiesAsResponse) Descriptor() ([]byte, []int) {
+	return file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *PriceActivitiesAsResponse) GetActualCostMicros() int64 {
+	if x != nil {
+		return x.ActualCostMicros
+	}
+	return 0
+}
+
+func (x *PriceActivitiesAsResponse) GetPricedCostMicros() int64 {
+	if x != nil {
+		return x.PricedCostMicros
+	}
+	return 0
+}
+
+func (x *PriceActivitiesAsResponse) GetActivityCount() int64 {
+	if x != nil {
+		return x.ActivityCount
+	}
+	return 0
+}
+
+func (x *PriceActivitiesAsResponse) GetUnpricedCount() int64 {
+	if x != nil {
+		return x.UnpricedCount
+	}
+	return 0
+}
+
+func (x *PriceActivitiesAsResponse) GetMaxPromptTokens() int64 {
+	if x != nil {
+		return x.MaxPromptTokens
+	}
+	return 0
+}
+
+func (x *PriceActivitiesAsResponse) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
 var File_techbridge_ap_metering_v1_activity_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\n" +
-	"(techbridge/ap/metering/v1/activity.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a%techbridge/ap/metering/v1/agent.proto\"\x83\x16\n" +
+	"(techbridge/ap/metering/v1/activity.proto\x12\x19techbridge.ap.metering.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a%techbridge/ap/metering/v1/agent.proto\"\xbd\x16\n" +
 	"\bActivity\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x18\n" +
@@ -2254,7 +2475,8 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\x04user\x18\x05 \x01(\tR\x04user\x12%\n" +
 	"\x0ecaller_service\x18\x06 \x01(\tR\rcallerService\x12)\n" +
 	"\x10caller_component\x18\a \x01(\tR\x0fcallerComponent\x12\x1b\n" +
-	"\tsub_agent\x18. \x01(\tR\bsubAgent\x12\x14\n" +
+	"\tsub_agent\x18. \x01(\tR\bsubAgent\x12 \n" +
+	"\venvironment\x18/ \x01(\tR\venvironment\x12\x14\n" +
 	"\x05skill\x18\b \x01(\tR\x05skill\x12\x14\n" +
 	"\x05model\x18\t \x01(\tR\x05model\x12\x1b\n" +
 	"\tbilled_by\x18$ \x01(\tR\bbilledBy\x12!\n" +
@@ -2269,7 +2491,8 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\ftotal_tokens\x18\x10 \x01(\x05R\vtotalTokens\x12R\n" +
 	"\x0ereported_usage\x18& \x03(\v2+.techbridge.ap.metering.v1.ReportedQuantityR\rreportedUsage\x12!\n" +
 	"\fservice_tier\x18' \x01(\tR\vserviceTier\x125\n" +
-	"\x17cache_write_ttl_seconds\x18( \x01(\x05R\x14cacheWriteTtlSeconds\x120\n" +
+	"\x17cache_write_ttl_seconds\x18( \x01(\x05R\x14cacheWriteTtlSeconds\x12\x16\n" +
+	"\x06region\x180 \x01(\tR\x06region\x120\n" +
 	"\x14provider_cost_micros\x18) \x01(\x03R\x12providerCostMicros\x128\n" +
 	"\x15estimated_cost_micros\x18\x11 \x01(\x03B\x04\xe2A\x01\x03R\x13estimatedCostMicros\x122\n" +
 	"\x12billed_cost_micros\x18\x12 \x01(\x03B\x04\xe2A\x01\x03R\x10billedCostMicros\x120\n" +
@@ -2454,13 +2677,29 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\vChargeTotal\x12%\n" +
 	"\x0epriceable_unit\x18\x01 \x01(\tR\rpriceableUnit\x12\x1a\n" +
 	"\bquantity\x18\x02 \x01(\x03R\bquantity\x122\n" +
-	"\x15estimated_cost_micros\x18\x03 \x01(\x03R\x13estimatedCostMicros2\xd0\a\n" +
+	"\x15estimated_cost_micros\x18\x03 \x01(\x03R\x13estimatedCostMicros\"\x87\x02\n" +
+	"\x18PriceActivitiesAsRequest\x12\x1c\n" +
+	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\x12?\n" +
+	"\n" +
+	"start_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampB\x04\xe2A\x01\x02R\tstartTime\x12;\n" +
+	"\bend_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\x04\xe2A\x01\x02R\aendTime\x12\x16\n" +
+	"\x06filter\x18\x04 \x01(\tR\x06filter\x12\x1a\n" +
+	"\x05model\x18\x05 \x01(\tB\x04\xe2A\x01\x02R\x05model\x12\x1b\n" +
+	"\tbilled_by\x18\x06 \x01(\tR\bbilledBy\"\x8d\x02\n" +
+	"\x19PriceActivitiesAsResponse\x12,\n" +
+	"\x12actual_cost_micros\x18\x01 \x01(\x03R\x10actualCostMicros\x12,\n" +
+	"\x12priced_cost_micros\x18\x02 \x01(\x03R\x10pricedCostMicros\x12%\n" +
+	"\x0eactivity_count\x18\x03 \x01(\x03R\ractivityCount\x12%\n" +
+	"\x0eunpriced_count\x18\x04 \x01(\x03R\runpricedCount\x12*\n" +
+	"\x11max_prompt_tokens\x18\x05 \x01(\x03R\x0fmaxPromptTokens\x12\x1a\n" +
+	"\bcomplete\x18\x06 \x01(\bR\bcomplete2\xca\t\n" +
 	"\x11ActivitiesService\x12i\n" +
 	"\x0eCreateActivity\x120.techbridge.ap.metering.v1.CreateActivityRequest\x1a#.techbridge.ap.metering.v1.Activity\"\x00\x12\x8c\x01\n" +
 	"\x15BatchCreateActivities\x127.techbridge.ap.metering.v1.BatchCreateActivitiesRequest\x1a8.techbridge.ap.metering.v1.BatchCreateActivitiesResponse\"\x00\x12c\n" +
 	"\vGetActivity\x12-.techbridge.ap.metering.v1.GetActivityRequest\x1a#.techbridge.ap.metering.v1.Activity\"\x00\x12\xde\x01\n" +
 	"\x0eListActivities\x120.techbridge.ap.metering.v1.ListActivitiesRequest\x1a1.techbridge.ap.metering.v1.ListActivitiesResponse\"g\x82\xd3\xe4\x93\x02aZ6\x124/v1/{parent=organisations/*/workspaces/*}/activities\x12'/v1/{parent=organisations/*}/activities\x12\x81\x02\n" +
-	"\x13AggregateActivities\x125.techbridge.ap.metering.v1.AggregateActivitiesRequest\x1a6.techbridge.ap.metering.v1.AggregateActivitiesResponse\"{\x82\xd3\xe4\x93\x02uZ@\x12>/v1/{parent=organisations/*/workspaces/*}/activities:aggregate\x121/v1/{parent=organisations/*}/activities:aggregate\x12w\n" +
+	"\x13AggregateActivities\x125.techbridge.ap.metering.v1.AggregateActivitiesRequest\x1a6.techbridge.ap.metering.v1.AggregateActivitiesResponse\"{\x82\xd3\xe4\x93\x02uZ@\x12>/v1/{parent=organisations/*/workspaces/*}/activities:aggregate\x121/v1/{parent=organisations/*}/activities:aggregate\x12\xf7\x01\n" +
+	"\x11PriceActivitiesAs\x123.techbridge.ap.metering.v1.PriceActivitiesAsRequest\x1a4.techbridge.ap.metering.v1.PriceActivitiesAsResponse\"w\x82\xd3\xe4\x93\x02qZ>\x12</v1/{parent=organisations/*/workspaces/*}/activities:priceAs\x12//v1/{parent=organisations/*}/activities:priceAs\x12w\n" +
 	"\x14StreamListActivities\x126.techbridge.ap.metering.v1.StreamListActivitiesRequest\x1a#.techbridge.ap.metering.v1.Activity\"\x000\x01B#Z!alis.build/techbridge/ap/meteringb\x06proto3"
 
 var (
@@ -2476,7 +2715,7 @@ func file_techbridge_ap_metering_v1_activity_proto_rawDescGZIP() []byte {
 }
 
 var file_techbridge_ap_metering_v1_activity_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_techbridge_ap_metering_v1_activity_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_techbridge_ap_metering_v1_activity_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_techbridge_ap_metering_v1_activity_proto_goTypes = []any{
 	(Activity_Provider)(0),                // 0: techbridge.ap.metering.v1.Activity.Provider
 	(Activity_Status)(0),                  // 1: techbridge.ap.metering.v1.Activity.Status
@@ -2498,9 +2737,11 @@ var file_techbridge_ap_metering_v1_activity_proto_goTypes = []any{
 	(*AggregateActivitiesResponse)(nil),   // 17: techbridge.ap.metering.v1.AggregateActivitiesResponse
 	(*AggregateRow)(nil),                  // 18: techbridge.ap.metering.v1.AggregateRow
 	(*ChargeTotal)(nil),                   // 19: techbridge.ap.metering.v1.ChargeTotal
-	nil,                                   // 20: techbridge.ap.metering.v1.AggregateRow.DimensionsEntry
-	(Agent_Kind)(0),                       // 21: techbridge.ap.metering.v1.Agent.Kind
-	(*timestamppb.Timestamp)(nil),         // 22: google.protobuf.Timestamp
+	(*PriceActivitiesAsRequest)(nil),      // 20: techbridge.ap.metering.v1.PriceActivitiesAsRequest
+	(*PriceActivitiesAsResponse)(nil),     // 21: techbridge.ap.metering.v1.PriceActivitiesAsResponse
+	nil,                                   // 22: techbridge.ap.metering.v1.AggregateRow.DimensionsEntry
+	(Agent_Kind)(0),                       // 23: techbridge.ap.metering.v1.Agent.Kind
+	(*timestamppb.Timestamp)(nil),         // 24: google.protobuf.Timestamp
 }
 var file_techbridge_ap_metering_v1_activity_proto_depIdxs = []int32{
 	0,  // 0: techbridge.ap.metering.v1.Activity.provider:type_name -> techbridge.ap.metering.v1.Activity.Provider
@@ -2510,41 +2751,45 @@ var file_techbridge_ap_metering_v1_activity_proto_depIdxs = []int32{
 	2,  // 4: techbridge.ap.metering.v1.Activity.error_class:type_name -> techbridge.ap.metering.v1.Activity.ErrorClass
 	8,  // 5: techbridge.ap.metering.v1.Activity.reported_error:type_name -> techbridge.ap.metering.v1.ReportedField
 	5,  // 6: techbridge.ap.metering.v1.Activity.failure:type_name -> techbridge.ap.metering.v1.FailureDescription
-	21, // 7: techbridge.ap.metering.v1.Activity.observed_as:type_name -> techbridge.ap.metering.v1.Agent.Kind
-	22, // 8: techbridge.ap.metering.v1.Activity.occurred_at:type_name -> google.protobuf.Timestamp
-	22, // 9: techbridge.ap.metering.v1.Activity.create_time:type_name -> google.protobuf.Timestamp
-	22, // 10: techbridge.ap.metering.v1.Activity.update_time:type_name -> google.protobuf.Timestamp
+	23, // 7: techbridge.ap.metering.v1.Activity.observed_as:type_name -> techbridge.ap.metering.v1.Agent.Kind
+	24, // 8: techbridge.ap.metering.v1.Activity.occurred_at:type_name -> google.protobuf.Timestamp
+	24, // 9: techbridge.ap.metering.v1.Activity.create_time:type_name -> google.protobuf.Timestamp
+	24, // 10: techbridge.ap.metering.v1.Activity.update_time:type_name -> google.protobuf.Timestamp
 	6,  // 11: techbridge.ap.metering.v1.FailureDescription.facts:type_name -> techbridge.ap.metering.v1.FailureFact
 	3,  // 12: techbridge.ap.metering.v1.CreateActivityRequest.activity:type_name -> techbridge.ap.metering.v1.Activity
 	3,  // 13: techbridge.ap.metering.v1.BatchCreateActivitiesRequest.activities:type_name -> techbridge.ap.metering.v1.Activity
 	3,  // 14: techbridge.ap.metering.v1.BatchCreateActivitiesResponse.activities:type_name -> techbridge.ap.metering.v1.Activity
-	22, // 15: techbridge.ap.metering.v1.ListActivitiesRequest.start_time:type_name -> google.protobuf.Timestamp
-	22, // 16: techbridge.ap.metering.v1.ListActivitiesRequest.end_time:type_name -> google.protobuf.Timestamp
+	24, // 15: techbridge.ap.metering.v1.ListActivitiesRequest.start_time:type_name -> google.protobuf.Timestamp
+	24, // 16: techbridge.ap.metering.v1.ListActivitiesRequest.end_time:type_name -> google.protobuf.Timestamp
 	3,  // 17: techbridge.ap.metering.v1.ListActivitiesResponse.activities:type_name -> techbridge.ap.metering.v1.Activity
-	22, // 18: techbridge.ap.metering.v1.AggregateActivitiesRequest.start_time:type_name -> google.protobuf.Timestamp
-	22, // 19: techbridge.ap.metering.v1.AggregateActivitiesRequest.end_time:type_name -> google.protobuf.Timestamp
+	24, // 18: techbridge.ap.metering.v1.AggregateActivitiesRequest.start_time:type_name -> google.protobuf.Timestamp
+	24, // 19: techbridge.ap.metering.v1.AggregateActivitiesRequest.end_time:type_name -> google.protobuf.Timestamp
 	18, // 20: techbridge.ap.metering.v1.AggregateActivitiesResponse.rows:type_name -> techbridge.ap.metering.v1.AggregateRow
-	20, // 21: techbridge.ap.metering.v1.AggregateRow.dimensions:type_name -> techbridge.ap.metering.v1.AggregateRow.DimensionsEntry
-	22, // 22: techbridge.ap.metering.v1.AggregateRow.first_occurred_at:type_name -> google.protobuf.Timestamp
-	22, // 23: techbridge.ap.metering.v1.AggregateRow.last_occurred_at:type_name -> google.protobuf.Timestamp
+	22, // 21: techbridge.ap.metering.v1.AggregateRow.dimensions:type_name -> techbridge.ap.metering.v1.AggregateRow.DimensionsEntry
+	24, // 22: techbridge.ap.metering.v1.AggregateRow.first_occurred_at:type_name -> google.protobuf.Timestamp
+	24, // 23: techbridge.ap.metering.v1.AggregateRow.last_occurred_at:type_name -> google.protobuf.Timestamp
 	19, // 24: techbridge.ap.metering.v1.AggregateRow.charges:type_name -> techbridge.ap.metering.v1.ChargeTotal
-	9,  // 25: techbridge.ap.metering.v1.ActivitiesService.CreateActivity:input_type -> techbridge.ap.metering.v1.CreateActivityRequest
-	10, // 26: techbridge.ap.metering.v1.ActivitiesService.BatchCreateActivities:input_type -> techbridge.ap.metering.v1.BatchCreateActivitiesRequest
-	12, // 27: techbridge.ap.metering.v1.ActivitiesService.GetActivity:input_type -> techbridge.ap.metering.v1.GetActivityRequest
-	13, // 28: techbridge.ap.metering.v1.ActivitiesService.ListActivities:input_type -> techbridge.ap.metering.v1.ListActivitiesRequest
-	16, // 29: techbridge.ap.metering.v1.ActivitiesService.AggregateActivities:input_type -> techbridge.ap.metering.v1.AggregateActivitiesRequest
-	15, // 30: techbridge.ap.metering.v1.ActivitiesService.StreamListActivities:input_type -> techbridge.ap.metering.v1.StreamListActivitiesRequest
-	3,  // 31: techbridge.ap.metering.v1.ActivitiesService.CreateActivity:output_type -> techbridge.ap.metering.v1.Activity
-	11, // 32: techbridge.ap.metering.v1.ActivitiesService.BatchCreateActivities:output_type -> techbridge.ap.metering.v1.BatchCreateActivitiesResponse
-	3,  // 33: techbridge.ap.metering.v1.ActivitiesService.GetActivity:output_type -> techbridge.ap.metering.v1.Activity
-	14, // 34: techbridge.ap.metering.v1.ActivitiesService.ListActivities:output_type -> techbridge.ap.metering.v1.ListActivitiesResponse
-	17, // 35: techbridge.ap.metering.v1.ActivitiesService.AggregateActivities:output_type -> techbridge.ap.metering.v1.AggregateActivitiesResponse
-	3,  // 36: techbridge.ap.metering.v1.ActivitiesService.StreamListActivities:output_type -> techbridge.ap.metering.v1.Activity
-	31, // [31:37] is the sub-list for method output_type
-	25, // [25:31] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	24, // 25: techbridge.ap.metering.v1.PriceActivitiesAsRequest.start_time:type_name -> google.protobuf.Timestamp
+	24, // 26: techbridge.ap.metering.v1.PriceActivitiesAsRequest.end_time:type_name -> google.protobuf.Timestamp
+	9,  // 27: techbridge.ap.metering.v1.ActivitiesService.CreateActivity:input_type -> techbridge.ap.metering.v1.CreateActivityRequest
+	10, // 28: techbridge.ap.metering.v1.ActivitiesService.BatchCreateActivities:input_type -> techbridge.ap.metering.v1.BatchCreateActivitiesRequest
+	12, // 29: techbridge.ap.metering.v1.ActivitiesService.GetActivity:input_type -> techbridge.ap.metering.v1.GetActivityRequest
+	13, // 30: techbridge.ap.metering.v1.ActivitiesService.ListActivities:input_type -> techbridge.ap.metering.v1.ListActivitiesRequest
+	16, // 31: techbridge.ap.metering.v1.ActivitiesService.AggregateActivities:input_type -> techbridge.ap.metering.v1.AggregateActivitiesRequest
+	20, // 32: techbridge.ap.metering.v1.ActivitiesService.PriceActivitiesAs:input_type -> techbridge.ap.metering.v1.PriceActivitiesAsRequest
+	15, // 33: techbridge.ap.metering.v1.ActivitiesService.StreamListActivities:input_type -> techbridge.ap.metering.v1.StreamListActivitiesRequest
+	3,  // 34: techbridge.ap.metering.v1.ActivitiesService.CreateActivity:output_type -> techbridge.ap.metering.v1.Activity
+	11, // 35: techbridge.ap.metering.v1.ActivitiesService.BatchCreateActivities:output_type -> techbridge.ap.metering.v1.BatchCreateActivitiesResponse
+	3,  // 36: techbridge.ap.metering.v1.ActivitiesService.GetActivity:output_type -> techbridge.ap.metering.v1.Activity
+	14, // 37: techbridge.ap.metering.v1.ActivitiesService.ListActivities:output_type -> techbridge.ap.metering.v1.ListActivitiesResponse
+	17, // 38: techbridge.ap.metering.v1.ActivitiesService.AggregateActivities:output_type -> techbridge.ap.metering.v1.AggregateActivitiesResponse
+	21, // 39: techbridge.ap.metering.v1.ActivitiesService.PriceActivitiesAs:output_type -> techbridge.ap.metering.v1.PriceActivitiesAsResponse
+	3,  // 40: techbridge.ap.metering.v1.ActivitiesService.StreamListActivities:output_type -> techbridge.ap.metering.v1.Activity
+	34, // [34:41] is the sub-list for method output_type
+	27, // [27:34] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_techbridge_ap_metering_v1_activity_proto_init() }
@@ -2559,7 +2804,7 @@ func file_techbridge_ap_metering_v1_activity_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_techbridge_ap_metering_v1_activity_proto_rawDesc), len(file_techbridge_ap_metering_v1_activity_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   18,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

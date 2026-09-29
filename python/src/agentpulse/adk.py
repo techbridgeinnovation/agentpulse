@@ -121,6 +121,18 @@ def _served_by_vertex(ctx: Any) -> bool:
     return False
 
 
+def _region(ctx: Any) -> str:
+    """The Vertex location the agent's Gemini client calls, or empty where it is not on Vertex or does not say."""
+    try:
+        client = ctx.get_invocation_context().agent.canonical_model.api_client
+        if getattr(client, "vertexai", None) is True:
+            location = getattr(getattr(client, "_api_client", None), "location", None)
+            return location if isinstance(location, str) else ""
+    except Exception:
+        pass
+    return ""
+
+
 def _enum(value: Any) -> str:
     return str(getattr(value, "value", value) or "")
 
@@ -199,7 +211,7 @@ def _build_plugin_class() -> type:
                     request.model = verdict.replacement_model
                     rp.recorder._note("downgrade_applied")
             # Noted after any downgrade, so a call whose provider reports no model falls back to what was actually sent.
-            self._models.put(key, {"requested": request.model or "", "started": time.monotonic()})
+            self._models.put(key, {"requested": request.model or "", "started": time.monotonic(), "region": _region(ctx)})
             return None
 
         async def after_model_callback(self, *, callback_context: Any, llm_response: Any) -> Any:
@@ -221,6 +233,7 @@ def _build_plugin_class() -> type:
             started = known.get("started")
             activity = rp._activity(_component(ctx), time.monotonic() - started if started else 0.0, None, (), _framework(ctx))
             activity.model = response.model_version or known.get("served") or known.get("requested", "")
+            activity.region = known.get("region", "")
             finish = _enum(response.finish_reason)
             if response.error_code:
                 activity.status = _wire.STATUS_FAILED
@@ -245,6 +258,7 @@ def _build_plugin_class() -> type:
                 started = known.get("started")
                 activity = rp._activity(_component(callback_context), time.monotonic() - started if started else 0.0, error, (), _framework(callback_context))
                 activity.model = known.get("requested") or getattr(llm_request, "model", "") or ""
+                activity.region = known.get("region", "")
                 rp.recorder.record(activity)
             except Exception:
                 self._panicked()

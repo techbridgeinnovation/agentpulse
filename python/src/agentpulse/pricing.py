@@ -44,6 +44,7 @@ class PriceableUnit:
     min_prompt_tokens: int = 0
     min_cache_write_ttl_seconds: int = 0
     modality: str = ""
+    region: str = ""
     # Nanoseconds since the epoch; zero is unbounded.
     effective_from_ns: int = 0
     effective_to_ns: int = 0
@@ -51,7 +52,7 @@ class PriceableUnit:
     @classmethod
     def decode(cls, data: bytes) -> "PriceableUnit":
         values: dict = {}
-        text = {1: "name", 3: "provider", 4: "model", 12: "service_tier", 15: "modality"}
+        text = {1: "name", 3: "provider", 4: "model", 12: "service_tier", 15: "modality", 16: "region"}
         numbers = {5: "kind", 11: "unit_cost_nanos", 13: "min_prompt_tokens", 14: "min_cache_write_ttl_seconds"}
         for number, value in _wire.fields(data):
             if number in text and isinstance(value, bytes):
@@ -197,6 +198,8 @@ def _applies(unit: PriceableUnit, activity: _wire.Activity, classes: Classes) ->
         return False
     if unit.min_cache_write_ttl_seconds > activity.cache_write_ttl_seconds:
         return False
+    if not _in_region(unit.region, activity.region):
+        return False
     # A record carries no quantity counted by modality, so a modality rate matches nothing rather than pricing audio at the text rate.
     return unit.modality == ""
 
@@ -209,7 +212,23 @@ def _more_specific(unit: PriceableUnit, held: PriceableUnit) -> bool:
         return bool(unit.service_tier)
     if unit.min_prompt_tokens != held.min_prompt_tokens:
         return unit.min_prompt_tokens > held.min_prompt_tokens
-    return unit.min_cache_write_ttl_seconds > held.min_cache_write_ttl_seconds
+    if unit.min_cache_write_ttl_seconds != held.min_cache_write_ttl_seconds:
+        return unit.min_cache_write_ttl_seconds > held.min_cache_write_ttl_seconds
+    if bool(unit.region) != bool(held.region):
+        return bool(unit.region)
+    # Between two rates with the same conditions the later one replaced the other, and the name settles anything left.
+    if unit.effective_from_ns != held.effective_from_ns:
+        return unit.effective_from_ns > held.effective_from_ns
+    return unit.name < held.name
+
+
+def _in_region(rate: str, call: str) -> bool:
+    # An unstated call region is the provider's default, so no regional rate applies to it.
+    if not rate:
+        return True
+    if rate.casefold() == "regional":
+        return bool(call) and call.casefold() != "global"
+    return rate.casefold() == call.casefold()
 
 
 def cost_of(quantity: int, nanos: int) -> int:

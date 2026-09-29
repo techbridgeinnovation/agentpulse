@@ -179,3 +179,32 @@ func TestNoCardPricesAtNothing(t *testing.T) {
 		t.Fatalf("priced at %d with no card, want 0", got)
 	}
 }
+
+// A card holds several rates for the same tokens, and a call pays only the one that fits it.
+func TestOneRatePerKindIsCharged(t *testing.T) {
+	now := time.Now()
+	standard := rate("priceableUnits/in", "VERTEX_AI", "gemini-2.5-pro", pb.PriceableUnit_PROMPT_TOKENS, 1000, now.Add(-time.Hour), time.Time{})
+	batch := rate("priceableUnits/in-batch", "VERTEX_AI", "gemini-2.5-pro", pb.PriceableUnit_PROMPT_TOKENS, 500, now.Add(-time.Hour), time.Time{})
+	batch.ServiceTier = "BATCH"
+	long := rate("priceableUnits/in-long", "VERTEX_AI", "gemini-2.5-pro", pb.PriceableUnit_PROMPT_TOKENS, 2000, now.Add(-time.Hour), time.Time{})
+	long.MinPromptTokens = 200_000
+	regional := rate("priceableUnits/in-regional", "VERTEX_AI", "gemini-2.5-pro", pb.PriceableUnit_PROMPT_TOKENS, 1100, now.Add(-time.Hour), time.Time{})
+	regional.Region = "REGIONAL"
+	card := &rateCard{units: []*pb.PriceableUnit{standard, batch, long, regional}}
+
+	for name, tc := range map[string]struct {
+		call *pb.Activity
+		want int64
+	}{
+		"standard": {&pb.Activity{BilledBy: "VERTEX_AI", Model: "gemini-2.5-pro", PromptTokens: 1000}, 1000},
+		"batch":    {&pb.Activity{BilledBy: "VERTEX_AI", Model: "gemini-2.5-pro", PromptTokens: 1000, ServiceTier: "BATCH"}, 500},
+		"long":     {&pb.Activity{BilledBy: "VERTEX_AI", Model: "gemini-2.5-pro", PromptTokens: 250_000}, 500_000},
+		"regional": {&pb.Activity{BilledBy: "VERTEX_AI", Model: "gemini-2.5-pro", PromptTokens: 1000, Region: "europe-west4"}, 1100},
+		"global":   {&pb.Activity{BilledBy: "VERTEX_AI", Model: "gemini-2.5-pro", PromptTokens: 1000, Region: "global"}, 1000},
+	} {
+		tc.call.OccurredAt = timestamppb.New(now)
+		if got := card.priceOf(tc.call); got != tc.want {
+			t.Errorf("%s: priced at %d, want %d", name, got, tc.want)
+		}
+	}
+}

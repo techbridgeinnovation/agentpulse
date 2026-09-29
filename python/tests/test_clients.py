@@ -356,3 +356,106 @@ def test_a_gemini_downgrade_rewrites_the_model_in_the_path(provider):
     assert answers.asked[0].requested_model == "gemini-2.5-pro"
     assert provider.received[0][0].startswith("/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
     assert rp.recorder.stats().downgrade_applied == 1
+
+
+def test_the_region_is_read_from_the_url_the_call_went_to():
+    from agentpulse.clients import region_of
+
+    vertex = "/v1beta1/projects/p/locations/{}/publishers/google/models/gemini-2.5-pro:generateContent"
+    assert region_of("aiplatform.googleapis.com", vertex.format("global")) == "global"
+    assert region_of("us-central1-aiplatform.googleapis.com", vertex.format("us-central1")) == "us-central1"
+    assert region_of("europe-west4-aiplatform.googleapis.com", "/v1/whatever") == "europe-west4"
+    assert region_of("aiplatform.eu.rep.googleapis.com", "/v1/whatever") == "eu"
+    assert region_of("us.api.openai.com", "/v1/chat/completions") == "us"
+    assert region_of("EU.api.openai.com", "/v1/responses") == "eu"
+    assert region_of("api.openai.com", "/v1/chat/completions") == ""
+    assert region_of("api.anthropic.com", "/v1/messages") == ""
+    assert region_of("generativelanguage.googleapis.com", "/v1beta/models/gemini-2.5-pro:generateContent") == ""
+    assert region_of(None, None) == ""
+
+
+def test_an_openai_call_to_a_residency_host_records_that_region():
+    openai = pytest.importorskip("openai")
+    import json
+
+    import httpx
+
+    rp, sink = reporter()
+
+    class Body(httpx.SyncByteStream):
+        def __iter__(self):
+            yield json.dumps(CHAT).encode()
+
+    def answer(request):
+        # A body given as a stream, as a real transport's is, rather than one httpx has already read.
+        return httpx.Response(200, headers={"content-type": "application/json"}, stream=Body())
+
+    http_client = openai.DefaultHttpxClient(transport=rp.transport(httpx.MockTransport(answer)))
+    client = openai.OpenAI(api_key="k", base_url="https://eu.api.openai.com/v1", max_retries=0, http_client=http_client)
+    client.chat.completions.create(model="gpt-5", messages=[])
+    [a] = recorded(rp, sink)
+    assert (a.region, a.billed_by) == ("eu", "OPENAI")
+
+
+def test_an_openai_call_to_the_default_host_records_no_region(provider):
+    rp, sink = reporter()
+    client = openai_client(rp, provider)
+    provider.json(CHAT)
+    client.chat.completions.create(model="gpt-5", messages=[])
+    [a] = recorded(rp, sink)
+    assert a.region == ""
+
+
+def test_an_anthropic_message_records_where_anthropic_said_it_ran(provider):
+    rp, sink = reporter()
+    client = anthropic_client(rp, provider)
+    provider.json({**MESSAGE, "usage": {**MESSAGE["usage"], "inference_geo": "us"}})
+    client.messages.create(model="claude-sonnet-5", max_tokens=10, messages=[])
+    provider.json(MESSAGE)
+    client.messages.create(model="claude-sonnet-5", max_tokens=10, messages=[])
+    stated, unstated = recorded(rp, sink)
+    assert (stated.region, unstated.region) == ("us", "")
+
+
+def test_a_streamed_anthropic_message_records_where_anthropic_said_it_ran(provider):
+    rp, sink = reporter()
+    client = anthropic_client(rp, provider)
+    provider.sse(
+        [
+            {"type": "message_start", "message": {**MESSAGE, "content": [], "stop_reason": None, "usage": {"input_tokens": 10, "output_tokens": 1, "inference_geo": "us"}}},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 9}},
+            {"type": "message_stop"},
+        ],
+        named=True,
+    )
+    with client.messages.stream(model="claude-sonnet-5", max_tokens=10, messages=[]) as stream:
+        for _ in stream:
+            pass
+    [a] = recorded(rp, sink)
+    assert a.region == "us"
+
+
+def vertex_genai_client(rp, provider, location):
+    genai = pytest.importorskip("google.genai")
+    credentials = pytest.importorskip("google.oauth2.credentials")
+    return genai.Client(vertexai=True, project="p", location=location, credentials=credentials.Credentials(token="t"), http_options=rp.genai_http_options(base_url=provider.url))
+
+
+def test_a_gemini_call_on_vertex_records_the_client_location(provider):
+    rp, sink = reporter()
+    for location in ("us-central1", "global"):
+        provider.json(GENERATE)
+        client = vertex_genai_client(rp, provider, location)
+        client.models.generate_content(model="gemini-2.5-pro", contents="SECRET")
+    regional, default = recorded(rp, sink)
+    assert (regional.region, default.region) == ("us-central1", "global")
+    assert "SECRET" not in repr(sink.batches)
+
+
+def test_a_gemini_developer_api_call_records_no_region(provider):
+    rp, sink = reporter()
+    client = genai_client(rp, provider)
+    provider.json(GENERATE)
+    client.models.generate_content(model="gemini-2.5-pro", contents="x")
+    [a] = recorded(rp, sink)
+    assert a.region == ""

@@ -626,13 +626,13 @@ func TestBeforeModelRecordsTheDenialAsAZeroCostDeniedActivity(t *testing.T) {
 	}
 }
 
-// TestBeforeModelDoesNotTreatAnUnrecognizedDecisionAsDeny proves DOWNGRADE —
-// declared in the contract but not implemented by this integration — and
-// any other value this build does not recognize proceed exactly like ALLOW,
-// never as DENY.
+// TestBeforeModelDoesNotTreatAnUnrecognizedDecisionAsDeny proves a decision
+// value this build does not recognize at all — never DOWNGRADE itself,
+// which is handled explicitly, but a hypothetical future value — proceeds
+// exactly like ALLOW, never as DENY.
 func TestBeforeModelDoesNotTreatAnUnrecognizedDecisionAsDeny(t *testing.T) {
 	opts := options()
-	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DOWNGRADE}}
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_Decision(99)}}
 	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -642,10 +642,122 @@ func TestBeforeModelDoesNotTreatAnUnrecognizedDecisionAsDeny(t *testing.T) {
 
 	resp, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{})
 	if resp != nil || err != nil {
-		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil) — an unimplemented verdict must never preempt the call", resp, err)
+		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil) — an unrecognized verdict must never preempt the call", resp, err)
+	}
+	if s := r.Stats(); s.Denied != 0 {
+		t.Fatalf("Denied = %d, want 0 — an unrecognized value is not DENY", s.Denied)
+	}
+}
+
+// TestBeforeModelDoesNotTreatDowngradeAsDeny proves DOWNGRADE never preempts
+// the call, even where governance names no replacement at all — there is
+// nothing to apply, but the call still proceeds exactly like ALLOW.
+func TestBeforeModelDoesNotTreatDowngradeAsDeny(t *testing.T) {
+	opts := options()
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DOWNGRADE}}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	request := &adkmodel.LLMRequest{Model: "gemini-2.5-pro"}
+	resp, err := BeforeModel(r, opts)(newContext(), request)
+	if resp != nil || err != nil {
+		t.Fatalf("BeforeModel() = (%v, %v), want (nil, nil) — DOWNGRADE must never preempt the call", resp, err)
 	}
 	if s := r.Stats(); s.Denied != 0 {
 		t.Fatalf("Denied = %d, want 0 — DOWNGRADE is not DENY", s.Denied)
+	}
+	if s := r.Stats(); s.Downgraded != 1 || s.DowngradeApplied != 0 || s.DowngradeNotApplied != 0 {
+		t.Fatalf("stats = %+v, want Downgraded=1, DowngradeApplied=0, DowngradeNotApplied=0 — nothing was ever attempted with no replacement named", s)
+	}
+	if request.Model != "gemini-2.5-pro" {
+		t.Fatalf("request.Model = %q, want the original gemini-2.5-pro unchanged", request.Model)
+	}
+}
+
+// TestBeforeModelAppliesADowngradeToTheOutgoingRequest proves a DOWNGRADE
+// whose replacement provider matches this agent's own opts.billedBy() is
+// applied by rewriting request.Model in place, before the framework ever
+// sends the call — and that the replacement, not the original request, is
+// what AfterModel falls back to recording when the provider's own reply
+// carries no model of its own.
+func TestBeforeModelAppliesADowngradeToTheOutgoingRequest(t *testing.T) {
+	opts := options() // billedBy() defaults to VERTEX_AI
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{
+		Decision: governancepb.DecideResponse_DOWNGRADE, ReplacementProvider: "VERTEX_AI", ReplacementModel: "gemini-2.5-flash-lite",
+	}}
+
+	ctx := newContext()
+	request := &adkmodel.LLMRequest{Model: "gemini-2.5-pro"}
+	var stats recorder.Stats
+	sink := delivered(t, func(r *recorder.Recorder) {
+		if _, err := BeforeModel(r, opts)(ctx, request); err != nil {
+			t.Fatalf("BeforeModel: %v", err)
+		}
+		// A streamed call's final response carries no model at all —
+		// modelOf then falls back to what AfterModel considers
+		// "requested", which BeforeModel must have already set to the
+		// applied replacement.
+		AfterModel(r, opts)(ctx, &adkmodel.LLMResponse{}, nil)
+		stats = r.Stats()
+	})
+
+	if request.Model != "gemini-2.5-flash-lite" {
+		t.Fatalf("request.Model = %q, want the replacement gemini-2.5-flash-lite applied in place", request.Model)
+	}
+	if stats.DowngradeApplied != 1 || stats.DowngradeNotApplied != 0 {
+		t.Fatalf("stats = %+v, want DowngradeApplied=1, DowngradeNotApplied=0", stats)
+	}
+	if got := sink.seen[0].GetModel(); got != "gemini-2.5-flash-lite" {
+		t.Fatalf("recorded model = %q, want the applied replacement gemini-2.5-flash-lite, never the original gemini-2.5-pro", got)
+	}
+}
+
+// TestBeforeModelFailsOpenWhenDowngradeReplacementProviderDoesNotMatch
+// proves a DOWNGRADE naming a provider this agent's model client does not
+// talk to is never applied — rewriting only the model name would ask the
+// wrong provider for it. The original request proceeds unchanged.
+func TestBeforeModelFailsOpenWhenDowngradeReplacementProviderDoesNotMatch(t *testing.T) {
+	opts := options() // billedBy() defaults to VERTEX_AI
+	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{
+		Decision: governancepb.DecideResponse_DOWNGRADE, ReplacementProvider: "OPENAI", ReplacementModel: "gpt-5-mini",
+	}}
+	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r.Close(ctx)
+	})
+
+	request := &adkmodel.LLMRequest{Model: "gemini-2.5-pro"}
+	if _, err := BeforeModel(r, opts)(newContext(), request); err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+	if request.Model != "gemini-2.5-pro" {
+		t.Fatalf("request.Model = %q, want the original gemini-2.5-pro — a provider-mismatched replacement must never be attempted", request.Model)
+	}
+	if s := r.Stats(); s.DowngradeApplied != 0 || s.DowngradeNotApplied != 1 {
+		t.Fatalf("stats = %+v, want DowngradeApplied=0, DowngradeNotApplied=1", s)
+	}
+}
+
+// TestBeforeModelSendsTheRequestedModelAndProviderToGovernance proves the
+// DecideRequest carries what the call was about to ask for, so governance
+// can decide a downgrade against it.
+func TestBeforeModelSendsTheRequestedModelAndProviderToGovernance(t *testing.T) {
+	decider := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	opts := options()
+	opts.Decider = decider
+
+	if _, err := BeforeModel(nil, opts)(newContext(), &adkmodel.LLMRequest{Model: "gemini-2.5-pro"}); err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+
+	if decider.got.GetRequestedProvider() != "VERTEX_AI" || decider.got.GetRequestedModel() != "gemini-2.5-pro" {
+		t.Fatalf("requested = %q/%q, want VERTEX_AI/gemini-2.5-pro", decider.got.GetRequestedProvider(), decider.got.GetRequestedModel())
 	}
 }
 

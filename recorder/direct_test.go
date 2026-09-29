@@ -19,13 +19,22 @@ import (
 // direct records what a service does through an instrumented client and returns every record that reached the sink.
 func direct(t *testing.T, attribution Attribution, do func(*Reporter)) []*pb.Activity {
 	t.Helper()
+	got, _ := directWithRecorder(t, attribution, do)
+	return got
+}
+
+// directWithRecorder is direct, but also returns the Recorder so a test can
+// read Stats — the downgrade tests need this to distinguish a DOWNGRADE
+// that was applied to the outbound call from one that fell open.
+func directWithRecorder(t *testing.T, attribution Attribution, do func(*Reporter)) ([]*pb.Activity, *Recorder) {
+	t.Helper()
 	sink := &captureSink{}
 	rec := New(Config{Sinks: []Sink{sink}, FlushEvery: time.Millisecond})
 	do(rec.For(attribution))
 	closing, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	rec.Close(closing)
-	return sink.seen
+	return sink.seen, rec
 }
 
 var service = Attribution{Agent: "organisations/techbridge/agents/documents", Service: "documents-service"}
@@ -396,10 +405,12 @@ func TestAComponentNobodyNamedIsTheFunctionThatMadeTheCall(t *testing.T) {
 
 // fixedDecider answers every decision the same way.
 type fixedDecider struct {
-	decision governancepb.DecideResponse_Decision
-	err      error
-	panics   bool
-	requests []*governancepb.DecideRequest
+	decision            governancepb.DecideResponse_Decision
+	replacementProvider string
+	replacementModel    string
+	err                 error
+	panics              bool
+	requests            []*governancepb.DecideRequest
 }
 
 func (d *fixedDecider) Decide(_ context.Context, req *governancepb.DecideRequest) (*governancepb.DecideResponse, error) {
@@ -410,7 +421,11 @@ func (d *fixedDecider) Decide(_ context.Context, req *governancepb.DecideRequest
 	if d.err != nil {
 		return nil, d.err
 	}
-	return &governancepb.DecideResponse{Decision: d.decision}, nil
+	return &governancepb.DecideResponse{
+		Decision:            d.decision,
+		ReplacementProvider: d.replacementProvider,
+		ReplacementModel:    d.replacementModel,
+	}, nil
 }
 
 // A budget that stops an agent stops a service spending against it too: the call is never sent, the refusal is recorded, and the sdk is told not to retry it.
@@ -485,5 +500,259 @@ func TestAGovernedGenAIClientReturnsErrDenied(t *testing.T) {
 	})
 	if len(got) != 1 || got[0].GetStatus() != pb.Activity_DENIED || got[0].GetModel() != "gemini-2.5-flash" {
 		t.Fatalf("recorded %v, want one denied call naming its model", got)
+	}
+}
+
+// A DOWNGRADE governance returns is applied to a genai call by rewriting the
+// model segment of the outbound URL — genai's call already parses the
+// requested model out of that same URL before the request is sent, so this
+// is the one direct-SDK shape this package can safely rewrite in this
+// phase.
+func TestAGovernedGenAIClientAppliesADowngrade(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"the answer"}]},"finishReason":"STOP"}],"modelVersion":"gemini-2.5-flash-lite"}`)
+	}))
+	defer server.Close()
+
+	downgrade := &fixedDecider{
+		decision:            governancepb.DecideResponse_DOWNGRADE,
+		replacementProvider: ProviderVertexAI,
+		replacementModel:    "gemini-2.5-flash-lite",
+	}
+	got, rec := directWithRecorder(t, service, func(rp *Reporter) {
+		client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+			Backend: genai.BackendGeminiAPI, APIKey: "test", HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rp.Governed(Governance{Decider: downgrade}).InstrumentGenAI(client)
+		if _, err := client.Models.GenerateContent(context.Background(), "gemini-2.5-pro", genai.Text("the prompt"), nil); err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+	})
+
+	if !strings.Contains(gotPath, "models/gemini-2.5-flash-lite:") {
+		t.Fatalf("provider received path %q, want it naming the replacement model gemini-2.5-flash-lite, not the original gemini-2.5-pro", gotPath)
+	}
+	a := only(t, got)
+	if a.GetModel() != "gemini-2.5-flash-lite" {
+		t.Errorf("recorded model = %q, want the replacement gemini-2.5-flash-lite", a.GetModel())
+	}
+	if stats := rec.Stats(); stats.Downgraded != 1 || stats.DowngradeApplied != 1 || stats.DowngradeNotApplied != 0 {
+		t.Errorf("stats = %+v, want Downgraded=1, DowngradeApplied=1, DowngradeNotApplied=0", stats)
+	}
+	if len(downgrade.requests) != 1 {
+		t.Fatalf("Decide was called %d times, want exactly 1 — a downgrade must never call Decide again for the replacement", len(downgrade.requests))
+	}
+	if r := downgrade.requests[0]; r.GetRequestedProvider() != ProviderVertexAI || r.GetRequestedModel() != "gemini-2.5-pro" {
+		t.Errorf("asked governance about %q/%q, want %q/gemini-2.5-pro", r.GetRequestedProvider(), r.GetRequestedModel(), ProviderVertexAI)
+	}
+}
+
+// A DOWNGRADE whose replacement provider does not match the provider this
+// client actually talks to is never applied: rewriting only the model name
+// would send the call to the wrong endpoint entirely. The original request
+// proceeds unchanged, and DowngradeNotApplied — not DowngradeApplied —
+// records why.
+func TestAGovernedGenAIClientFailsOpenWhenReplacementProviderDoesNotMatch(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"the answer"}]},"finishReason":"STOP"}],"modelVersion":"gemini-2.5-pro"}`)
+	}))
+	defer server.Close()
+
+	// genai only ever talks to Vertex/the Gemini API — a replacement naming
+	// ANTHROPIC can never be reached through this client.
+	downgrade := &fixedDecider{
+		decision:            governancepb.DecideResponse_DOWNGRADE,
+		replacementProvider: ProviderAnthropic,
+		replacementModel:    "claude-haiku-4-5",
+	}
+	_, rec := directWithRecorder(t, service, func(rp *Reporter) {
+		client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+			Backend: genai.BackendGeminiAPI, APIKey: "test", HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rp.Governed(Governance{Decider: downgrade}).InstrumentGenAI(client)
+		if _, err := client.Models.GenerateContent(context.Background(), "gemini-2.5-pro", genai.Text("the prompt"), nil); err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+	})
+
+	if !strings.Contains(gotPath, "models/gemini-2.5-pro:") {
+		t.Fatalf("provider received path %q, want the original gemini-2.5-pro — a provider-mismatched replacement must never be attempted", gotPath)
+	}
+	if stats := rec.Stats(); stats.Downgraded != 1 || stats.DowngradeApplied != 0 || stats.DowngradeNotApplied != 1 {
+		t.Errorf("stats = %+v, want Downgraded=1, DowngradeApplied=0, DowngradeNotApplied=1", stats)
+	}
+}
+
+// A DOWNGRADE with no replacement model named — governance's contract
+// guarantees this cannot happen for a real DOWNGRADE, but a decider stub or
+// a future contract change should not crash this integration — is treated
+// as nothing to apply: the call proceeds with the model it originally
+// asked for, and neither DowngradeApplied nor DowngradeNotApplied is
+// counted, since no application was ever attempted.
+func TestAGovernedClientTreatsADowngradeWithNoReplacementModelAsNothingToApply(t *testing.T) {
+	server := provider(t, 200, "application/json", anthropicReply)
+	downgrade := &fixedDecider{decision: governancepb.DecideResponse_DOWNGRADE}
+	_, rec := directWithRecorder(t, service, func(rp *Reporter) {
+		through(t, context.Background(), rp.Governed(Governance{Decider: downgrade}).AnthropicMiddleware(), server.URL+"/v1/messages")
+	})
+
+	if stats := rec.Stats(); stats.Downgraded != 1 || stats.DowngradeApplied != 0 || stats.DowngradeNotApplied != 0 {
+		t.Errorf("stats = %+v, want Downgraded=1, DowngradeApplied=0, DowngradeNotApplied=0 — nothing was ever attempted", stats)
+	}
+}
+
+// A DOWNGRADE never applies to a native Anthropic call: /v1/messages names
+// its model in the JSON request body, which this package does not read or
+// rewrite before sending. The call proceeds with the model it originally
+// asked for.
+func TestAGovernedAnthropicClientNeverAppliesADowngradeOnTheNativePath(t *testing.T) {
+	server := provider(t, 200, "application/json", anthropicReply)
+	downgrade := &fixedDecider{
+		decision:            governancepb.DecideResponse_DOWNGRADE,
+		replacementProvider: ProviderAnthropic,
+		replacementModel:    "claude-haiku-4-5",
+	}
+	got, rec := directWithRecorder(t, service, func(rp *Reporter) {
+		through(t, context.Background(), rp.Governed(Governance{Decider: downgrade}).AnthropicMiddleware(), server.URL+"/v1/messages")
+	})
+
+	a := only(t, got)
+	if a.GetModel() != "claude-sonnet-4-5" {
+		t.Errorf("recorded model = %q, want the reply's own claude-sonnet-4-5 — never the unapplied replacement", a.GetModel())
+	}
+	if stats := rec.Stats(); stats.DowngradeApplied != 0 || stats.DowngradeNotApplied != 1 {
+		t.Errorf("stats = %+v, want DowngradeApplied=0, DowngradeNotApplied=1", stats)
+	}
+}
+
+// A DOWNGRADE is applied to an Anthropic call routed through Vertex by
+// rewriting the model segment of that rewritten URL — the one Anthropic
+// request shape whose model this package can read before sending, exactly
+// as call already does for billedBy and recording.
+func TestAGovernedAnthropicClientAppliesADowngradeOnTheVertexPath(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, anthropicReply)
+	}))
+	defer server.Close()
+
+	downgrade := &fixedDecider{
+		decision:            governancepb.DecideResponse_DOWNGRADE,
+		replacementProvider: ProviderVertexAI,
+		replacementModel:    "claude-haiku-4-5",
+	}
+	_, rec := directWithRecorder(t, service, func(rp *Reporter) {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			server.URL+"/v1/projects/acme/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5:rawPredict",
+			strings.NewReader(`{"anthropic_version":"vertex-2023-10-16","messages":[{"role":"user","content":"the prompt"}]}`))
+		resp, err := rp.Governed(Governance{Decider: downgrade}).AnthropicMiddleware()(req, http.DefaultTransport.RoundTrip)
+		if err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		_, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+	})
+
+	if !strings.Contains(gotPath, "/publishers/anthropic/models/claude-haiku-4-5:rawPredict") {
+		t.Fatalf("provider received path %q, want it naming the replacement claude-haiku-4-5, not the original claude-sonnet-4-5", gotPath)
+	}
+	if stats := rec.Stats(); stats.DowngradeApplied != 1 || stats.DowngradeNotApplied != 0 {
+		t.Errorf("stats = %+v, want DowngradeApplied=1, DowngradeNotApplied=0", stats)
+	}
+}
+
+// A DOWNGRADE never applies to an OpenAI-protocol call: Chat Completions and
+// Responses both name their model in the JSON request body, which this
+// package does not read or rewrite before sending. The call proceeds with
+// the model it originally asked for, exactly as the native Anthropic path
+// does.
+func TestAGovernedOpenAIClientNeverAppliesADowngrade(t *testing.T) {
+	server := provider(t, 200, "application/json", `{"id":"x","model":"gpt-5","choices":[{"finish_reason":"stop"}]}`)
+	downgrade := &fixedDecider{
+		decision:            governancepb.DecideResponse_DOWNGRADE,
+		replacementProvider: ProviderOpenAI,
+		replacementModel:    "gpt-5-mini",
+	}
+	got, rec := directWithRecorder(t, service, func(rp *Reporter) {
+		through(t, context.Background(), rp.Governed(Governance{Decider: downgrade}).OpenAIMiddleware(), server.URL+"/v1/chat/completions")
+	})
+
+	a := only(t, got)
+	if a.GetModel() != "gpt-5" {
+		t.Errorf("recorded model = %q, want the reply's own gpt-5 — never the unapplied replacement", a.GetModel())
+	}
+	if stats := rec.Stats(); stats.Downgraded != 1 || stats.DowngradeApplied != 0 || stats.DowngradeNotApplied != 1 {
+		t.Errorf("stats = %+v, want Downgraded=1, DowngradeApplied=0, DowngradeNotApplied=1", stats)
+	}
+}
+
+// TestARetriedCallAsksGovernanceOncePerAttemptNeverRecursively proves a
+// downgrade cannot create a loop: decide is called exactly once per
+// middleware invocation and never calls itself, so an sdk's own retry —
+// which re-enters the middleware for each attempt, exactly as
+// X-Stainless-Retry-Count already proves elsewhere — asks governance once
+// per attempt, bounded by however many attempts the sdk itself makes, never
+// unboundedly and never as a side effect of the downgrade that was applied
+// to the previous attempt.
+func TestARetriedCallAsksGovernanceOncePerAttemptNeverRecursively(t *testing.T) {
+	server := provider(t, 200, "application/json", `{"id":"x","model":"gpt-5-mini","choices":[{"finish_reason":"stop"}]}`)
+	downgrade := &fixedDecider{decision: governancepb.DecideResponse_DOWNGRADE, replacementProvider: ProviderOpenAI, replacementModel: "gpt-5-mini"}
+
+	got := direct(t, service, func(rp *Reporter) {
+		mw := rp.Governed(Governance{Decider: downgrade}).OpenAIMiddleware()
+		// Two separate middleware invocations, the same shape an sdk's own
+		// retry loop produces: it calls the whole middleware chain again
+		// for each attempt, this library included, rather than looping
+		// inside any one call to it.
+		through(t, context.Background(), mw, server.URL+"/v1/chat/completions")
+		through(t, context.Background(), mw, server.URL+"/v1/chat/completions", "X-Stainless-Retry-Count", "1")
+	})
+
+	if len(downgrade.requests) != 2 {
+		t.Fatalf("Decide was called %d times for two attempts, want exactly 2 — one per attempt, never more", len(downgrade.requests))
+	}
+	if len(got) != 2 {
+		t.Fatalf("recorded %d activities, want 2", len(got))
+	}
+	if got[0].GetAttempt() != 0 || got[1].GetAttempt() != 2 {
+		t.Fatalf("attempts = %d, %d, want 0, 2 — attemptOf reports X-Stainless-Retry-Count + 1", got[0].GetAttempt(), got[1].GetAttempt())
+	}
+}
+
+// A DOWNGRADE is never treated as a DENY: the call must reach the provider
+// even where this integration cannot apply the replacement.
+func TestADowngradeIsNeverTreatedAsADeny(t *testing.T) {
+	sent := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		sent = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","model":"gpt-5","choices":[{"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	downgrade := &fixedDecider{decision: governancepb.DecideResponse_DOWNGRADE, replacementProvider: ProviderOpenAI, replacementModel: "gpt-5-mini"}
+	got := only(t, direct(t, service, func(rp *Reporter) {
+		through(t, context.Background(), rp.Governed(Governance{Decider: downgrade}).OpenAIMiddleware(), server.URL+"/v1/chat/completions")
+	}))
+
+	if !sent {
+		t.Fatal("the provider never received the call — DOWNGRADE must proceed, never block like DENY")
+	}
+	if got.GetStatus() != pb.Activity_OK {
+		t.Errorf("status = %v, want OK", got.GetStatus())
 	}
 }

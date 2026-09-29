@@ -15,6 +15,7 @@ import tempfile
 
 
 CONTRACTS = [
+    "techbridge/ap/metering/v1/agent.proto",
     "techbridge/ap/metering/v1/activity.proto",
     "techbridge/ap/metering/v1/user.proto",
     "techbridge/ap/governance/v1/decision.proto",
@@ -56,6 +57,7 @@ FULL_ACTIVITY = {
     "reported_usage": [{"unit": "cache_read_input_tokens", "quantity": 21847}, {"unit": "input_tokens", "quantity": 4211}],
     "service_tier": "standard",
     "cache_write_ttl_seconds": 3600,
+    "region": "us-central1",
     "provider_cost_micros": 1500,
     "error_format": "ANTHROPIC",
     "reported_error": [{"name": "http_status", "value": "429"}, {"name": "type", "value": "rate_limit_error"}],
@@ -74,7 +76,7 @@ CASES = [
         "fields": {
             "priceable_units": [
                 {"name": "priceableUnits/gemini-in", "display_name": "Gemini input", "provider": "VERTEX_AI", "model": "gemini-2.5-pro", "kind": 1, "unit_cost_nanos": 1250, "effective_from_ns": 1767225600000000000, "rate_card_version": "2026-01"},
-                {"name": "priceableUnits/batch-long", "provider": "VERTEX_AI", "kind": 1, "unit_cost_nanos": 3000, "service_tier": "BATCH", "min_prompt_tokens": 200000, "min_cache_write_ttl_seconds": 3600, "modality": "AUDIO", "effective_from_ns": 1767225600000000000, "effective_to_ns": 1798761600500000000},
+                {"name": "priceableUnits/batch-long", "provider": "VERTEX_AI", "kind": 1, "unit_cost_nanos": 3000, "service_tier": "BATCH", "min_prompt_tokens": 200000, "min_cache_write_ttl_seconds": 3600, "modality": "AUDIO", "region": "REGIONAL", "effective_from_ns": 1767225600000000000, "effective_to_ns": 1798761600500000000},
             ],
             "next_page_token": "page-2",
         },
