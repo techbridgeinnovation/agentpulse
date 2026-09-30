@@ -334,17 +334,19 @@ func TestAnOrdinaryStopIsStillASuccess(t *testing.T) {
 	}
 }
 
-func TestBeforeModelLabelsTheRequestWithTheSanitisedIdentity(t *testing.T) {
+func TestBeforeModelLabelsTheRequestWithItsAgentAndComponent(t *testing.T) {
 	request := &adkmodel.LLMRequest{}
 	opts := options()
 	opts.Backend = genai.BackendVertexAI
 	BeforeModel(nil, opts)(newContext(), request)
 
 	labels := request.Config.Labels
-	// The whole value is sanitised, so the label is the sanitised form of what
-	// gets recorded and the two join.
-	if labels["ap_user"] != "users_abc123" {
-		t.Fatalf("user label = %q, want users_abc123", labels["ap_user"])
+	if labels["ap_agent"] != "atlas" {
+		t.Fatalf("agent label = %q, want atlas, the agent's name without its organisation", labels["ap_agent"])
+	}
+	// Google keeps 1,000 values of a label key per billing account, which a label per person would pass.
+	if _, ok := labels["ap_user"]; ok {
+		t.Fatalf("user label = %q, want none", labels["ap_user"])
 	}
 	if labels["ap_component"] != "atlas" {
 		t.Fatalf("component label = %q", labels["ap_component"])
@@ -399,14 +401,14 @@ func unsetenv(t *testing.T, name, value string) {
 
 func TestBeforeModelNeverReplacesALabelSetCloserToTheCall(t *testing.T) {
 	request := &adkmodel.LLMRequest{
-		Config: &genai.GenerateContentConfig{Labels: map[string]string{"ap_user": "set_by_hand"}},
+		Config: &genai.GenerateContentConfig{Labels: map[string]string{"ap_agent": "set_by_hand"}},
 	}
 	opts := options()
 	opts.Backend = genai.BackendVertexAI
 	BeforeModel(nil, opts)(newContext(), request)
 
-	if got := request.Config.Labels["ap_user"]; got != "set_by_hand" {
-		t.Fatalf("user label = %q, want the value already there", got)
+	if got := request.Config.Labels["ap_agent"]; got != "set_by_hand" {
+		t.Fatalf("agent label = %q, want the value already there", got)
 	}
 }
 

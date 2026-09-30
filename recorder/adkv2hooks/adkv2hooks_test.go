@@ -219,7 +219,7 @@ func TestHittingTheTokenCeilingReadsAsTruncatedNotFailed(t *testing.T) {
 	}
 }
 
-func TestBeforeModelLabelsTheRequestWithTheSanitisedIdentity(t *testing.T) {
+func TestBeforeModelLabelsTheRequestWithItsAgentAndComponent(t *testing.T) {
 	request := &adkmodel.LLMRequest{}
 	opts := options()
 	opts.Backend = genai.BackendVertexAI
@@ -227,8 +227,12 @@ func TestBeforeModelLabelsTheRequestWithTheSanitisedIdentity(t *testing.T) {
 	BeforeModel(r, opts)(newContext(), request)
 
 	labels := request.Config.Labels
-	if labels["ap_user"] != "users_abc123" {
-		t.Errorf("ap_user = %q, want users_abc123 — the billing export accepts no slashes", labels["ap_user"])
+	if labels["ap_agent"] != "pulse" {
+		t.Errorf("ap_agent = %q, want pulse, the agent's name without its organisation", labels["ap_agent"])
+	}
+	// Google keeps 1,000 values of a label key per billing account, which a label per person would pass.
+	if _, ok := labels["ap_user"]; ok {
+		t.Errorf("ap_user = %q, want none", labels["ap_user"])
 	}
 	if labels["ap_component"] != "pulseagent-v1" {
 		t.Errorf("ap_component = %q, want pulseagent-v1", labels["ap_component"])
@@ -283,15 +287,15 @@ func unsetenv(t *testing.T, name, value string) {
 
 func TestBeforeModelNeverReplacesALabelSetCloserToTheCall(t *testing.T) {
 	request := &adkmodel.LLMRequest{
-		Config: &genai.GenerateContentConfig{Labels: map[string]string{"ap_user": "set_by_the_caller"}},
+		Config: &genai.GenerateContentConfig{Labels: map[string]string{"ap_agent": "set_by_the_caller"}},
 	}
 	opts := options()
 	opts.Backend = genai.BackendVertexAI
 	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
 	BeforeModel(r, opts)(newContext(), request)
 
-	if got := request.Config.Labels["ap_user"]; got != "set_by_the_caller" {
-		t.Fatalf("ap_user = %q, want the caller's own value left alone", got)
+	if got := request.Config.Labels["ap_agent"]; got != "set_by_the_caller" {
+		t.Fatalf("ap_agent = %q, want the caller's own value left alone", got)
 	}
 }
 

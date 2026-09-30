@@ -129,6 +129,10 @@ func (rp *Reporter) observe(p protocol, req *http.Request, next func(*http.Reque
 		}
 	}
 
+	if l, ok := p.(labeller); ok {
+		req = labelled(l, req, rp.billingLabels(component))
+	}
+
 	c := &call{
 		rp: rp, p: p, ctx: ctx, start: start, component: component, billedBy: billedBy,
 		format:  p.format(req, billedBy),

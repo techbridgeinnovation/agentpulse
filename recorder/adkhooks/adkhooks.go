@@ -292,10 +292,7 @@ func AfterAgent(r *recorder.Recorder, _ Options) agent.AfterAgentCallback {
 // It also notes which model the call asks for, so a call whose provider reports
 // no model at all is still recorded against the one requested.
 //
-// Labels set here are carried into the cloud billing export, which is what
-// makes a charge that is not measured in tokens attributable at all. Only
-// opaque identifiers go on a label — never an email — so nothing reaches
-// billing that would be PII.
+// Labels set here are carried into the cloud billing export, which is how a bill line is matched to the agent and component that spent it. The agent and the component are labelled and the person is not, because Google keeps at most 1,000 values of a label key per billing account and drops the rest without notice.
 //
 // ALLOW and NOTIFY both let the call proceed: NOTIFY increments the Notified
 // counter first, since it is advisory and must never block. DENY is the one
@@ -331,8 +328,8 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 		}
 
 		labels := map[string]string{}
-		if user := labelValue(userIDOf(ctx)); user != "" {
-			labels["ap_user"] = user
+		if agent := labelValue(opts.Agent[strings.LastIndex(opts.Agent, "/")+1:]); agent != "" {
+			labels["ap_agent"] = agent
 		}
 		if component := labelValue(componentOf(ctx)); component != "" {
 			labels["ap_component"] = component

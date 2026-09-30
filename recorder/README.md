@@ -65,7 +65,7 @@ Every field on the record comes from the framework's own callback context: which
 
 `adkhooks` is the first major version of the framework and `adkv2hooks` the second. They are different libraries as far as Go is concerned, with unrelated types, so one package cannot serve both. They read the same things, and differ in two ways: only `adkhooks` has `BeforeTool`, which times each tool call, and only `adkv2hooks` takes `Model`, which names the model where a streamed answer does not.
 
-`BeforeModel` labels each request with the user and component, which the cloud billing export carries, but only on Vertex: the Gemini API refuses a request with any label. It reads the backend from `GOOGLE_GENAI_USE_ENTERPRISE` and `GOOGLE_GENAI_USE_VERTEXAI`, as the genai client does. An agent that chooses Vertex in code instead sets `Options.Backend` to the same value.
+`BeforeModel` labels each request with `ap_agent` and `ap_component`, which the cloud billing export carries, but only on Vertex: the Gemini API refuses a request with any label. A client instrumented with `InstrumentGenAI` labels its Vertex calls the same way. The person is not labelled, because Google keeps at most 1,000 values of a label key per billing account. It reads the backend from `GOOGLE_GENAI_USE_ENTERPRISE` and `GOOGLE_GENAI_USE_VERTEXAI`, as the genai client does. An agent that chooses Vertex in code instead sets `Options.Backend` to the same value.
 
 `AfterAgent` releases the request's running total when the turn ends, and belongs on the agent that owns the turn. On a sub-agent it fires when that sub-agent finishes, while the turn it was delegated from is still running.
 

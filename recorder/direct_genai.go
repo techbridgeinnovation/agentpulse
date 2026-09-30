@@ -146,6 +146,14 @@ func (genaiProtocol) denied(*http.Request) (*http.Response, error) {
 // mirroring exactly how call above parses it out — the same path shape,
 // whether or not it carries a projects/.../publishers/google prefix ahead
 // of models/.
+// label adds billing labels to a call served by Vertex, the only backend that accepts them: the Gemini API refuses a request that carries any. Vertex names the publisher in the path, the Gemini API does not.
+func (genaiProtocol) label(req *http.Request, labels map[string]string) *http.Request {
+	if req.URL == nil || !strings.Contains(req.URL.Path, "/publishers/google/models/") {
+		return req
+	}
+	return withLabels(req, labels)
+}
+
 func (genaiProtocol) downgrade(req *http.Request, model string) bool {
 	if req.URL == nil {
 		return false
