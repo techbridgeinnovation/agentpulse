@@ -63,7 +63,9 @@ opts := adkhooks.Options{Agent: agentName, Service: "atlas-agent", Decider: reco
 
 Every field on the record comes from the framework's own callback context: which request, which user, which session, which agent, which model, how many tokens, whether it succeeded. A user set on the context with `recorder.WithUser` before the runner is invoked wins over the framework's own user id, name and all. Which tenant the turn is for, and which unit of work inside it, are read from the same context — the framework knows neither.
 
-`adkhooks` is the first major version of the framework and `adkv2hooks` the second. They are different libraries as far as Go is concerned, with unrelated types, so one package cannot serve both. The callbacks and everything they read are the same.
+`adkhooks` is the first major version of the framework and `adkv2hooks` the second. They are different libraries as far as Go is concerned, with unrelated types, so one package cannot serve both. They read the same things, and differ in two ways: only `adkhooks` has `BeforeTool`, which times each tool call, and only `adkv2hooks` takes `Model`, which names the model where a streamed answer does not.
+
+`BeforeModel` labels each request with the user and component, which the cloud billing export carries, but only on Vertex: the Gemini API refuses a request with any label. It reads the backend from `GOOGLE_GENAI_USE_ENTERPRISE` and `GOOGLE_GENAI_USE_VERTEXAI`, as the genai client does. An agent that chooses Vertex in code instead sets `Options.Backend` to the same value.
 
 `AfterAgent` releases the request's running total when the turn ends, and belongs on the agent that owns the turn. On a sub-agent it fires when that sub-agent finishes, while the turn it was delegated from is still running.
 

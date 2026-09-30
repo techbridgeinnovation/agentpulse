@@ -12,6 +12,7 @@ package adkv2hooks
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -58,6 +59,9 @@ type Options struct {
 
 	// Region is where the model calls are processed, e.g. "us-central1" or "global". Defaults to the Vertex location in GOOGLE_CLOUD_LOCATION when the agent runs on Vertex.
 	Region string
+
+	// Backend is the Google backend the agent's model was built with, where it is chosen in code rather than by GOOGLE_GENAI_USE_VERTEXAI. Billing labels are added only on Vertex, because the Gemini API refuses a request that carries any.
+	Backend genai.Backend
 
 	// Deprecated: set BilledBy. Kept so an agent configured before it existed still attributes its spend correctly.
 	Provider pb.Activity_Provider
@@ -324,6 +328,7 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 	if decider != nil && opts.DecideCacheTTL > 0 {
 		decider = recorder.NewCachingDecider(decider, opts.DecideCacheTTL)
 	}
+	vertex := opts.onVertex()
 
 	return func(ctx agent.Context, request *adkmodel.LLMRequest) (*adkmodel.LLMResponse, error) {
 		if request == nil {
@@ -337,7 +342,7 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 		if component := labelValue(componentOf(ctx)); component != "" {
 			labels["ap_component"] = component
 		}
-		if len(labels) > 0 {
+		if vertex && len(labels) > 0 {
 			if request.Config == nil {
 				request.Config = &genai.GenerateContentConfig{}
 			}
@@ -552,6 +557,23 @@ func applyUsage(activity *pb.Activity, usage *genai.GenerateContentResponseUsage
 	activity.CachedTokens = usage.CachedContentTokenCount
 	activity.ReasoningTokens = usage.ThoughtsTokenCount
 	activity.TotalTokens = usage.TotalTokenCount
+}
+
+// onVertex is whether the agent's model is served by Vertex, the only backend that accepts labels. Without Options.Backend it is read from the settings the genai client reads, in the same order.
+func (o Options) onVertex() bool {
+	switch o.Backend {
+	case genai.BackendVertexAI, genai.BackendEnterprise:
+		return true
+	case genai.BackendGeminiAPI:
+		return false
+	}
+	for _, name := range []string{"GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GENAI_USE_VERTEXAI"} {
+		if v, ok := os.LookupEnv(name); ok {
+			v = strings.ToLower(v)
+			return v == "1" || v == "true"
+		}
+	}
+	return false
 }
 
 // labelValue coerces a value into what the billing export accepts: lowercase letters, digits, dashes and underscores, up to 63 characters.

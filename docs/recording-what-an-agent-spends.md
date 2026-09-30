@@ -64,7 +64,7 @@ Neither is an argument at a model call site. A value a call site can choose is a
 
 ## Which path applies
 
-**Built on Google ADK?** Register the recorder's callbacks, three in Go and one plugin in Python, and no call site changes. Each model call and tool call is filed under the sub-agent that made it.
+**Built on Google ADK?** Register the recorder's callbacks, four in Go (five on the first ADK major) and one plugin in Python, and no call site changes. Each model call and tool call is filed under the sub-agent that made it.
 
 ```python
 app = App(name="atlas", root_agent=agent, plugins=[reporter.governed().adk_plugin()])
@@ -94,7 +94,7 @@ Each call is recorded under the user, workspace and project already on its conte
 
 A few things the client cannot see for you:
 
-- Claude served through Vertex or Bedrock is billed by Google or Amazon. Set `BilledBy` on the attribution, and register the middleware before the sdk's `vertex` or `bedrock` option.
+- Claude served through Vertex or Bedrock is billed by Google or Amazon. Set `BilledBy` on the attribution, and register the middleware before the sdk's `vertex` or `bedrock` option. A streamed Bedrock answer arrives in a binary form the recorder does not read, so it is recorded without token counts.
 - A streamed OpenAI chat reports its token counts only when the request sets `stream_options.include_usage`. Without it the call is recorded with no counts.
 - Gemini's Live api does not travel over the client's transport, so it is not recorded.
 - Do not instrument a client an ADK agent also uses: the agent's callbacks already record its calls.
