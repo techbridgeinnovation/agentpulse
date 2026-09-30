@@ -3,6 +3,7 @@ package adkv2hooks
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -220,8 +221,10 @@ func TestHittingTheTokenCeilingReadsAsTruncatedNotFailed(t *testing.T) {
 
 func TestBeforeModelLabelsTheRequestWithTheSanitisedIdentity(t *testing.T) {
 	request := &adkmodel.LLMRequest{}
+	opts := options()
+	opts.Backend = genai.BackendVertexAI
 	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
-	BeforeModel(r, options())(newContext(), request)
+	BeforeModel(r, opts)(newContext(), request)
 
 	labels := request.Config.Labels
 	if labels["ap_user"] != "users_abc123" {
@@ -232,12 +235,60 @@ func TestBeforeModelLabelsTheRequestWithTheSanitisedIdentity(t *testing.T) {
 	}
 }
 
+// The Gemini API refuses a request that carries labels, so labelling one would fail every call the agent makes.
+func TestBeforeModelLabelsNothingOnTheGeminiAPI(t *testing.T) {
+	request := &adkmodel.LLMRequest{}
+	opts := options()
+	opts.Backend = genai.BackendGeminiAPI
+	BeforeModel(recorder.New(recorder.Config{FlushEvery: time.Hour}), opts)(newContext(), request)
+
+	if request.Config != nil && len(request.Config.Labels) > 0 {
+		t.Fatalf("labels = %v, want none on the Gemini API", request.Config.Labels)
+	}
+}
+
+func TestBeforeModelReadsTheBackendFromTheGenaiSettings(t *testing.T) {
+	for _, tc := range []struct {
+		enterprise, vertex string
+		want               bool
+	}{
+		{"", "true", true},
+		{"", "1", true},
+		{"", "false", false},
+		{"true", "false", true},
+		{"false", "true", false},
+		{"", "", false},
+	} {
+		unsetenv(t, "GOOGLE_GENAI_USE_ENTERPRISE", tc.enterprise)
+		unsetenv(t, "GOOGLE_GENAI_USE_VERTEXAI", tc.vertex)
+		request := &adkmodel.LLMRequest{}
+		opts := options()
+		BeforeModel(recorder.New(recorder.Config{FlushEvery: time.Hour}), opts)(newContext(), request)
+
+		got := request.Config != nil && len(request.Config.Labels) > 0
+		if got != tc.want {
+			t.Errorf("enterprise=%q vertex=%q: labelled = %v, want %v", tc.enterprise, tc.vertex, got, tc.want)
+		}
+	}
+}
+
+// unsetenv sets name to value for the test, or leaves it unset when value is empty, since an empty setting still chooses the Gemini API.
+func unsetenv(t *testing.T, name, value string) {
+	t.Helper()
+	t.Setenv(name, value)
+	if value == "" {
+		os.Unsetenv(name)
+	}
+}
+
 func TestBeforeModelNeverReplacesALabelSetCloserToTheCall(t *testing.T) {
 	request := &adkmodel.LLMRequest{
 		Config: &genai.GenerateContentConfig{Labels: map[string]string{"ap_user": "set_by_the_caller"}},
 	}
+	opts := options()
+	opts.Backend = genai.BackendVertexAI
 	r := recorder.New(recorder.Config{FlushEvery: time.Hour})
-	BeforeModel(r, options())(newContext(), request)
+	BeforeModel(r, opts)(newContext(), request)
 
 	if got := request.Config.Labels["ap_user"]; got != "set_by_the_caller" {
 		t.Fatalf("ap_user = %q, want the caller's own value left alone", got)
