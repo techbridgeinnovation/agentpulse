@@ -124,8 +124,12 @@ def _build_hooks_class() -> type:
         async def on_llm_end(self, context: Any, agent: Any, response: Any) -> None:
             try:
                 known = self._models.take((id(context), _str(getattr(agent, "name", None))))
-                if known:
-                    self._record_model(known, response)
+                if not known:
+                    # A call whose start was not seen is still recorded from what its end carries, with no duration, so its usage is never lost.
+                    framework = _framework(agent)
+                    model, provider = _model_and_provider(agent)
+                    known = {"model": model, "provider": provider, "framework": framework, "component": current_component() or framework.agent or "openai-agents"}
+                self._record_model(known, response)
             except Exception:
                 self._panicked()
 

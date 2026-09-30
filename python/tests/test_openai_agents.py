@@ -175,3 +175,19 @@ def test_the_model_and_provider_come_from_how_the_agent_names_its_model():
     assert _model_and_provider(Agent("litellm/anthropic/claude-sonnet-5")) == ("claude-sonnet-5", "ANTHROPIC")
     assert _model_and_provider(Agent(LitellmModel())) == ("claude-sonnet-5", "ANTHROPIC")
     assert _model_and_provider(Agent(None))[1] == "OPENAI"
+
+
+def test_a_call_whose_start_was_not_seen_is_still_recorded():
+    rp, sink = reporter()
+    hooks = rp.openai_agents_hooks()
+
+    class Agent:
+        name = "helper"
+        model = "gpt-5"
+
+    class Response:
+        usage = {"input_tokens": 10, "output_tokens": 2}
+
+    asyncio.run(hooks.on_llm_end(object(), Agent(), Response()))
+    [a] = recorded(rp, sink)
+    assert (a.model, a.sub_agent, a.duration_ms, a.usage_format) == ("gpt-5", "helper", 0, "OPENAI_RESPONSES")
