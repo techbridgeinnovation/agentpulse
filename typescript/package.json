@@ -1,0 +1,28 @@
+{
+  "name": "techbridge-agentpulse",
+  "version": "0.1.0",
+  "description": "Records what an AI agent spent, from inside the agent's own process, for Agent Pulse.",
+  "type": "module",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^7"
+  }
+}
