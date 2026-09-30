@@ -1,0 +1,107 @@
+# recorder/typescript
+
+## Service Overview
+
+**Purpose.** The TypeScript recorder is a library that runs inside an agent's own Node process, the counterpart of `recorder/v1` and `recorder/python`. It observes what a service spent on models and tools and hands it to Agent Pulse through the gateway. It observes rather than carries: model traffic goes straight from the agent to its provider and never passes through here.
+
+**The first rule.** It must never degrade its host. Recording never blocks, never throws and never waits on the network. A full queue drops records and counts them rather than waiting, and a destination that fails or hangs is isolated from the others and from the caller. That ranks above completeness of data. Dropped records are counted in `stats()`, and that counter cannot be turned off.
+
+**It has no dependencies.** It speaks gRPC-web to the gateway over the platform's own `fetch`, with the few protobuf messages it sends encoded by hand, so it never decides which version of a package somebody else's agent loads. Node 18.18 or newer.
+
+## Ownership & Contact
+
+| | |
+| --- | --- |
+| Owner | Moses Otieno — moses@techbridgeinnovation.co |
+| Product | Agent Pulse (`techbridge.ap`) |
+| Package | `techbridge-agentpulse` |
+
+## Dependencies
+
+**Calls out to** `gateway/v1`, which forwards to `metering/v1` for records and names, one call per batch and never one per record, and to `governance/v1` for spend decisions. Every call carries the api key and its secret.
+
+**Called by** each Node service's own process, in line.
+
+**Publishes and listens to** nothing.
+
+## Wiring it in
+
+Four settings, read from the environment and refused at startup when missing: `AP_GATEWAY`, `AP_API_KEY` (the key's name, `organisations/<id>/apiKeys/<id>`), `AP_API_SECRET`, and `AP_AGENT` (`organisations/<id>/agents/<name>`, under the key's organisation).
+
+```ts
+import { connect, scope } from "techbridge-agentpulse";
+
+const reporter = connect("research-agent").governed();
+```
+
+Once per request, where the sign-in has been checked, say who the work is for. Everything awaited inside is filed under it.
+
+```ts
+await scope({ request: requestId, user: { id: claims.sub, name: claims.name }, workspace: "acme" }, () => handle(req));
+```
+
+## The Vercel AI SDK
+
+One middleware, wrapped around a model where it is created, and nothing at the call sites:
+
+```ts
+import { wrapLanguageModel } from "ai";
+
+const model = wrapLanguageModel({ model: openai("gpt-5"), middleware: reporter.aiSdkMiddleware() });
+```
+
+Every `generateText`, `streamText`, `generateObject` and agent step made with that model is recorded, a streamed call once when its stream ends or is cancelled. The SDK hands a middleware the provider's own usage, so a call to OpenAI, Anthropic or Gemini is recorded in that provider's convention, and billed by Google where it is served through Vertex. Any other provider is recorded in the SDK's own convention, `AI_SDK`, which `metering/v1` reads with a reader of its own.
+
+A governed reporter's middleware refuses a call a budget has run out on by throwing `SpendDenied` before the provider is called; `denied(err)` recognises it. A middleware cannot change which model its call uses, so a DOWNGRADE lets the call through as asked and is counted in `stats()` as not applied. `specificationVersion` is `v4` for AI SDK 7, and can be set to `v3` or `v2` for an earlier major.
+
+## Recording by hand
+
+Code with no framework to observe reports for itself, naming the provider's counts under the provider's own names:
+
+```ts
+reporter.modelCall({ model: "gpt-5", reported: reportedFrom(response.usage), format: FORMAT_OPENAI_RESPONSES, durationMs });
+
+const verdict = await reporter.decide("gpt-5", { provider: "OPENAI" });
+if (!verdict.proceed) return refuse();
+```
+
+Only a genuine DENY refuses. Governance unreachable or slower than a second and a half lets the call go ahead and is counted, unless it refused the same question within the hour, which it then does again.
+
+## Layout
+
+```
+recorder/typescript/
+├── src/
+│   ├── index.ts      the public names
+│   ├── report.ts     Attribution, Reporter, connect
+│   ├── aisdk.ts      the middleware for the Vercel AI SDK
+│   ├── recorder.ts   the queue, the flush and the counters
+│   ├── context.ts    scope, and who a piece of work is for
+│   ├── governance.ts asking whether a call may proceed, verdicts reused from memory, refusals repeated
+│   ├── sinks.ts      Sink, Discard, MeteringSink
+│   ├── gateway.ts    one gRPC-web call over fetch, with the key and the secret
+│   ├── usage.ts      a provider's counts under its own names
+│   ├── failure.ts    an error reduced to its code, and SpendDenied
+│   ├── wire.ts       the protobuf encoding of what is sent and read
+│   └── version.ts
+└── test/
+```
+
+## Running it
+
+The tests run on the TypeScript sources directly, with Node 24's own type stripping, and read the wire fixtures `recorder/python` writes from the contract, so both recorders are checked against the same bytes.
+
+```bash
+cd recorder/typescript
+npm install
+npm test
+npm run typecheck
+```
+
+The tests against the real AI SDK run where `ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic` and `@ai-sdk/google` are installed and are skipped where they are not:
+
+```bash
+npm install --no-save ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google && npm test
+```
+
+`npm run build` writes the published JavaScript and its type declarations to `dist/`.
