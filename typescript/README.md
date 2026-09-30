@@ -54,6 +54,8 @@ Every `generateText`, `streamText`, `generateObject` and agent step made with th
 
 A governed reporter's middleware refuses a call a budget has run out on by throwing `SpendDenied` before the provider is called; `denied(err)` recognises it. A middleware cannot change which model its call uses, so a DOWNGRADE lets the call through as asked and is counted in `stats()` as not applied. `specificationVersion` is `v4` for AI SDK 7, and can be set to `v3` or `v2` for an earlier major.
 
+A call to Gemini through `@ai-sdk/google-vertex` is sent with the billing labels `ap_agent` and `ap_component`, so the Cloud billing export can be matched to the agent that made it. A label the caller already set is kept, and no other provider is labelled.
+
 ## Recording by hand
 
 Code with no framework to observe reports for itself, naming the provider's counts under the provider's own names:

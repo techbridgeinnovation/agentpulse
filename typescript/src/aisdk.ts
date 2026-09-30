@@ -6,6 +6,8 @@
 //
 // Every generateText, streamText, generateObject and agent step made with that model is recorded. The SDK hands a middleware the provider's own usage as `usage.raw`, so a call to OpenAI, Anthropic or Gemini is recorded in that provider's convention, and any other provider in the SDK's own, `AI_SDK`. Nothing about a call's content is read: the middleware is handed the prompt and the reply, and this takes only the model, the counts, the finish and the failure.
 //
+// A call to Gemini on Vertex AI is labelled with the agent and component, so a line of the Cloud billing export can be tied back to the agent that made it.
+//
 // A governed reporter's middleware asks before each call and refuses one by throwing SpendDenied before the provider is called. A middleware cannot change which model its call uses, so a DOWNGRADE lets the call through as asked and is counted as not applied.
 
 import { createRequire } from "node:module";
@@ -34,6 +36,11 @@ interface Model {
   readonly modelId: string;
 }
 
+// The call options a middleware can change. Only the provider options are read or replaced.
+interface Params {
+  providerOptions?: Record<string, unknown>;
+}
+
 interface FinishReason {
   unified?: string;
   raw?: string;
@@ -60,6 +67,7 @@ interface StreamResult {
 /** The middleware `wrapLanguageModel` takes. */
 export interface Middleware {
   readonly specificationVersion: string;
+  transformParams<P extends Params>(options: { type: string; params: P; model: Model }): Promise<P>;
   wrapGenerate(options: { doGenerate: () => PromiseLike<Result>; model: Model }): Promise<Result>;
   wrapStream(options: { doStream: () => PromiseLike<StreamResult>; model: Model }): Promise<StreamResult>;
 }
@@ -106,6 +114,42 @@ function usageOf(usage: unknown, format: string): { reported: Record<string, num
   return { reported: reportedFrom(normalised), format: FORMAT_AI_SDK };
 }
 
+/** A billing label value as Google accepts one, matching the Go recorder: lowercase, only [a-z0-9_-], at most 63 characters. */
+export function labelValue(v: string): string {
+  let out = "";
+  for (const ch of v.trim().toLowerCase()) out += /^[a-z0-9_-]$/.test(ch) ? ch : "_";
+  return out.replace(/^_+|_+$/g, "").slice(0, 63);
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+// AI SDK 5 reads Vertex options from `google` only, 6 from `vertex` and 7 from `googleVertex` then `vertex`, each falling back to `google` when its own is absent. Labels go into `google` and into whichever of the others the caller already set, so the namespace the provider reads always carries them and no namespace is added that would displace the caller's.
+const VERTEX_NAMESPACES = ["google", "vertex", "googleVertex"];
+
+/** The params with Agent Pulse labels added, for a Gemini call served by Vertex AI; otherwise the params as they were. A label the caller set is never replaced. */
+export function withLabels<P extends Params>(params: P, provider: string, agent: string, component: string): P {
+  // The Gemini API is not labelled: labels are a Vertex AI billing feature, and the Gemini API has refused the field.
+  if (!provider.toLowerCase().startsWith("google.vertex.")) return params;
+  const labels: Record<string, string> = {};
+  const name = labelValue(agent.slice(agent.lastIndexOf("/") + 1));
+  if (name) labels.ap_agent = name;
+  const part = labelValue(component);
+  if (part) labels.ap_component = part;
+  if (!Object.keys(labels).length) return params;
+  const given = params.providerOptions;
+  if (given !== undefined && !isRecord(given)) return params;
+  const providerOptions: Record<string, unknown> = { ...given };
+  for (const ns of VERTEX_NAMESPACES) {
+    const current = providerOptions[ns];
+    if (current === undefined && ns !== "google") continue;
+    if (current !== undefined && !isRecord(current)) continue;
+    const existing = current?.labels;
+    if (existing !== undefined && !isRecord(existing)) continue;
+    providerOptions[ns] = { ...current, labels: { ...labels, ...existing } };
+  }
+  return { ...params, providerOptions };
+}
+
 function finishOf(reason: FinishReason | string | undefined): string {
   if (typeof reason === "string") return reason;
   return reason?.raw || reason?.unified || "";
@@ -114,9 +158,10 @@ function finishOf(reason: FinishReason | string | undefined): string {
 export function middleware(reporter: Reporter, options: MiddlewareOptions = {}): Middleware {
   const framework = (): Framework => ({ name: FRAMEWORK, version: installedVersion() });
 
+  const component = options.component || "ai-sdk";
+
   // Only a refusal leaves here as an error: anything else going wrong inside is counted and the call goes ahead as if the middleware were not there.
   const before = async (model: Model): Promise<{ started: number; billedBy: string; format: string; component: string }> => {
-    const component = options.component || "ai-sdk";
     let call = { started: performance.now(), billedBy: "", format: FORMAT_AI_SDK, component };
     let refused = false;
     try {
@@ -159,6 +204,15 @@ export function middleware(reporter: Reporter, options: MiddlewareOptions = {}):
 
   return {
     specificationVersion: options.specificationVersion ?? "v4",
+
+    async transformParams({ params, model }) {
+      try {
+        return withLabels(params, String(model.provider ?? ""), String(reporter.attribution.agent ?? ""), component);
+      } catch {
+        reporter.recorder.note("panicked");
+        return params;
+      }
+    },
 
     async wrapGenerate({ doGenerate, model }) {
       const call = await before(model);

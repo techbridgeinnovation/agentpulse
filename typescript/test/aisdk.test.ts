@@ -176,3 +176,59 @@ test("a stream the caller stops reading is still recorded, as cancelled", { skip
   }
   assert.equal(activities.length, 1);
 });
+
+// Labels are added to the params before the provider builds its request, so these call the middleware's transform directly and need no SDK.
+const VERTEX = { provider: "google.vertex.chat", modelId: "gemini-2.5-flash" };
+
+async function transformed(params: Record<string, unknown>, model: { provider: string; modelId: string }, options: { component?: string; agent?: string } = {}) {
+  const sink = new MemorySink();
+  const rp = new Reporter(new Recorder({ sinks: [sink], exitTimeoutMs: 0 }), { agent: options.agent ?? AGENT, service: "svc" });
+  const out = await rp.aiSdkMiddleware({ component: options.component }).transformParams({ type: "generate", params, model });
+  return [out, rp] as const;
+}
+
+test("a call to Gemini on Vertex is labelled with the agent and component in every namespace the SDK reads", async () => {
+  const [out] = await transformed({ prompt: [] }, VERTEX, { component: "shortlist" });
+  assert.deepEqual(out.providerOptions, { google: { labels: { ap_agent: "assistant", ap_component: "shortlist" } } });
+  const [v6] = await transformed({ providerOptions: { vertex: { cachedContent: "c" } } }, VERTEX);
+  assert.deepEqual(v6.providerOptions, {
+    google: { labels: { ap_agent: "assistant", ap_component: "ai-sdk" } },
+    vertex: { cachedContent: "c", labels: { ap_agent: "assistant", ap_component: "ai-sdk" } },
+  });
+  const [v7] = await transformed({ providerOptions: { googleVertex: {} } }, VERTEX);
+  assert.deepEqual((v7.providerOptions as any).googleVertex.labels, { ap_agent: "assistant", ap_component: "ai-sdk" });
+});
+
+test("the agent label is sanitised as Google requires", async () => {
+  const [out] = await transformed({}, VERTEX, { agent: "organisations/acme/agents/__Deal Scout.v2!__", component: "x".repeat(80) });
+  const labels = (out.providerOptions as any).google.labels;
+  assert.equal(labels.ap_agent, "deal_scout_v2");
+  assert.equal(labels.ap_component, "x".repeat(63));
+});
+
+test("a label the caller set is kept, and other provider options are left alone", async () => {
+  const params = { prompt: [], providerOptions: { google: { labels: { ap_agent: "mine", team: "growth" }, thinkingConfig: { thinkingBudget: 0 } }, openai: { user: "u" } } };
+  const before = structuredClone(params);
+  const [out] = await transformed(params, VERTEX);
+  assert.deepEqual(out.providerOptions, {
+    google: { labels: { ap_agent: "mine", ap_component: "ai-sdk", team: "growth" }, thinkingConfig: { thinkingBudget: 0 } },
+    openai: { user: "u" },
+  });
+  assert.deepEqual(out.prompt, []);
+  assert.deepEqual(params, before);
+});
+
+test("no other provider is labelled, the Gemini API included", async () => {
+  for (const provider of ["openai.chat", "openai.responses", "anthropic.messages", "google.generative-ai", "vertex.anthropic.messages"]) {
+    const params = { providerOptions: { google: { labels: { team: "growth" } } } };
+    const [out] = await transformed(params, { provider, modelId: "m" });
+    assert.equal(out, params, provider);
+  }
+});
+
+test("a failure while labelling leaves the params exactly as they were", async () => {
+  const params = { providerOptions: { google: { get labels(): never { throw new Error("broken"); } } } };
+  const [out, rp] = await transformed(params, VERTEX);
+  assert.equal(out, params);
+  assert.equal(rp.recorder.stats().panicked, 1);
+});
