@@ -4,6 +4,7 @@ Each test builds a client the way an adopter would and makes an ordinary call. W
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -379,7 +380,6 @@ def test_the_region_is_read_from_the_url_the_call_went_to():
 def test_an_openai_call_to_a_residency_host_records_that_region():
     openai = pytest.importorskip("openai")
     import importlib
-    import json
 
     # The http library the sdk's own client is built on, httpx or httpx2 by sdk version, so the fake transport is one that client accepts.
     roots = [cls.__module__.split(".")[0] for cls in type(openai.DefaultHttpxClient()).__mro__]
@@ -464,3 +464,72 @@ def test_a_gemini_developer_api_call_records_no_region(provider):
     client.models.generate_content(model="gemini-2.5-pro", contents="x")
     [a] = recorded(rp, sink)
     assert a.region == ""
+
+
+class Sent:
+    """A transport that answers every generate call with GENERATE and keeps the body each request carried."""
+
+    def __init__(self, httpx):
+        self.bodies = []
+        self.lengths = []
+
+        class Body(httpx.SyncByteStream):
+            def __iter__(self):
+                yield json.dumps(GENERATE).encode()
+
+        def answer(request):
+            body = request.read()
+            self.bodies.append(body)
+            self.lengths.append(request.headers.get("content-length"))
+            return httpx.Response(200, headers={"content-type": "application/json"}, stream=Body())
+
+        self.transport = httpx.MockTransport(answer)
+
+
+def test_a_gemini_call_on_vertex_carries_billing_labels_in_its_body():
+    genai = pytest.importorskip("google.genai")
+    credentials = pytest.importorskip("google.oauth2.credentials")
+    httpx = pytest.importorskip("httpx")
+    sink = MemorySink()
+    rp = Reporter(Recorder(Config(sinks=[sink], exit_timeout=0, flush_every=60)), Attribution(agent="organisations/acme/agents/Asset.Summary", service="svc"))
+    sent = Sent(httpx)
+    client = genai.Client(vertexai=True, project="p", location="us-central1", credentials=credentials.Credentials(token="t"), http_options=rp.genai_http_options(client_args={"transport": sent.transport}))
+    with scope(component="Summary Writer"):
+        client.models.generate_content(model="gemini-2.5-pro", contents="SECRET")
+        # A label the caller set under the same key is kept, and one of its own is left alone.
+        client.models.generate_content(model="gemini-2.5-pro", contents="SECRET", config=genai.types.GenerateContentConfig(labels={"ap_component": "mine", "team": "search"}))
+    first, second = (json.loads(body) for body in sent.bodies)
+    assert first["labels"] == {"ap_agent": "asset_summary", "ap_component": "summary_writer"}
+    assert second["labels"] == {"ap_agent": "asset_summary", "ap_component": "mine", "team": "search"}
+    assert first["contents"][0]["parts"][0]["text"] == "SECRET"
+    assert sent.lengths == [str(len(body)) for body in sent.bodies]
+    assert len(recorded(rp, sink)) == 2
+
+
+def test_a_gemini_developer_api_call_carries_no_labels():
+    genai = pytest.importorskip("google.genai")
+    httpx = pytest.importorskip("httpx")
+    rp, sink = reporter()
+    sent = Sent(httpx)
+    client = genai.Client(api_key="k", http_options=rp.genai_http_options(client_args={"transport": sent.transport}))
+    client.models.generate_content(model="gemini-2.5-pro", contents="x")
+    # The Gemini api refuses a request carrying labels, so the body goes as the sdk wrote it.
+    assert "labels" not in json.loads(sent.bodies[0])
+    assert len(recorded(rp, sink)) == 1
+
+
+def test_a_vertex_body_that_cannot_be_labelled_is_sent_exactly_as_it_was():
+    httpx = pytest.importorskip("httpx")
+    from agentpulse.clients import ObservingTransport
+
+    rp, _ = reporter()
+    sent = Sent(httpx)
+    transport = ObservingTransport(rp, sent.transport)
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
+    for content in (b"not json", b"[1, 2]", b'{"labels": "not a map"}'):
+        request = httpx.Request("POST", url, content=content)
+        transport.handle_request(request).read()
+    # A body only readable as a stream is never read here to be rewritten.
+    transport.handle_request(httpx.Request("POST", url, content=iter([b'{"contents": []}']))).read()
+    assert sent.bodies == [b"not json", b"[1, 2]", b'{"labels": "not a map"}', b'{"contents": []}']
+    assert rp.recorder.stats().panicked == 0

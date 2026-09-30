@@ -34,6 +34,7 @@ from .failure import (
     reported_genai_body,
     truncated_finish,
 )
+from .report import _billing_labels
 from .usage import (
     FORMAT_ANTHROPIC,
     FORMAT_OPENAI_CHAT,
@@ -148,6 +149,9 @@ class _Protocol:
 
     # Whether the model is named in the request body rather than the path.
     model_in_body = False
+
+    # Whether a call to Vertex may carry billing labels in its JSON body.
+    labelled = False
 
     def model_in_path(self, path: str, model: str) -> str | None:
         """The path rewritten to call `model`, or None where the model is not in the path."""
@@ -308,6 +312,8 @@ class _Anthropic(_Protocol):
 class _GenAI(_Protocol):
     """generateContent and its streamed form, on the Gemini api and Vertex alike."""
 
+    labelled = True
+
     def call(self, method, path):
         if method != "POST" or not (path.endswith(":generateContent") or path.endswith(":streamGenerateContent")):
             return False, ""
@@ -379,6 +385,12 @@ def region_of(host: str, path: str) -> str:
     except Exception:
         pass
     return ""
+
+
+def _vertex(host: str) -> bool:
+    """Whether a host is Vertex, on its global, regional or multi-region endpoint. The Gemini api refuses a request carrying labels, so only a call to Vertex is given any."""
+    host = (host or "").lower()
+    return host.endswith("aiplatform.googleapis.com") or (host.startswith("aiplatform.") and host.endswith(".rep.googleapis.com"))
 
 
 def _recognise(method: str, path: str) -> tuple[_Protocol | None, str]:
@@ -637,6 +649,8 @@ class _Transport:
                 return request, None, None
             rp = self._rp
             component = current_component() or caller_of()
+            if protocol.labelled and _vertex(request.url.host):
+                request = self._labelled(request, _billing_labels(rp.attribution.agent, component))
             billed_by = rp.attribution.billed_by or protocol.billed_by(request.url.host, request.url.path)
             governed = rp._decider is not None
             if governed and not model and protocol.model_in_body:
@@ -669,6 +683,30 @@ class _Transport:
         except Exception:
             self._rp.recorder._note("panicked")
             return request, None, None
+
+    def _labelled(self, request: Any, labels: dict[str, str]) -> Any:
+        """The request with the billing labels added to its JSON body, or exactly as it was where the body cannot be read and rewritten safely. A label the caller set under the same key is kept."""
+        try:
+            if not labels or not _readable(request):
+                return request
+            body = _loads(request.content)
+            if not isinstance(body, dict):
+                return request
+            existing = body.get("labels")
+            if existing is None:
+                existing = {}
+            if not isinstance(existing, dict):
+                return request
+            merged = {**labels, **existing}
+            if merged == existing:
+                return request
+            body["labels"] = merged
+            module = _module_of(request)
+            headers = [(k, v) for k, v in request.headers.multi_items() if k.lower() != "content-length"]
+            return module.Request(request.method, request.url, headers=headers, content=json.dumps(body, separators=(",", ":")).encode(), extensions=request.extensions)
+        except Exception:
+            self._rp.recorder._note("panicked")
+            return request
 
     def _refusal(self, protocol: _Protocol, request: Any) -> Any:
         if protocol.denied_body is None:

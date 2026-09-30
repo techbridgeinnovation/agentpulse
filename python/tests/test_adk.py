@@ -67,15 +67,15 @@ class Answers:
         return self.response
 
 
-def run(replies, *, decider=None, streaming=False, prompt="SECRET PROMPT", scope=None, plugin_options=None, tools=(lookup, broken), model=None):
+def run(replies, *, decider=None, streaming=False, prompt="SECRET PROMPT", scope=None, plugin_options=None, tools=(lookup, broken), model=None, records_as=AGENT, agent_options=None):
     sink = MemorySink()
     rec = agentpulse.Recorder(agentpulse.Config(sinks=[sink], exit_timeout=0, flush_every=60))
-    rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=AGENT, service="research-agent", skill="research"))
+    rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=records_as, service="research-agent", skill="research"))
     if decider is not None:
         rp = rp.governed(decider, cache_ttl=0)
     model = model or Scripted(model="gemini-2.5-pro")
     model.replies, model.asked = list(replies), []
-    agent = LlmAgent(name="researcher", model=model, instruction="Answer.", tools=list(tools))
+    agent = LlmAgent(name="researcher", model=model, instruction="Answer.", tools=list(tools), **(agent_options or {}))
     app = App(name="probe", root_agent=agent, plugins=[rp.adk_plugin(**(plugin_options or {}))])
     events = []
 
@@ -220,14 +220,23 @@ def test_a_governance_that_cannot_answer_lets_the_turn_run():
 def test_labels_are_added_only_where_the_model_is_served_through_vertex(monkeypatch):
     monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "true")
-    _, _, model, _, _ = run([text("done")], scope={"user": agentpulse.User("U-42@Example")})
-    labels = model.asked[0][1]
-    assert (labels["ap_user"], labels["ap_component"]) == ("u-42_example", "researcher")
+    _, _, model, _, _ = run([text("done")], scope={"user": agentpulse.User("U-42@Example")}, records_as="organisations/acme/agents/Deep.Research")
+    # The agent and the component only: a label per person would pass the billing export's 1,000 values per key, past which it drops them.
+    labels = {k: v for k, v in model.asked[0][1].items() if k.startswith("ap_")}
+    assert labels == {"ap_agent": "deep_research", "ap_component": "researcher"}
 
     # The Gemini Developer API refuses a request carrying labels, so none are added there.
     monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "false")
     _, _, model, _, _ = run([text("done")])
     assert not any(key.startswith("ap_") for key in model.asked[0][1])
+
+
+def test_a_label_the_agent_already_sets_is_never_replaced(monkeypatch):
+    monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "true")
+    config = types.GenerateContentConfig(labels={"ap_component": "mine", "team": "search"})
+    _, _, model, _, _ = run([text("done")], agent_options={"generate_content_config": config})
+    labels = model.asked[0][1]
+    assert (labels["ap_agent"], labels["ap_component"], labels["team"]) == ("research", "mine", "search")
 
 
 def test_a_plugin_that_breaks_never_breaks_the_turn(monkeypatch):

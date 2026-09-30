@@ -88,7 +88,7 @@ It records one activity per model call and one per tool call. The turn, the sess
 
 On a governed reporter each model call asks governance first. A DENY returns `denied_message` as the model's reply, so the framework never calls the model and the user reads the product's own words; a DOWNGRADE changes the model the framework sends, unless the replacement is another provider's.
 
-Labels naming the user and the component are added to the request only where the model is served through Vertex, which carries them into the billing export. The Gemini Developer API refuses a request carrying labels, so none are added there.
+Labels naming the agent, `ap_agent`, and the component, `ap_component`, are added to the request only where the model is served through Vertex, which carries them into the billing export. `ap_agent` is the last part of the agent the reporter records as. A label the request already has under the same key is kept. No label names a person, because the export keeps at most 1,000 values per label key and silently drops the rest. The Gemini Developer API refuses a request carrying labels, so none are added there.
 
 Every hook catches everything it raises and counts it as `panicked`. The framework turns an exception from a plugin into a failure of the whole run, so a hook that let one escape could break the agent it observes.
 
@@ -156,6 +156,8 @@ client = genai.Client(http_options=reporter.genai_http_options())
 Each sits in the client's HTTP transport and recognises a model call by its URL: Chat Completions and Responses, Messages native and through Vertex, and generate calls on the Gemini api and Vertex. Anything else the client does passes through unrecorded. What is read is the reply as the caller reads it, and only the model, the counts, the finish and the failure; every byte reaches the caller as it arrived. The part of the product that made the call is the component named on the context, or else the first function outside this library, the sdks and their transports.
 
 The HTTP client is built from the sdk's own default client, so the sdk's timeouts and connection limits still apply. For Gemini, giving the async transport is also what keeps the sdk on httpx rather than switching to aiohttp, which this could not see. `reporter.transport(inner)` wraps any other httpx or httpx2 transport the same way.
+
+A generate call to Vertex gets the same `ap_agent` and `ap_component` labels as the Agent Development Kit plugin adds, written into the `labels` of its JSON body next to any the caller set, which are kept. A call to the Gemini api gets none, because it refuses them. A body that is not a JSON object, or is only readable as a stream, is sent exactly as it was.
 
 A reply compressed with anything but gzip or deflate is delivered untouched and recorded without its counts. A streamed chat reports its counts only when the request asks for them with `stream_options={"include_usage": True}`; this does not add that to a request, because it changes the stream the caller reads. A call routed through a proxy the HTTP client mounts from the environment does not pass through this transport.
 

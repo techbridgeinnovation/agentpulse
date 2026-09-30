@@ -17,7 +17,7 @@ from typing import Any, Callable
 from . import _wire
 from .context import current_component, current_request
 from .failure import blocked_finish
-from .report import Reporter, _Framework, _installed_version, _user_id
+from .report import Reporter, _Framework, _billing_labels, _installed_version
 from .usage import FORMAT_VERTEX, reported_from_genai, reported_quantities
 
 # What a caller sees when governance answers DENY and no message was given. Generic on purpose: the words a product's user reads on a refusal are product copy this library has no basis to guess.
@@ -99,13 +99,6 @@ def _framework(ctx: Any) -> _Framework:
 def _component(ctx: Any) -> str:
     # The framework's agent name, so adopting teams set nothing; a delegating run reports the sub-agent that actually made the call.
     return current_component() or getattr(ctx, "agent_name", "") or "model_call"
-
-
-def _label(value: str) -> str:
-    """A value as the billing export accepts one: lowercase letters, digits, dashes and underscores, at most 63 characters. The whole value is sanitised, so the label is the sanitised form of exactly what was recorded and a billing row joins its activity."""
-    value = value.strip().lower()
-    out = "".join(ch if ("a" <= ch <= "z") or ("0" <= ch <= "9") or ch in "-_" else "_" for ch in value).strip("_")
-    return out[:63]
 
 
 def _served_by_vertex(ctx: Any) -> bool:
@@ -193,9 +186,9 @@ def _build_plugin_class() -> type:
             framework = _framework(ctx)
             component = _component(ctx)
 
-            # Labels are carried into the cloud billing export, which is what makes a charge not measured in tokens attributable at all. Only opaque identifiers, never an email. Additive, so a label set closer to the call site is never replaced.
+            # Labels are carried into the cloud billing export, which is what makes a charge not measured in tokens attributable at all. Additive, so a label set closer to the call site is never replaced.
             if _served_by_vertex(ctx):
-                labels = {k: v for k, v in (("ap_user", _label(_user_id(framework))), ("ap_component", _label(component))) if v}
+                labels = _billing_labels(rp.attribution.agent, component)
                 if labels:
                     if request.config is None:
                         request.config = types.GenerateContentConfig()

@@ -138,6 +138,19 @@ def _user_id(framework: _Framework | None) -> str:
     return framework.user if framework else ""
 
 
+def _label(value: str) -> str:
+    """A value as the billing export accepts one: lowercase letters, digits, dashes and underscores, at most 63 characters. The whole value is sanitised, so the label is the sanitised form of exactly what was recorded and a billing row joins its activity."""
+    value = value.strip().lower()
+    out = "".join(ch if ("a" <= ch <= "z") or ("0" <= ch <= "9") or ch in "-_" else "_" for ch in value).strip("_")
+    return out[:63]
+
+
+def _billing_labels(agent: str, component: str) -> dict[str, str]:
+    """The labels a Vertex request carries into the billing export: the agent's short name and the component. Never a person, because the export keeps at most 1,000 values per label key and silently drops the rest."""
+    labels = (("ap_agent", _label(agent.rpartition("/")[2])), ("ap_component", _label(component)))
+    return {k: v for k, v in labels if v}
+
+
 class Reporter:
     """Records on behalf of one service. Cheap to hold and safe to share across threads."""
 
