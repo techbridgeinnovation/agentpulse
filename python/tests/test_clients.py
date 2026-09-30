@@ -378,9 +378,12 @@ def test_the_region_is_read_from_the_url_the_call_went_to():
 
 def test_an_openai_call_to_a_residency_host_records_that_region():
     openai = pytest.importorskip("openai")
+    import importlib
     import json
 
-    import httpx
+    # The http library the sdk's own client is built on, httpx or httpx2 by sdk version, so the fake transport is one that client accepts.
+    roots = [cls.__module__.split(".")[0] for cls in type(openai.DefaultHttpxClient()).__mro__]
+    httpx = importlib.import_module(next(root for root in roots if root in ("httpx", "httpx2")))
 
     rp, sink = reporter()
 

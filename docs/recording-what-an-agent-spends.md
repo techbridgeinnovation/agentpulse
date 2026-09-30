@@ -70,6 +70,19 @@ Neither is an argument at a model call site. A value a call site can choose is a
 app = App(name="atlas", root_agent=agent, plugins=[reporter.governed().adk_plugin()])
 ```
 
+**Built on LangChain or LangGraph?** In Python, pass one handler on the outermost call and every model call and tool call the run makes is recorded, each filed under the agent LangChain names for it:
+
+```python
+agent.invoke(inputs, config={"callbacks": [reporter.langchain_handler()]})
+```
+
+**Built on the OpenAI Agents SDK?** In Python, pass run hooks to the run, and to every agent run as a tool. Each call is filed under the agent that made it. A model call that fails is not reported to hooks, so it is not recorded:
+
+```python
+hooks = reporter.openai_agents_hooks()
+result = await Runner.run(agent, prompt, hooks=hooks)
+```
+
 **Calling a model directly?** Instrument the client once, where it is built, and every call through it is recorded, including the ones written later:
 
 ```go

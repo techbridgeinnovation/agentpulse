@@ -163,6 +163,19 @@ def _litellm(q: dict[str, int]) -> Classes:
     )
 
 
+def _langchain(q: dict[str, int]) -> Classes:
+    # Both cached parts are inside the input count and reasoning is inside the output count, the same arithmetic as LiteLLM's under LangChain's own names.
+    cached = _first(q, "input_token_details.cache_read")
+    cache_write = _first(q, "input_token_details.cache_creation")
+    return Classes(
+        prompt=_without(_first(q, "input_tokens"), cached + cache_write),
+        candidate=_first(q, "output_tokens"),
+        cached=cached,
+        cache_write=cache_write,
+        reasoning=_first(q, "output_token_details.reasoning"),
+    )
+
+
 _READERS: dict[str, Callable[[dict[str, int]], Classes]] = {
     "VERTEX": _vertex,
     "ANTHROPIC": _anthropic,
@@ -170,6 +183,7 @@ _READERS: dict[str, Callable[[dict[str, int]], Classes]] = {
     "OPENAI_RESPONSES": _openai,
     "PERPLEXITY": _perplexity,
     "LITELLM": _litellm,
+    "LANGCHAIN": _langchain,
 }
 
 

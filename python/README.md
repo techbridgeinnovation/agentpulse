@@ -109,6 +109,39 @@ LiteLLM restates every provider's usage in OpenAI's shape, so the provider's own
 
 A proxy holds none of its callers' context, so who a call was for travels on the request: LiteLLM's own `user` field, and `agentpulse_request`, `agentpulse_session`, `agentpulse_workspace`, `agentpulse_project`, `agentpulse_component`, `agentpulse_user`, `agentpulse_user_name` and `agentpulse_user_email` in its `metadata`. An SDK call made inside `scope` records what the scope named: LiteLLM reports a call's outcome from a thread of its own, so the scope is captured when the call starts. LiteLLM reads its callback list once, when the first call is made.
 
+## LangChain and LangGraph
+
+One handler, passed on the outermost call, covers every model call and tool call the run makes, an agent called from inside another agent's tool included:
+
+```python
+reporter = agentpulse.connect(service="research-agent").governed()
+
+agent.invoke(inputs, config={"callbacks": [reporter.langchain_handler()], "configurable": {"thread_id": conversation_id}})
+```
+
+Each call is filed under the agent LangChain names for it (`create_agent(name=...)`), the LangGraph thread as the session, and the outermost run as the request, unless `agentpulse.scope` names them. A graph built without an agent is filed under the node the call ran in.
+
+LangChain restates every chat model's usage as `usage_metadata`, and Gemini's reaches a handler in no other form, so the counts are recorded in LangChain's convention, `LANGCHAIN`: the input count holds both the cache read and the cache write, and the output count holds the reasoning. Who served the call is LangChain's `ls_provider`.
+
+A governed handler asks before each model call and refuses one by raising `SpendDenied`, so the call is never sent. A handler cannot change the model a call uses, so a DOWNGRADE lets the call through as asked and is counted in `stats()` as not applied.
+
+## OpenAI Agents SDK
+
+Run hooks, passed to the run and to every agent run as a tool:
+
+```python
+hooks = reporter.openai_agents_hooks()
+
+researcher_tool = researcher.as_tool(tool_name="ask_researcher", tool_description="...", hooks=hooks)
+result = await Runner.run(agent, prompt, hooks=hooks)
+```
+
+An agent run as another agent's tool is a run of its own and gets the hooks only where `as_tool` is given them. Each call is filed under the agent that made it, the run's trace as the request, and the trace's `group_id` as the session.
+
+The SDK restates every model's usage in the shape of OpenAI's Responses api, recorded as `OPENAI_RESPONSES`, and names the model the agent asked for rather than the version that answered. A model routed through LiteLLM, `litellm/<provider>/<model>`, is billed under that provider.
+
+A governed reporter's hooks refuse a call by raising `SpendDenied` before it is sent. A DOWNGRADE lets the call through as asked and is counted as not applied. The SDK tells hooks nothing about a model call that fails, so a failed call is not recorded; its exception reaches the caller as usual.
+
 ## Recording from the client
 
 A line after every model call is a line some call site forgets. The other way is to record from the client, set once where it is built, so every call through it is recorded, the ones written later included:
@@ -185,6 +218,8 @@ recorder/python/
 │   ├── adk.py           the plugin for Google's Agent Development Kit
 │   ├── litellm.py       the callback for LiteLLM's SDK and proxy
 │   ├── litellm_proxy.py the proxy's handler, built from the environment
+│   ├── langchain.py     the callback handler for LangChain and LangGraph
+│   ├── openai_agents.py the run hooks for the OpenAI Agents SDK
 │   ├── context.py       scope, carry, and who a piece of work is for
 │   ├── sinks.py         Sink, Discard, MeteringSink
 │   ├── governance.py    asking whether a call may proceed, and verdicts reused from memory
@@ -231,11 +266,13 @@ cd recorder/python
 python -m pytest
 ```
 
-The tests against the real OpenAI, Anthropic and Gemini sdks, the Agent Development Kit and LiteLLM run where those are installed and are skipped where they are not. Install them to run everything:
+The tests against the real OpenAI, Anthropic and Gemini sdks, the Agent Development Kit, LiteLLM, LangChain and the OpenAI Agents SDK run where those are installed and are skipped where they are not. Install them to run everything:
 
 ```bash
 uv venv && uv pip install -e '.[test]' openai anthropic google-genai google-adk && .venv/bin/python -m pytest
 uv venv .litellm && VIRTUAL_ENV=.litellm uv pip install -e '.[test]' litellm fastapi && .litellm/bin/python -m pytest tests/test_litellm.py
+uv venv .langchain && VIRTUAL_ENV=.langchain uv pip install -e '.[test]' langchain langgraph langchain-openai langchain-anthropic langchain-google-genai && .langchain/bin/python -m pytest tests/test_langchain.py
+uv venv .agents && VIRTUAL_ENV=.agents uv pip install -e '.[test]' openai-agents && .agents/bin/python -m pytest tests/test_openai_agents.py
 ```
 
-LiteLLM runs in an environment of its own because it pins versions of the provider sdks the other tests use.
+LiteLLM, LangChain and the Agents SDK each run in an environment of their own because they pin versions of the provider sdks the other tests use.
