@@ -18,6 +18,8 @@ FORMAT_OPENAI_CHAT = "OPENAI_CHAT"
 FORMAT_OPENAI_RESPONSES = "OPENAI_RESPONSES"
 # Every provider's usage as LiteLLM restates it, in OpenAI's shape but with both the cache read and the cache write inside the input count.
 FORMAT_LITELLM = "LITELLM"
+# Every chat model's usage as LangChain restates it in `usage_metadata`, with both the cache read and the cache write inside the input count and reasoning inside the output count.
+FORMAT_LANGCHAIN = "LANGCHAIN"
 # OpenAI's chat field names with Perplexity's own counts beside them, such as the citation tokens its search charges for.
 FORMAT_PERPLEXITY = "PERPLEXITY"
 

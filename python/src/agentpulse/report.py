@@ -270,6 +270,18 @@ class Reporter:
 
         return litellm.callback(self, denied_message=denied_message)
 
+    def langchain_handler(self) -> Any:
+        """A callback handler for a LangChain or LangGraph run's `callbacks`, that records every model call and tool call the run makes, and refuses a model call a budget has run out on by raising SpendDenied when the reporter is governed. Pass it on the outermost call and everything the run starts is covered."""
+        from . import langchain
+
+        return langchain.handler(self)
+
+    def openai_agents_hooks(self) -> Any:
+        """Run hooks for the OpenAI Agents SDK, for `Runner.run(..., hooks=...)`, that record every model call and tool call the run makes, and refuse a model call a budget has run out on by raising SpendDenied when the reporter is governed."""
+        from . import openai_agents
+
+        return openai_agents.hooks(self)
+
     def transport(self, inner: Any, *, asynchronous: bool = False) -> Any:
         """Wraps an httpx or httpx2 transport so every model call through it is recorded, for a client this library has no helper for."""
         from . import clients

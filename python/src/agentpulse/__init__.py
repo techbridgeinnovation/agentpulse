@@ -53,6 +53,7 @@ from .report import Attribution, ModelCall, Reporter, Tokens, ToolCall
 from .sinks import Discard, MeteringSink, Sink, UserSink
 from .usage import (
     FORMAT_ANTHROPIC,
+    FORMAT_LANGCHAIN,
     FORMAT_LITELLM,
     FORMAT_OPENAI_CHAT,
     FORMAT_OPENAI_RESPONSES,
@@ -116,6 +117,7 @@ __all__ = [
     "ERROR_FORMAT_PERPLEXITY",
     "ERROR_FORMAT_VERTEX",
     "FORMAT_ANTHROPIC",
+    "FORMAT_LANGCHAIN",
     "FORMAT_LITELLM",
     "FORMAT_OPENAI_CHAT",
     "FORMAT_OPENAI_RESPONSES",
