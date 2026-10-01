@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from . import _wire, pricing
+from ._version import __version__
 from .context import User, current_workspace, looks_like_email
 from .sinks import Discard, Sink
 
@@ -29,6 +30,10 @@ _DEFAULT_SEND_TIMEOUT = 10.0
 _DEFAULT_EXIT_TIMEOUT = 2.0
 # How often, in seconds, the rate card is read again. A rate card is a price list a person maintains, so it changes rarely, and this bounds how long a model added to it stays unpriced here.
 _DEFAULT_RATE_REFRESH = 15 * 60.0
+
+# Which counters a batch reports as losses, under the contract's names. Undelivered is the sink's own and is kept beside it.
+_LOSSES = {"dropped": "dropped", "panicked": "panicked", "unrecognised_calls": "unrecognised"}
+_RECORDER = f"python/{__version__}"
 
 # What the recorder remembers about who it has named. Past it, everything is forgotten and people are named again as they reappear; a second write of the same name is harmless.
 _MAX_REMEMBERED_NAMES = 10_000
@@ -121,6 +126,8 @@ class Recorder:
         self._config = (config or Config()).with_defaults()
         self._counters: collections.Counter[str] = collections.Counter()
         self._card: pricing.RateCard | None = None
+        # One ledger for each sink that carries losses, since each reports to its own destination what that destination has not been told.
+        self._carried = {id(sink): _Carried() for sink in self._config.sinks if callable(getattr(sink, "send_with_losses", None))}
         self._reset_state()
 
         # A process that forks carries this recorder into the child without its worker, since only the thread that forked survives. The child starts from empty, with its own lock and its own worker, and anything the parent had queued stays the parent's to send, or it would be sent twice.
@@ -388,12 +395,26 @@ class Recorder:
         _run_all([lambda s=s, w=w, a=a: self._send(s, w, a) for s, w, a in jobs])
 
     def _send(self, sink: Sink, workspace: str, activities: list[_wire.Activity]) -> None:
+        carried = self._carried.get(id(sink))
+        losses = None
         try:
-            sink.send(activities, workspace, self._config.send_timeout)
+            if carried is None:
+                sink.send(activities, workspace, self._config.send_timeout)
+            else:
+                with self._lock:
+                    losses = carried.claim(self._counters)
+                sink.send_with_losses(activities, workspace, self._config.send_timeout, losses)  # type: ignore[attr-defined]
         except Exception:
-            self._note("failed", len(activities))
+            with self._lock:
+                self._counters["failed"] += len(activities)
+                if carried is not None:
+                    carried.settle(losses, accepted=False)
+                    carried.undelivered += len(activities)
             return
-        self._note("delivered", len(activities))
+        with self._lock:
+            self._counters["delivered"] += len(activities)
+            if carried is not None:
+                carried.settle(losses, accepted=True)
 
     def _deliver_names(self, batch: list[tuple[User, str]]) -> None:
         jobs = [
@@ -413,6 +434,33 @@ class Recorder:
             with self._lock:
                 for user in users:
                     self._seen.pop((workspace, user.id), None)
+
+
+class _Carried:
+    """What one sink has told its destination about the recorder's losses. The recorder's counters stay cumulative; a batch carries the difference between them and what was already reported.
+
+    A batch's claim is held apart while it is in flight, so two batches sent at once to the same sink never report the same loss twice, and it is counted as reported only once the batch is accepted. Called with the recorder's lock held.
+    """
+
+    def __init__(self) -> None:
+        self.undelivered = 0
+        self._reported: collections.Counter[str] = collections.Counter()
+        self._in_flight: collections.Counter[str] = collections.Counter()
+
+    def claim(self, counters: collections.Counter[str]) -> _wire.RecorderLosses:
+        totals = {name: counters[counter] for name, counter in _LOSSES.items()}
+        totals["undelivered"] = self.undelivered
+        claimed = {name: max(0, total - self._reported[name] - self._in_flight[name]) for name, total in totals.items()}
+        self._in_flight.update(claimed)
+        return _wire.RecorderLosses(recorder=_RECORDER, **claimed)
+
+    def settle(self, losses: _wire.RecorderLosses | None, accepted: bool) -> None:
+        if losses is None:
+            return
+        claimed = {name: getattr(losses, name) for name in (*_LOSSES, "undelivered")}
+        self._in_flight.subtract(claimed)
+        if accepted:
+            self._reported.update(claimed)
 
 
 def _call(ref: "weakref.ref[Recorder]", method: str, *args: Any) -> None:

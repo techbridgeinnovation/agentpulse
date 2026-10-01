@@ -228,11 +228,39 @@ def _timestamp(number: int, nanoseconds: int) -> bytes:
     return _message(number, _integer(1, seconds) + _integer(2, nanos))
 
 
-def batch_create_activities(parent: str, activities: list[Activity], request_id: str = "") -> bytes:
-    """A BatchCreateActivitiesRequest, encoded."""
+@dataclass
+class RecorderLosses:
+    """What a recorder lost since the last batch it delivered. Counts only."""
+
+    dropped: int = 0
+    undelivered: int = 0
+    panicked: int = 0
+    unrecognised_calls: int = 0
+    # The recorder's language and version, such as python/0.4.0.
+    recorder: str = ""
+
+    def any(self) -> bool:
+        return bool(self.dropped or self.undelivered or self.panicked or self.unrecognised_calls)
+
+    def encode(self) -> bytes:
+        return b"".join(
+            [
+                _integer(1, self.dropped),
+                _integer(2, self.undelivered),
+                _integer(3, self.panicked),
+                _integer(4, self.unrecognised_calls),
+                _string(5, self.recorder),
+            ]
+        )
+
+
+def batch_create_activities(parent: str, activities: list[Activity], request_id: str = "", losses: RecorderLosses | None = None) -> bytes:
+    """A BatchCreateActivitiesRequest, encoded. Losses that are all zero are left out, so a recorder that lost nothing sends nothing about it."""
     parts = [_string(1, parent)]
     parts += [_message(2, activity.encode()) for activity in activities]
     parts.append(_string(3, request_id))
+    if losses is not None and losses.any():
+        parts.append(_message(4, losses.encode()))
     return b"".join(parts)
 
 

@@ -97,6 +97,43 @@
     "hex": "0a126f7267616e69736174696f6e732f61636d651230121c6f7267616e69736174696f6e732f61636d652f6167656e74732fc3a91a0be8afb7e6b1822df09d849ec20102080112001a0762617463682d31"
   },
   {
+    "name": "recorder losses",
+    "message": "BatchCreateActivitiesRequest",
+    "fields": {
+      "parent": "organisations/acme",
+      "activities": [
+        {
+          "request": "r"
+        }
+      ],
+      "request_id": "batch-2",
+      "recorder_losses": {
+        "dropped": 3,
+        "undelivered": 9007199254740993,
+        "panicked": 1,
+        "unrecognised_calls": 2,
+        "recorder": "python/0.4.0"
+      }
+    },
+    "hex": "0a126f7267616e69736174696f6e732f61636d6512031a01721a0762617463682d32221d0803108180808080808010180120022a0c707974686f6e2f302e342e30"
+  },
+  {
+    "name": "recorder losses with some counts zero",
+    "message": "BatchCreateActivitiesRequest",
+    "fields": {
+      "parent": "organisations/acme",
+      "activities": [
+        {}
+      ],
+      "request_id": "",
+      "recorder_losses": {
+        "undelivered": 4,
+        "recorder": "typescript/0.1.0"
+      }
+    },
+    "hex": "0a126f7267616e69736174696f6e732f61636d651200221410042a10747970657363726970742f302e312e30"
+  },
+  {
     "name": "users",
     "message": "BatchUpsertUsersRequest",
     "fields": {

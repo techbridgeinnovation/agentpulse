@@ -10,6 +10,8 @@ It observes rather than carries. Model traffic goes straight from the agent to i
 
 Dropped records are counted and the count is readable. That counter is the one thing here that cannot be turned off, because silent loss is worse than visible loss.
 
+The metering sink also carries what was lost since its last accepted batch on the next batch it sends: records dropped, records not delivered after every retry, panics, and client calls nothing was recorded for. Those counts are cleared only once the batch carrying them is accepted, and every retry of a batch carries the same ones, so metering counts each loss once. `Stats` stays cumulative.
+
 ## Ownership & Contact
 
 | | |

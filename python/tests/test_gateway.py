@@ -184,3 +184,10 @@ def test_connect_refuses_an_agent_outside_the_key_organisation(monkeypatch):
     # A rate source of its own, so the test reaches no network.
     reporter = agentpulse.connect(service="svc", config=agentpulse.Config(exit_timeout=0, rates=NoRates()))
     assert reporter.attribution.agent == "organisations/acme/agents/a"
+
+
+def test_losses_travel_on_the_batch_as_field_4(fake):
+    losses = _wire.RecorderLosses(dropped=2, recorder="python/0.0.0")
+    MeteringSink(Gateway(fake.address, KEY, "s")).send_with_losses([_wire.Activity(request="r")], "", 2, losses)
+    carried = [value for number, value in _wire.fields(fake.calls[0].message) if number == 4]
+    assert carried == [losses.encode()]

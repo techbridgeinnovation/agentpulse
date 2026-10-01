@@ -297,3 +297,75 @@ def test_what_is_still_queued_when_close_runs_out_of_time_is_counted_as_dropped(
     stats = rec.stats()
     # One batch is with the slow sink; the rest will never be sent, and say so.
     assert stats.dropped == 3
+
+
+class LossCarrier(MemorySink):
+    """Remembers the losses each delivered batch carried, and fails while told to."""
+
+    def __init__(self):
+        super().__init__()
+        self.losses = []
+
+    def send_with_losses(self, activities, workspace, timeout, losses):
+        self.send(activities, workspace, timeout)
+        self.losses.append(losses if losses is not None and losses.any() else None)
+
+
+def _counts(losses):
+    return (losses.dropped, losses.undelivered, losses.panicked, losses.unrecognised_calls)
+
+
+def test_a_dropped_record_is_reported_on_the_next_batch_delivered():
+    from agentpulse import __version__
+
+    sink = LossCarrier()
+    rec = recorder(sink, queue_size=1, flush_every=60)
+    rec.record(Activity(request="r1"))
+    rec.record(Activity(request="r2"))
+    assert rec.flush(timeout=2)
+    assert _counts(sink.losses[0]) == (1, 0, 0, 0)
+    assert sink.losses[0].recorder == f"python/{__version__}"
+
+
+def test_losses_survive_a_failed_batch_and_are_reported_once():
+    sink = LossCarrier()
+    rec = recorder(sink, queue_size=1, flush_every=60)
+    rec.record(Activity(request="r1"))
+    rec.record(Activity(request="dropped"))
+    sink.fail = True
+    rec.flush(timeout=2)
+    assert sink.losses == []
+
+    sink.fail = False
+    rec._note("panicked")
+    rec._note("unrecognised")
+    rec.record(Activity(request="r2"))
+    assert rec.flush(timeout=2)
+    # The failed batch's own record is undelivered, and the drop it carried comes forward.
+    assert _counts(sink.losses[0]) == (1, 1, 1, 1)
+
+    rec.record(Activity(request="r3"))
+    assert rec.flush(timeout=2)
+    assert sink.losses[1] is None
+    stats = rec.stats()
+    assert (stats.dropped, stats.failed, stats.panicked, stats.unrecognised) == (1, 1, 1, 1)
+
+
+def test_a_recorder_that_lost_nothing_reports_no_losses():
+    sink = LossCarrier()
+    rec = recorder(sink, flush_every=60)
+    rec.record(Activity(request="r"))
+    assert rec.flush(timeout=2)
+    assert sink.losses == [None]
+
+
+def test_batches_sent_at_once_never_report_the_same_loss_twice():
+    sink = LossCarrier()
+    sink.delay = 0.1
+    rec = recorder(sink, flush_every=60)
+    rec._note("dropped", 3)
+    rec.record(Activity(request="a"), workspace="w1")
+    rec.record(Activity(request="b"), workspace="w2")
+    assert rec.flush(timeout=2)
+    reported = [l.dropped for l in sink.losses if l is not None]
+    assert reported == [3]

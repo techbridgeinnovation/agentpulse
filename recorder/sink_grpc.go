@@ -67,14 +67,22 @@ func (s *GRPCSink) parentFor(workspace string) string {
 //
 // One call carries one parent, because metering takes a batch or refuses it whole and the parent is where the records' tenant is stated. The workspace it belongs to is on ctx; the recorder hands a sink one workspace at a time, so a call that covers two tenants cannot be made from here.
 func (s *GRPCSink) Send(ctx context.Context, activities []*pb.Activity) error {
+	return s.SendWithLosses(ctx, activities, nil)
+}
+
+// SendWithLosses is Send with the recorder's losses not yet reported carried on the batch, and nil carrying none.
+//
+// Every attempt at the batch carries the same losses under the same request id, so metering counts them once however many attempts reach it.
+func (s *GRPCSink) SendWithLosses(ctx context.Context, activities []*pb.Activity, losses *pb.RecorderLosses) error {
 	if len(activities) == 0 {
 		return nil
 	}
 
 	req := &pb.BatchCreateActivitiesRequest{
-		Parent:     s.parentFor(WorkspaceFrom(ctx)),
-		Activities: activities,
-		RequestId:  newRequestID(),
+		Parent:         s.parentFor(WorkspaceFrom(ctx)),
+		Activities:     activities,
+		RequestId:      newRequestID(),
+		RecorderLosses: losses,
 	}
 	err := sendWithRetry(ctx, func(ctx context.Context) error {
 		_, err := s.client.BatchCreateActivities(ctx, req)

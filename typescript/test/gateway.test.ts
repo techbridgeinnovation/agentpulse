@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 
 import { ConfigError, Gateway, gatewayUrl, organisationOfKey, RpcError } from "../src/gateway.ts";
+import { MeteringSink } from "../src/sinks.ts";
+import { batchCreateActivities } from "../src/wire.ts";
 import { FakeGateway } from "./fakes.ts";
 
 let gw: FakeGateway;
@@ -56,4 +58,12 @@ test("a missing setting stops the recorder where it is set up", () => {
   assert.throws(() => new Gateway("", KEY, "s"), ConfigError);
   assert.throws(() => new Gateway("gw", "", "s"), ConfigError);
   assert.throws(() => new Gateway("gw", KEY, " "), ConfigError);
+});
+
+test("losses travel on the batch as field 4", async () => {
+  gw.replies.push({});
+  await new MeteringSink(new Gateway(gw.url, KEY, "s")).send([{ request: "r" }], "", 2000, "id", { dropped: 2, recorder: "typescript/0.0.0" });
+  const message = gw.calls.at(-1)!.message;
+  assert.deepEqual([...message], [...batchCreateActivities("organisations/acme", [{ request: "r" }], "id", { dropped: 2, recorder: "typescript/0.0.0" })]);
+  assert.ok(Buffer.from(message).includes(Buffer.from([0x22])));
 });

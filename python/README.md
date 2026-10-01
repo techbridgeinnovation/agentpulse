@@ -6,7 +6,7 @@
 
 **The first rule.** It must never degrade its host. Recording never blocks, never raises and never waits on the network. A full queue drops records and counts them rather than waiting. A destination that fails or hangs is isolated from the others and from the caller. That ranks above completeness of data.
 
-Dropped records are counted and the count is readable in `stats()`. That counter cannot be turned off, because silent loss is worse than visible loss.
+Dropped records are counted and the count is readable in `stats()`. That counter cannot be turned off, because silent loss is worse than visible loss. The metering sink also carries the losses on the next batch it delivers, as counts of records dropped, records not delivered after every retry, recorder faults and calls it could not read, so a loss shows where spend is read and not only in this process. A count is taken as reported only once that batch is accepted, so a failed batch passes it to the next.
 
 **It has no dependencies.** Everything it depends on would run inside somebody else's agent, so it speaks to the gateway with the standard library alone: gRPC-web over `http.client`, with the few protobuf messages it sends encoded by hand.
 
@@ -227,7 +227,7 @@ recorder/python/
 │   ├── langchain.py     the callback handler for LangChain and LangGraph
 │   ├── openai_agents.py the run hooks for the OpenAI Agents SDK
 │   ├── context.py       scope, carry, and who a piece of work is for
-│   ├── sinks.py         Sink, Discard, MeteringSink
+│   ├── sinks.py         Sink, LossSink, Discard, MeteringSink
 │   ├── governance.py    asking whether a call may proceed, and verdicts reused from memory
 │   ├── invalidations.py governance saying a budget changed, applied to the cache
 │   ├── pricing.py       the rate card, the server's pricing arithmetic, per-request running totals
