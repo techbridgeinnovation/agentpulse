@@ -1,6 +1,9 @@
 package recorder
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Who a piece of work is for travels on the context rather than through every
 // function between the handler and the model call.
@@ -15,6 +18,7 @@ type sessionContextKey struct{}
 type workspaceContextKey struct{}
 type projectContextKey struct{}
 type componentContextKey struct{}
+type skillContextKey struct{}
 
 // WithRequest marks a context as belonging to one end-user request.
 //
@@ -140,4 +144,27 @@ func WithComponent(ctx context.Context, component string) context.Context {
 func ComponentFrom(ctx context.Context) string {
 	component, _ := ctx.Value(componentContextKey{}).(string)
 	return component
+}
+
+// WithSkill names the area of the product a piece of work under this context belongs to, e.g. `search` or `drafting`.
+//
+// Optional, and it wins over the Skill an agent or a reporter was configured with, for an agent whose one process serves several areas of the product and so cannot name a single one at startup.
+//
+// A free string, and an unrecognised one is recorded and reported rather than refused.
+func WithSkill(ctx context.Context, skill string) context.Context {
+	return context.WithValue(ctx, skillContextKey{}, skill)
+}
+
+// SkillFrom returns the skill a context names, if any.
+func SkillFrom(ctx context.Context) string {
+	skill, _ := ctx.Value(skillContextKey{}).(string)
+	return skill
+}
+
+// LooksLikeEmail reports whether a user identifier is shaped like an email address: an `@` with a dot somewhere after it.
+//
+// A record carries an identifier and never a name or an address, so an identifier shaped like one is recorded as no user at all and counted in Stats.EmailUsersRefused. The check is deliberately loose: refusing an identifier that only resembles an address costs one row its user, and letting an address through puts it on every row.
+func LooksLikeEmail(id string) bool {
+	at := strings.Index(id, "@")
+	return at >= 0 && strings.Contains(id[at+1:], ".")
 }

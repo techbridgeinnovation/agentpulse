@@ -414,3 +414,23 @@ func TestAToolCallRecordsItsFrameworkAndResultSize(t *testing.T) {
 		t.Error("a tool that handed back nothing was not recorded as empty")
 	}
 }
+
+// A component on the context names the model calls; a tool call is still filed under the tool, and both keep the agent that made them.
+func TestAToolCallKeepsItsOwnComponentWhenTheContextNamesOne(t *testing.T) {
+	ctx := newToolContext("call-1")
+	ctx.Context = recorder.WithSkill(recorder.WithComponent(context.Background(), "report_generation"), "drafting")
+
+	got := record(t, func(r *recorder.Recorder) {
+		AfterTool(r, options())(ctx, fakeTool{name: "web_search"}, nil, nil, nil)
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("recorded %d activities, want 1", len(got))
+	}
+	if got[0].GetCallerComponent() != "tool:web_search" || got[0].GetSubAgent() != "atlas" {
+		t.Errorf("component = %q, sub_agent = %q, want tool:web_search under atlas", got[0].GetCallerComponent(), got[0].GetSubAgent())
+	}
+	if got[0].GetSkill() != "drafting" {
+		t.Errorf("skill = %q, want the one the context names", got[0].GetSkill())
+	}
+}

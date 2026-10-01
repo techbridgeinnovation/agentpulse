@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from . import _wire, pricing
-from .context import User, current_workspace
+from .context import User, current_workspace, looks_like_email
 from .sinks import Discard, Sink
 
 _DEFAULT_QUEUE_SIZE = 2048
@@ -110,6 +110,8 @@ class Stats:
     named: int = 0
     names_dropped: int = 0
     names_failed: int = 0
+    # Records sent with no user because their user identifier looked like an email address. Above zero means the product is passing an address where its sign-in's identifier belongs.
+    email_users_refused: int = 0
 
 
 class Recorder:
@@ -160,6 +162,10 @@ class Recorder:
         try:
             if workspace is None:
                 workspace = current_workspace()
+            # Every record passes here, so this is the one place an address is kept off them all.
+            if looks_like_email(activity.user):
+                activity.user = ""
+                self._note("email_users_refused")
             # Kept whether or not the record survives the queue: a dropped record still cost money, and a spend decision that ignored it would be wrong in the one direction that matters.
             card = self._card
             if card is not None and activity.request:
@@ -185,12 +191,12 @@ class Recorder:
     def note_user(self, user: User | None, workspace: str | None = None) -> None:
         """Hands over a person to name and returns immediately.
 
-        A person with no name and no email is nothing to say and is ignored. One whose identifier holds a slash cannot be named, because the identifier becomes a path segment, and is counted as failed so the mistake is visible. Someone already named with the same name costs a dictionary lookup.
+        A person with no name and no email is nothing to say and is ignored. One whose identifier holds a slash cannot be named, because the identifier becomes a path segment, and is counted as failed so the mistake is visible; so is one whose identifier looks like an email address, which is never sent. Someone already named with the same name costs a dictionary lookup.
         """
         try:
             if user is None or not user.id or not user.named():
                 return
-            if "/" in user.id:
+            if "/" in user.id or looks_like_email(user.id):
                 self._note("names_failed")
                 return
             if workspace is None:

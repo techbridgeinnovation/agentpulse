@@ -2,8 +2,13 @@ package recorder
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
 
 func TestDialRefusesAMissingSetting(t *testing.T) {
@@ -64,4 +69,43 @@ func TestAnEmptyOrganisationIsRefusedAtConstruction(t *testing.T) {
 		}
 	}()
 	NewGRPCSink(nil, "  ")
+}
+
+// A connection left idle until the first call does its handshake inside that call's deadline, and the first spend decision's is short enough to lose to it.
+func TestDialStartsConnectingBeforeTheFirstCall(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	for name, dial := range map[string]func() (*grpc.ClientConn, error){
+		"Dial":        func() (*grpc.ClientConn, error) { return Dial(listener.Addr().String(), "k") },
+		"DialWithKey": func() (*grpc.ClientConn, error) { return DialWithKey(listener.Addr().String(), "k", "s") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn, err := dial()
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer conn.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			for state := conn.GetState(); state == connectivity.Idle; state = conn.GetState() {
+				if !conn.WaitForStateChange(ctx, state) {
+					t.Fatal("the connection stayed idle with no call made")
+				}
+			}
+		})
+	}
 }

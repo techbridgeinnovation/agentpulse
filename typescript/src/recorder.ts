@@ -10,7 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { currentScope, type User } from "./context.ts";
+import { currentScope, looksLikeEmail, type User } from "./context.ts";
 import { RpcError } from "./gateway.ts";
 import { Discard, type Sink } from "./sinks.ts";
 import type { Activity } from "./wire.ts";
@@ -67,6 +67,8 @@ export interface Stats {
   named: number;
   namesDropped: number;
   namesFailed: number;
+  /** Records sent with no user because their user identifier looked like an email address. Above zero means the product is passing an address where its sign-in's identifier belongs. */
+  emailUsersRefused: number;
 }
 
 export type Counter = keyof Stats;
@@ -88,6 +90,7 @@ function emptyStats(): Stats {
     named: 0,
     namesDropped: 0,
     namesFailed: 0,
+    emailUsersRefused: 0,
   };
 }
 
@@ -132,6 +135,11 @@ export class Recorder {
   /** Hands over one record and returns immediately. Never blocks, never throws. Filed under the workspace in force on the current context unless the caller states one. */
   record(activity: Activity, workspace?: string): void {
     try {
+      // Every record passes here, so this is the one place an address is kept off them all.
+      if (looksLikeEmail(activity.user)) {
+        activity.user = "";
+        this.counters.emailUsersRefused++;
+      }
       if (this.closed || this.records.length >= this.queueSize) {
         this.counters.dropped++;
         return;
@@ -145,11 +153,11 @@ export class Recorder {
     }
   }
 
-  /** Hands over a person to name and returns immediately. Someone already named with the same name costs a map lookup. */
+  /** Hands over a person to name and returns immediately. Someone already named with the same name costs a map lookup. One whose identifier holds a slash or looks like an email address is never sent, and is counted as failed. */
   noteUser(user: User | undefined, workspace?: string): void {
     try {
       if (!user?.id || !(user.name || user.email)) return;
-      if (user.id.includes("/")) {
+      if (user.id.includes("/") || looksLikeEmail(user.id)) {
         this.note("namesFailed");
         return;
       }

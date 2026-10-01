@@ -11,7 +11,7 @@ A service using the LiteLLM SDK registers the callback itself:
 
 LiteLLM restates every provider's usage in OpenAI's shape, so the provider's own counts never reach this and they are recorded in LiteLLM's convention, `LITELLM`, which the server reads with a reader of its own. Nothing about a call's content is read: LiteLLM's logging payload carries the messages and the reply, and this takes only the model, the counts, the finish and the failure from it.
 
-Who a call was for comes from the request itself, because a proxy serves many callers and holds none of their context: the `user` LiteLLM already takes, and `agentpulse_*` keys in the request's metadata for the request, session, workspace, project and component. An SDK call made inside `agentpulse.scope` records what the scope named, captured when the call starts, since LiteLLM reports its outcome from a thread of its own.
+Who a call was for comes from the request itself, because a proxy serves many callers and holds none of their context: the `user` LiteLLM already takes, and `agentpulse_*` keys in the request's metadata for the request, session, workspace, project, component and skill. An SDK call made inside `agentpulse.scope` records what the scope named, captured when the call starts, since LiteLLM reports its outcome from a thread of its own.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 from . import _wire, governance
 from .adk import _InFlight
 from .clients import region_of
-from .context import User, scope
+from .context import User, current_component, scope
 from .failure import blocked_finish, truncated_finish
 from .report import Reporter, _Framework, _installed_version
 from .usage import FORMAT_LITELLM, reported_from, reported_quantities
@@ -140,7 +140,8 @@ def _build_callback_class() -> type:
                     name=FRAMEWORK,
                     version=_installed_version("litellm"),
                 )
-                component = _str(metadata.get("agentpulse_component")) or _str(metadata.get("user_api_key_alias")) or _str(payload.get("call_type")) or "litellm"
+                # The scope holds the request's own component where its metadata named one, and the caller's where an SDK call was made inside `scope`.
+                component = current_component() or _str(metadata.get("user_api_key_alias")) or _str(payload.get("call_type")) or "litellm"
                 duration = (end_time - start_time).total_seconds() if isinstance(start_time, datetime) and isinstance(end_time, datetime) else 0.0
                 activity = rp._activity(component, duration, error, (), framework)
                 activity.model = _str(getattr(response, "model", None)) or _str(payload.get("model")) or _str(kwargs.get("model"))
@@ -193,7 +194,7 @@ def _build_callback_class() -> type:
                 verdict = self._reporter._decide(
                     model,
                     provider=_provider_of(model) or self._reporter.attribution.billed_by,
-                    component=_str(metadata.get("agentpulse_component")) or "litellm",
+                    component=current_component() or "litellm",
                     framework=_Framework(request=_str(metadata.get("agentpulse_request")), user=user_id, name=FRAMEWORK, version=_installed_version("litellm")),
                 )
             return verdict, metadata
@@ -204,7 +205,7 @@ def _build_callback_class() -> type:
 def _scope_from(metadata: dict, user_id: str) -> dict:
     """What the request's metadata says the call was for, as `scope` takes it. What it does not say keeps what the surrounding context already holds."""
     named: dict = {}
-    for key, name in (("agentpulse_request", "request"), ("agentpulse_session", "session"), ("agentpulse_project", "project"), ("agentpulse_component", "component")):
+    for key, name in (("agentpulse_request", "request"), ("agentpulse_session", "session"), ("agentpulse_project", "project"), ("agentpulse_component", "component"), ("agentpulse_skill", "skill")):
         if _str(metadata.get(key)):
             named[name] = metadata[key]
     if _str(metadata.get("agentpulse_workspace")):

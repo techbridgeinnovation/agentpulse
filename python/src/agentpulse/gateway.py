@@ -34,7 +34,7 @@ def organisation_of_key(key: str) -> str:
 class Gateway:
     """TLS to the gateway, presenting a key and its secret as a pair on every call.
 
-    Lazy: nothing touches the network until the first record is sent, so a gateway that is unreachable at startup delays nothing the agent does. One gateway serves the metering sink and the spend check alike.
+    Lazy: nothing touches the network until the first record is sent or a reporter on it is governed, and nothing waits on it then, so a gateway that is unreachable at startup delays nothing the agent does. One gateway serves the metering sink and the spend check alike.
     """
 
     def __init__(self, address: str, key: str, secret: str):
@@ -70,6 +70,10 @@ class Gateway:
     def call(self, method: str, message: bytes, timeout: float) -> bytes:
         """One unary call. Raises `RPCError` on any failure."""
         return self._channel.unary(method, message, timeout)
+
+    def preconnect(self, timeout: float) -> None:
+        """Opens the calling thread's connection ahead of its first call. Never raises."""
+        self._channel.preconnect(timeout)
 
     def stream(self, method: str, message: bytes, idle: float, stopped: Any) -> Iterator[bytes]:
         """One server-streaming call, yielding each message as it arrives. See `Channel.server_stream`."""

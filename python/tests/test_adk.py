@@ -529,3 +529,34 @@ def test_one_plugin_on_two_runners_that_share_a_manager_wraps_it_once():
     assert manager.run_on_model_error_callback.__closure__ is not None
     inner = [c.cell_contents for c in manager.run_on_model_error_callback.__closure__ if callable(c.cell_contents) and getattr(c.cell_contents, "__self__", None) is manager]
     assert len(inner) == 1
+
+
+def test_a_component_and_skill_set_on_the_request_win_and_a_tool_keeps_its_own_component():
+    sink, _, _, _, _ = run([calls("lookup", city="Nairobi"), text("done")], scope={"component": "triage", "skill": "search"})
+    first, tool, last = sink.activities
+    assert (first.caller_component, first.skill) == ("triage", "search")
+    assert (tool.caller_component, tool.skill) == ("tool:lookup", "search")
+    assert last.caller_component == "triage"
+
+
+def test_a_framework_user_that_is_an_email_is_recorded_as_no_user_and_never_labelled():
+    sink = MemorySink()
+    rec = agentpulse.Recorder(agentpulse.Config(sinks=[sink], exit_timeout=0, flush_every=60))
+    rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=AGENT, service="research-agent"))
+    model = Scripted(model="gemini-2.5-pro")
+    model.replies, model.asked = [text("done")], []
+    app = App(name="probe", root_agent=LlmAgent(name="researcher", model=model, instruction="Answer."), plugins=[rp.adk_plugin()])
+
+    async def main():
+        runner = InMemoryRunner(app=app)
+        session = await runner.session_service.create_session(app_name="probe", user_id="ada@example.com")
+        message = types.Content(role="user", parts=[types.Part(text="hi")])
+        async for _ in runner.run_async(user_id="ada@example.com", session_id=session.id, new_message=message):
+            pass
+
+    asyncio.run(main())
+    rec.flush(timeout=2)
+    [a] = sink.activities
+    assert a.user == ""
+    assert rec.stats().email_users_refused == 1
+    assert "example.com" not in repr(model.asked) and "example.com" not in repr(sink.batches)

@@ -12,7 +12,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from . import _wire
 from .gateway import Gateway
@@ -81,6 +81,9 @@ class GatewayDecider:
 
     def decide(self, request: _wire.DecideRequest, timeout: float) -> _wire.DecideResponse:
         return _wire.DecideResponse.decode(self._gateway.call(_DECIDE, request.encode(), timeout))
+
+    def warm(self, timeout: float) -> None:
+        self._gateway.preconnect(timeout)
 
 
 _Key = tuple[str, str, str, str, str, str, str]
@@ -241,6 +244,26 @@ class _Workers:
         self._queue.put((fn, deadline, done, outcome))
         return done, outcome
 
+    def warm(self, fn: Callable[[], None], timeout: float) -> None:
+        """Runs `fn` once on every worker, without waiting for any of them.
+
+        Each run holds its worker until all have started or `timeout` passes, which is what lands one on every thread rather than several on the first free one. A decision asked meanwhile waits behind them no longer than the handshake it would otherwise have made itself.
+        """
+        barrier = threading.Barrier(self._count)
+
+        def run() -> Any:
+            try:
+                fn()
+            finally:
+                try:
+                    barrier.wait(timeout)
+                except threading.BrokenBarrierError:
+                    pass
+
+        deadline = time.monotonic() + timeout
+        for _ in range(self._count):
+            self.submit(run, deadline)
+
     def _ensure_started(self) -> None:
         if self._started >= self._count:
             return
@@ -273,6 +296,16 @@ def _reset_after_fork() -> None:
 
 if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_reset_after_fork)
+
+
+def warm(decider: Decider, timeout: float) -> None:
+    """Opens each decision worker's connection to governance in the background, where `decider` keeps one, so the first decision on a new instance is one request on a warm connection rather than a handshake inside its deadline. Never waits and never raises."""
+    try:
+        open_connection = getattr(decider, "warm", None)
+        if callable(open_connection):
+            _workers.warm(lambda: open_connection(timeout), timeout)
+    except Exception:
+        pass
 
 
 def _bounded(fn: Callable[[], _wire.DecideResponse], timeout: float) -> _wire.DecideResponse:

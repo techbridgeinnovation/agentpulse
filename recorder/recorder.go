@@ -107,6 +107,9 @@ type Counters struct {
 
 	// Unrecorded counts every request an instrumented client sent that no record was made for, such as an embedding, a count of tokens or a file upload. Above zero means some of what a client did is not in the cost data.
 	Unrecorded atomic.Int64
+
+	// EmailUsersRefused counts every record whose user identifier looked like an email address, and was sent with no user instead. Above zero means the product is passing an address where its sign-in's identifier belongs.
+	EmailUsersRefused atomic.Int64
 }
 
 // Stats is a snapshot of the counters.
@@ -154,6 +157,8 @@ type Stats struct {
 	NamesFailed int64
 	// Unrecorded is how many requests an instrumented client sent without a record. See Counters.Unrecorded.
 	Unrecorded int64
+	// EmailUsersRefused is how many records were sent with no user because their user identifier looked like an email address. See Counters.EmailUsersRefused.
+	EmailUsersRefused int64
 }
 
 // New starts a recorder. It never returns an error: a recorder that cannot be
@@ -202,6 +207,11 @@ func (r *Recorder) enqueue(entry record) {
 	if r == nil || entry.activity == nil {
 		return
 	}
+	// Every record passes here, so this is the one place an address is kept off them all.
+	if LooksLikeEmail(entry.activity.GetUser()) {
+		entry.activity.User = ""
+		r.counters.EmailUsersRefused.Add(1)
+	}
 	// The running total is kept whether or not the record survives the queue.
 	// A dropped record still cost money, and a spend decision that ignored it
 	// would be wrong in the one direction that matters.
@@ -243,6 +253,7 @@ func (r *Recorder) Stats() Stats {
 		NamesDropped:        r.counters.NamesDropped.Load(),
 		NamesFailed:         r.counters.NamesFailed.Load(),
 		Unrecorded:          r.counters.Unrecorded.Load(),
+		EmailUsersRefused:   r.counters.EmailUsersRefused.Load(),
 	}
 }
 

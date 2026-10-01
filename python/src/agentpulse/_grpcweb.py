@@ -176,6 +176,15 @@ class Channel:
             raise RPCError(status)
         return reply
 
+    def preconnect(self, timeout: float) -> None:
+        """Opens this thread's connection, handshake and all, if it holds none, so its next call starts on a warm one. Raises nothing: a connection that fails here is thrown away and the next call opens another."""
+        try:
+            connection = self._connection(timeout)
+            if connection.sock is None:
+                connection.connect()
+        except Exception:
+            self._discard()
+
     def server_stream(self, method: str, message: bytes, idle: float, stopped: threading.Event) -> Iterator[bytes]:
         """Calls a server-streaming `method` and yields each message as it arrives, until the stream ends, sits silent for `idle` seconds, or `stopped` is set.
 

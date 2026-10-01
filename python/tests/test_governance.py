@@ -356,3 +356,40 @@ def test_a_refusal_is_repeated_when_governance_does_not_answer():
     answers.error = TimeoutError("slow")
     assert not rp.decide(model="m").proceed
     assert rp.decide(model="another").proceed
+
+
+def test_a_user_that_looks_like_an_email_is_left_out_of_the_question():
+    answers = Answers()
+    rp, _ = governed(answers)
+    with scope(user=User("ada@example.com")):
+        rp.decide(model="m")
+    assert answers.asked[0].user == ""
+
+
+def test_governed_through_the_gateway_opens_every_decision_connection_without_waiting():
+    import socket
+
+    from agentpulse import governance
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(16)
+    listener.settimeout(3)
+    try:
+        gateway = Gateway(f"http://127.0.0.1:{listener.getsockname()[1]}", "organisations/acme/apiKeys/k1", "s")
+        started = time.monotonic()
+        Reporter(Recorder(Config(exit_timeout=0)), Attribution(agent=AGENT, service="s"), gateway=gateway).governed(follow_changes=False)
+        assert time.monotonic() - started < 0.1
+        accepted = [listener.accept()[0] for _ in range(governance._DECISION_WORKERS)]
+        for conn in accepted:
+            conn.close()
+    finally:
+        listener.close()
+
+
+def test_governed_through_a_gateway_that_cannot_be_reached_still_starts_and_lets_calls_through():
+    gateway = Gateway("http://127.0.0.1:1", "organisations/acme/apiKeys/k1", "s")
+    started = time.monotonic()
+    rp = Reporter(Recorder(Config(exit_timeout=0)), Attribution(agent=AGENT, service="s"), gateway=gateway).governed(follow_changes=False, timeout=0.5)
+    assert time.monotonic() - started < 0.1
+    assert rp.decide(model="m").proceed

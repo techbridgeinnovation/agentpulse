@@ -285,3 +285,18 @@ func TestAWorkspaceWhoseNamesAreRefusedDoesNotLoseAnother(t *testing.T) {
 		t.Fatalf("NamesFailed = %d, want one per refused person", s.NamesFailed)
 	}
 }
+
+func TestAnIdentifierShapedLikeAnEmailIsNeverNamed(t *testing.T) {
+	sink := &namingSink{}
+	r := New(Config{Sinks: []Sink{sink}, FlushEvery: 10 * time.Millisecond})
+
+	r.NoteUser(User{ID: "ada@example.com", Name: "Ada"})
+	closeSoon(t, r)
+
+	if got := sink.named(); len(got) != 0 {
+		t.Fatalf("sink named %v, want nothing", got)
+	}
+	if s := r.Stats(); s.NamesFailed != 1 || s.Named != 0 {
+		t.Fatalf("NamesFailed = %d, Named = %d, want 1 and 0", s.NamesFailed, s.Named)
+	}
+}

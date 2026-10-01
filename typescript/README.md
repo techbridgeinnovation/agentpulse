@@ -40,6 +40,8 @@ Once per request, where the sign-in has been checked, say who the work is for. E
 await scope({ request: requestId, user: { id: claims.sub, name: claims.name }, workspace: "acme" }, () => handle(req));
 ```
 
+A `component` or `skill` on the scope wins over the middleware's `component` and the reporter's `skill`; a tool record keeps `tool:<name>` as its component. A user identifier shaped like an email address is recorded as no user, never sent to the directory, and counted in `stats().emailUsersRefused`.
+
 ## The Vercel AI SDK
 
 One middleware, wrapped around a model where it is created, and nothing at the call sites:

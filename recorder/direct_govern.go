@@ -108,7 +108,7 @@ func (rp *Reporter) decide(ctx context.Context, requestedProvider, requestedMode
 	resp, err := rp.decider.Decide(dctx, &governancepb.DecideRequest{
 		Parent:            organisation,
 		Agent:             rp.attribution.Agent,
-		User:              UserFrom(ctx).ID,
+		User:              decidableUser(UserFrom(ctx).ID),
 		Workspace:         WorkspaceName(organisation, WorkspaceFrom(ctx)),
 		Project:           ProjectFrom(ctx),
 		RequestedProvider: requestedProvider,
@@ -154,4 +154,12 @@ func deniedReply(req *http.Request, body string) *http.Response {
 		ContentLength: int64(len(body)),
 		Request:       req,
 	}
+}
+
+// decidableUser is the identifier a spend decision is asked about, with one shaped like an email address left out for the same reason a record leaves it out.
+func decidableUser(id string) string {
+	if LooksLikeEmail(id) {
+		return ""
+	}
+	return id
 }

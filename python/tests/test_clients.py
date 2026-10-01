@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from agentpulse import Attribution, Config, Recorder, Reporter, _wire, denied, scope
+from agentpulse import Attribution, Config, Recorder, Reporter, User, _wire, denied, scope
 
 from fakes import MemorySink, Provider
 
@@ -537,3 +537,14 @@ def test_a_stream_read_to_its_end_is_whole_even_without_a_finish(provider):
             pass
     [a] = recorded(rp, sink)
     assert (a.status, a.error_code) == (_wire.STATUS_OK, "")
+
+
+def test_a_direct_client_records_the_component_and_skill_the_request_named(provider):
+    rp, sink = reporter()
+    client = openai_client(rp, provider)
+    provider.json(CHAT)
+    with scope(component="triage", skill="search", user=User("ada@example.com")):
+        client.chat.completions.create(model="gpt-5", messages=[])
+    [a] = recorded(rp, sink)
+    assert (a.caller_component, a.skill, a.user) == ("triage", "search", "")
+    assert rp.recorder.stats().email_users_refused == 1

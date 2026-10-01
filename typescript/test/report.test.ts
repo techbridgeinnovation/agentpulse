@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
 
-import { scope } from "../src/context.ts";
+import { looksLikeEmail, scope } from "../src/context.ts";
 import { blockedFinish, errorCode, truncatedFinish } from "../src/failure.ts";
 import { ConfigError } from "../src/gateway.ts";
 import { forgetRefusals } from "../src/governance.ts";
@@ -130,4 +130,40 @@ test("an error whose causes lead back to each other still reduces to a code", ()
   a.cause = b;
   assert.equal(errorCode(a), "Canceled");
   assert.equal(errorCode(b), "Canceled");
+});
+
+test("a skill and a component set on the request win over the reporter's own, and a tool keeps its own component", async () => {
+  const sink = new MemorySink();
+  const rp = new Reporter(new Recorder({ sinks: [sink], exitTimeoutMs: 0 }), { agent: "organisations/acme/agents/a", service: "svc", skill: "summaries" });
+  scope({ skill: "search", component: "triage" }, () => {
+    rp.modelCall({ model: "m" });
+    rp.modelCall({ model: "m", component: "asset_summary" });
+    rp.toolCall({ tool: "lookup" });
+  });
+  rp.modelCall({ model: "m" });
+  await rp.recorder.flush(1000);
+  assert.deepEqual(sink.activities.map((a) => [a.callerComponent, a.skill]), [["triage", "search"], ["asset_summary", "search"], ["tool:lookup", "search"], ["", "summaries"]]);
+});
+
+test("a user that looks like an email is recorded as no user, never named and never asked about", async () => {
+  const sink = new MemorySink();
+  const asked: string[] = [];
+  const decider = { decide: async (r: { user?: string }) => (asked.push(r.user ?? ""), { decision: 1, reason: "", policyVersion: "", replacementProvider: "", replacementModel: "" }) };
+  const rp = new Reporter(new Recorder({ sinks: [sink], exitTimeoutMs: 0 }), { agent: "organisations/acme/agents/a", service: "svc" }).governed(decider, { cacheTtlMs: 0 });
+  await scope({ user: { id: "ada@example.com", name: "Ada" } }, async () => {
+    await rp.decide("m");
+    rp.modelCall({ model: "m" });
+  });
+  rp.modelCall({ model: "m" }, { user: "bob@example.org" });
+  rp.modelCall({ model: "m" }, { user: "bob@corp" });
+  await rp.recorder.flush(1000);
+  assert.deepEqual(asked, [""]);
+  assert.deepEqual(sink.activities.map((a) => a.user), ["", "", "bob@corp"]);
+  assert.deepEqual(sink.named, []);
+  assert.deepEqual([rp.recorder.stats().emailUsersRefused, rp.recorder.stats().namesFailed], [2, 1]);
+});
+
+test("an identifier is taken for an email only with a dot after the at", () => {
+  assert.ok(looksLikeEmail("ada@example.com") && looksLikeEmail("@.") && looksLikeEmail("a.b@c.d"));
+  assert.ok(!looksLikeEmail("ada@corp") && !looksLikeEmail("ada.lovelace") && !looksLikeEmail("") && !looksLikeEmail(undefined));
 });

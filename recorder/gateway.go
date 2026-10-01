@@ -23,9 +23,11 @@ const apiSecretHeader = "x-api-secret"
 // gateway: TLS to the gateway's address, with the api key on every call.
 //
 // One connection serves every client the recorder builds, so the sink, the
-// rate source and the decider are all given this. The connection is lazy: no
-// network is touched until the first record is sent, so a gateway that is
-// unreachable at startup delays nothing the agent does.
+// rate source and the decider are all given this. It starts connecting in the
+// background before it returns, because the first spend decision has a short
+// deadline and a handshake started there can outlast it. Nothing waits on the
+// connection, so a gateway that is unreachable at startup delays nothing the
+// agent does.
 //
 // Both arguments are required. An empty one is refused here rather than
 // discovered later as every record being rejected, because a wrong setting
@@ -38,10 +40,10 @@ func Dial(gateway, apiKey string) (*grpc.ClientConn, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, errors.New("recorder: api key is required")
 	}
-	return grpc.NewClient(gatewayTarget(gateway),
+	return connected(grpc.NewClient(gatewayTarget(gateway),
 		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})),
 		grpc.WithPerRPCCredentials(apiKeyCredentials{key: apiKey}),
-	)
+	))
 }
 
 // DialWithKey opens the same connection as Dial, presenting a key and its secret as a pair.
@@ -59,10 +61,19 @@ func DialWithKey(gateway, key, secret string) (*grpc.ClientConn, error) {
 	if strings.TrimSpace(secret) == "" {
 		return nil, errors.New("recorder: api secret is required")
 	}
-	return grpc.NewClient(gatewayTarget(gateway),
+	return connected(grpc.NewClient(gatewayTarget(gateway),
 		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})),
 		grpc.WithPerRPCCredentials(pairCredentials{key: strings.TrimSpace(key), secret: strings.TrimSpace(secret)}),
-	)
+	))
+}
+
+// connected starts a new connection connecting without waiting for it, so the handshake is under way before the first call rather than inside that call's deadline.
+func connected(conn *grpc.ClientConn, err error) (*grpc.ClientConn, error) {
+	if err != nil {
+		return nil, err
+	}
+	conn.Connect()
+	return conn, nil
 }
 
 // OrganisationOfKey returns the organisation a key was issued for, as its resource name, or an empty string when the value is not a key's name.

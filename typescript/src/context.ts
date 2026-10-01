@@ -26,8 +26,10 @@ export interface Scope {
   workspace?: string;
   /** A unit of work inside the tenant, and a label only: nothing is authorised against it. */
   project?: string;
-  /** The part of the product a model call belongs to. */
+  /** The part of the product a model call belongs to. Wins over the name a framework gives. */
   component?: string;
+  /** The area of the product the request is in, e.g. `search`. Wins over the one a reporter was built with, for a process that serves several. */
+  skill?: string;
 }
 
 const storage = new AsyncLocalStorage<Scope>();
@@ -44,6 +46,17 @@ export function scope<T>(values: Scope, fn: () => T): T {
 
 export function currentScope(): Scope {
   return storage.getStore() ?? {};
+}
+
+/**
+ * Whether a user identifier is shaped like an email address: an `@` with a dot somewhere after it.
+ *
+ * A record carries an identifier and never an address, so one shaped like an address is recorded as no user and counted in `emailUsersRefused`. Deliberately loose: refusing an identifier that only resembles an address costs one row its user, and letting an address through puts it on every row.
+ */
+export function looksLikeEmail(id: string | undefined): boolean {
+  if (typeof id !== "string") return false;
+  const at = id.indexOf("@");
+  return at >= 0 && id.includes(".", at + 1);
 }
 
 /** The platform's name for a tenant, e.g. `organisations/dealade/workspaces/acme`, or an empty string for no workspace. */

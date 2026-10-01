@@ -20,7 +20,7 @@ from typing import Any, Callable
 from . import _wire
 from .context import current_component, current_request
 from .failure import blocked_finish
-from .report import Reporter, _Framework, _installed_version, _user_id, result_size
+from .report import Reporter, _Framework, _asked_user, _installed_version, result_size
 from .usage import FORMAT_VERTEX, reported_from_genai, reported_quantities
 
 # What a caller sees when governance answers DENY and no message was given. Generic on purpose: the words a product's user reads on a refusal are product copy this library has no basis to guess.
@@ -368,7 +368,7 @@ def _build_plugin_class() -> type:
 
             # Labels are carried into the cloud billing export, which is what makes a charge not measured in tokens attributable at all. Only opaque identifiers, never an email. Additive, so a label set closer to the call site is never replaced.
             if _served_by_vertex(ctx):
-                labels = {k: v for k, v in (("ap_user", _label(_user_id(framework))), ("ap_component", _label(component))) if v}
+                labels = {k: v for k, v in (("ap_user", _label(_asked_user(framework))), ("ap_component", _label(component))) if v}
                 if labels:
                     if request.config is None:
                         request.config = types.GenerateContentConfig()

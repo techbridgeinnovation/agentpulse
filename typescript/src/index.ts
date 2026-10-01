@@ -1,7 +1,7 @@
 // Agent Pulse's recorder for TypeScript: what an agent spent, recorded from inside its own process, and a budget that can stop a call.
 
 export { FRAMEWORK as AI_SDK_FRAMEWORK, type EmbeddingMiddleware, type Middleware, type MiddlewareOptions, providerOf, type Tools } from "./aisdk.ts";
-export { currentScope, scope, type Scope, type User, workspaceName } from "./context.ts";
+export { currentScope, looksLikeEmail, scope, type Scope, type User, workspaceName } from "./context.ts";
 export { blockedFinish, Cancelled, denied, errorCode, SpendDenied, truncatedFinish } from "./failure.ts";
 export { API_KEY_HEADER, API_SECRET_HEADER, ConfigError, Gateway, organisationOfKey, RpcError } from "./gateway.ts";
 export { ask, CachingDecider, type Decider, type Decision, GatewayDecider, GovernanceUnavailable, type Verdict } from "./governance.ts";

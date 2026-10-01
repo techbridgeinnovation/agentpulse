@@ -45,7 +45,7 @@ The key and the secret travel as a pair and resolve only together: the right sec
 
 A key issued before keys were presented as a pair is a secret alone. `Dial(gateway, secret)` still sends it, and the organisation is set beside it as `AP_ORGANISATION`, until the key is rotated.
 
-`Dial` opens one TLS connection to the gateway with the key attached to every call, and it is lazy: nothing is touched on the network until the first record is sent. The same connection serves the sink, the rate source and the decider.
+`Dial` opens one TLS connection to the gateway with the key attached to every call, and it starts connecting in the background as it returns, so the first budget question does not wait on a handshake and an unreachable gateway delays nothing the agent does. The same connection serves the sink, the rate source and the decider.
 
 Two kinds of code spend money on models, and they cannot report the same way.
 
@@ -61,7 +61,7 @@ opts := adkhooks.Options{Agent: agentName, Service: "atlas-agent", Decider: reco
 // register adkhooks.BeforeModel, AfterModel, OnModelError, BeforeTool, AfterTool, OnToolError and AfterAgent on the agent, ahead of any callback of your own
 ```
 
-Every field on the record comes from the framework's own callback context: which request, which user, which session, which agent, which model, how many tokens, whether it succeeded. A user set on the context with `recorder.WithUser` before the runner is invoked wins over the framework's own user id, name and all. Which tenant the turn is for, and which unit of work inside it, are read from the same context — the framework knows neither.
+Every field on the record comes from the framework's own callback context: which request, which user, which session, which agent, which model, how many tokens, whether it succeeded. A user set on the context with `recorder.WithUser` before the runner is invoked wins over the framework's own user id, name and all. Which tenant the turn is for, and which unit of work inside it, are read from the same context — the framework knows neither. A component set with `recorder.WithComponent` wins over the agent's name, and a skill set with `recorder.WithSkill` wins over `Options.Skill`; tool records keep `tool:<name>` as their component either way.
 
 `adkhooks` is the first major version of the framework and `adkv2hooks` the second. They are different libraries as far as Go is concerned, with unrelated types, so one package cannot serve both. They read the same things, and differ in one way: only `adkv2hooks` takes `Model`, which names the model where neither the framework nor `BeforeModel` does.
 
@@ -125,7 +125,7 @@ The figure is exact for what this process did and blind to what another replica 
 
 A record carries an identifier and nothing else about the person, because a record is one row per model call and a report over it is read by people who are not that person. The name behind the identifier goes to a directory instead, once per person, and a report is joined to it afterwards.
 
-`recorder.User` is where the two are given together. The identifier is whatever the product's own sign-in issued, bare — `8c21e0b4`, not `users/8c21e0b4` — because it becomes the last segment of the directory row's name and the exact value on every record, and that equality is the join. The name and email are optional; a product that gives only the identifier records exactly as before and names nobody.
+`recorder.User` is where the two are given together. The identifier is whatever the product's own sign-in issued, bare — `8c21e0b4`, not `users/8c21e0b4` — because it becomes the last segment of the directory row's name and the exact value on every record, and that equality is the join. The name and email are optional; a product that gives only the identifier records exactly as before and names nobody. An identifier shaped like an email address is never sent: the record goes with no user and `EmailUsersRefused` in `Stats` counts it.
 
 Naming takes the same path a record does: a bounded queue, a batch, a sink on the worker, dropped and counted when the queue is full. What is remembered is what was last sent, so a person seen again with the same name costs a map lookup. A changed name is sent again. A send that fails forgets the person, so the next call they make tries again rather than waiting for a restart. `Named`, `NamesDropped` and `NamesFailed` in `Stats` say what happened; `NamesFailed` above zero means a report is showing an identifier where a name was given, and an identifier with a slash in it lands there too.
 

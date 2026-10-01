@@ -109,7 +109,7 @@ A service using the LiteLLM SDK registers `litellm.callbacks = [reporter.litellm
 
 LiteLLM restates every provider's usage in OpenAI's shape, so the provider's own counts never reach this. They are recorded in LiteLLM's convention, `LITELLM`, which differs from OpenAI's in one place that matters: the input count holds both the cache read and the cache write, and both come out of it before either is priced. Who served the call is LiteLLM's to say, since it routes each one.
 
-A proxy holds none of its callers' context, so who a call was for travels on the request: LiteLLM's own `user` field, and `agentpulse_request`, `agentpulse_session`, `agentpulse_workspace`, `agentpulse_project`, `agentpulse_component`, `agentpulse_user`, `agentpulse_user_name` and `agentpulse_user_email` in its `metadata`. An SDK call made inside `scope` records what the scope named: LiteLLM reports a call's outcome from a thread of its own, so the scope is captured when the call starts. LiteLLM reads its callback list once, when the first call is made.
+A proxy holds none of its callers' context, so who a call was for travels on the request: LiteLLM's own `user` field, and `agentpulse_request`, `agentpulse_session`, `agentpulse_workspace`, `agentpulse_project`, `agentpulse_component`, `agentpulse_skill`, `agentpulse_user`, `agentpulse_user_name` and `agentpulse_user_email` in its `metadata`. An SDK call made inside `scope` records what the scope named: LiteLLM reports a call's outcome from a thread of its own, so the scope is captured when the call starts. LiteLLM reads its callback list once, when the first call is made.
 
 ## LangChain and LangGraph
 
@@ -186,7 +186,7 @@ A verdict is reused for `cache_ttl` seconds, 30 by default, for exactly the same
 
 A governed reporter asking governance through the gateway also follows its stream of changed budgets, started by the first decision, and drops the verdicts a change covers at once rather than when they expire. It clears every tenant's verdicts within the changed scope, which errs towards asking again. The stream is an improvement on the cache's own lifetime and never a guarantee: it reopens on its own when it ends, backs off while governance is unreachable, and without it a changed budget still arrives within `cache_ttl`. `follow_changes=False` turns it off.
 
-A call waits at most `timeout` seconds, a second and a half by default, for an answer, and a call governance refused within the hour is refused again when no answer comes in time. That wait is enforced by no longer waiting rather than by socket timeouts, which bound each read and write on their own and not the whole exchange.
+A call waits at most `timeout` seconds, a second and a half by default, for an answer, and a call governance refused within the hour is refused again when no answer comes in time. That wait is enforced by no longer waiting rather than by socket timeouts, which bound each read and write on their own and not the whole exchange. Governance through the gateway opens its connections in the background when the reporter is governed, so the first decision on a new instance is not spent on a handshake; nothing waits on them, and one that fails is opened again by the next call.
 
 ## The running total
 
@@ -205,9 +205,9 @@ A record dropped from a full queue still counts, because it cost money whether o
 
 ## Who and which tenant
 
-The request, the person, the session, the workspace, the project and the component are context variables set with `scope`, never arguments at a model call site. A value a call site can choose is a value that can attribute one tenant's spend to another, and a figure wrong that way looks exactly like one that is right.
+The request, the person, the session, the workspace, the project, the component and the skill are context variables set with `scope`, never arguments at a model call site. A component set there wins over the name a framework gives, such as the agent's, and a skill set there wins over the reporter's own; a tool record keeps `tool:<name>` as its component. A value a call site can choose is a value that can attribute one tenant's spend to another, and a figure wrong that way looks exactly like one that is right.
 
-A record carries the person's bare identifier and nothing else about them. The name and email go once per person to a directory, and again when they change, in the workspace whose records carry the identifier.
+A record carries the person's bare identifier and nothing else about them. An identifier shaped like an email address, from the framework or from `scope`, is recorded as no user, never sent to the directory, and counted in `stats().email_users_refused`. The name and email go once per person to a directory, and again when they change, in the workspace whose records carry the identifier.
 
 Context variables follow the work across `await` and into `asyncio.to_thread`. They do not follow it into a thread started by hand or a plain executor: wrap the function with `agentpulse.carry` before handing it over.
 
