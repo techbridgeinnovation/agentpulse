@@ -32,6 +32,7 @@ type Recorder struct {
 	rates    *rateCache
 
 	closeOnce sync.Once
+	closed    atomic.Bool
 	done      chan struct{}
 	stopped   chan struct{}
 }
@@ -103,6 +104,9 @@ type Counters struct {
 	// cannot be named at all because they hold a slash. Above zero means a
 	// report is showing an identifier where a name was given.
 	NamesFailed atomic.Int64
+
+	// Unrecorded counts every request an instrumented client sent that no record was made for, such as an embedding, a count of tokens or a file upload. Above zero means some of what a client did is not in the cost data.
+	Unrecorded atomic.Int64
 }
 
 // Stats is a snapshot of the counters.
@@ -148,6 +152,8 @@ type Stats struct {
 	NamesDropped int64
 	// NamesFailed is how many people could not be named. See Counters.NamesFailed.
 	NamesFailed int64
+	// Unrecorded is how many requests an instrumented client sent without a record. See Counters.Unrecorded.
+	Unrecorded int64
 }
 
 // New starts a recorder. It never returns an error: a recorder that cannot be
@@ -201,6 +207,11 @@ func (r *Recorder) enqueue(entry record) {
 	// would be wrong in the one direction that matters.
 	r.totals.add(entry.activity.GetRequest(), r.estimate(entry.activity))
 
+	// Nothing reads the queue once the recorder is closed, so a record handed over after is lost and counted as such.
+	if r.closed.Load() {
+		r.counters.Dropped.Add(1)
+		return
+	}
 	select {
 	case r.queue <- entry:
 		r.counters.Recorded.Add(1)
@@ -231,6 +242,7 @@ func (r *Recorder) Stats() Stats {
 		Named:               r.counters.Named.Load(),
 		NamesDropped:        r.counters.NamesDropped.Load(),
 		NamesFailed:         r.counters.NamesFailed.Load(),
+		Unrecorded:          r.counters.Unrecorded.Load(),
 	}
 }
 
@@ -280,6 +292,14 @@ func (r *Recorder) NotePanicked() {
 	r.counters.Panicked.Add(1)
 }
 
+// noteUnrecorded records that an instrumented client sent a request no record was made for. See Counters.Unrecorded.
+func (r *Recorder) noteUnrecorded() {
+	if r == nil {
+		return
+	}
+	r.counters.Unrecorded.Add(1)
+}
+
 // NoteDecisionError records that a Decide call could not be completed. See
 // Counters.DecisionErrors.
 func (r *Recorder) NoteDecisionError() {
@@ -325,15 +345,27 @@ func (r *Recorder) NoteDowngradeNotApplied() {
 //
 // It returns when the queue is drained or ctx is done, whichever comes first.
 // Shutting down is not a reason to hang: anything still queued when ctx expires
-// is counted as dropped.
+// is counted as dropped, and so is anything recorded after Close.
 func (r *Recorder) Close(ctx context.Context) {
 	if r == nil {
 		return
 	}
-	r.closeOnce.Do(func() { close(r.done) })
+	r.closeOnce.Do(func() {
+		r.closed.Store(true)
+		close(r.done)
+	})
 	select {
 	case <-r.stopped:
 	case <-ctx.Done():
+	}
+	// Taken from the same queue the worker drains, so each record is either delivered by it or counted here, never both.
+	for {
+		select {
+		case <-r.queue:
+			r.counters.Dropped.Add(1)
+		default:
+			return
+		}
 	}
 }
 

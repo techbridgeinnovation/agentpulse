@@ -395,6 +395,9 @@ var truncatedReasons = map[string]bool{
 	"MAX_TOKENS":        true,
 	"LENGTH":            true,
 	"MAX_OUTPUT_TOKENS": true,
+
+	// Anthropic's reason for a reply that filled what was left of the context window.
+	"MODEL_CONTEXT_WINDOW_EXCEEDED": true,
 }
 
 // BlockedFinish reports whether a provider's finish reason means the call

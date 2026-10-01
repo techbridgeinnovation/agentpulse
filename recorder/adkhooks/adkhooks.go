@@ -4,11 +4,9 @@
 // Google's and these are ours, and a package called adk sitting next to an
 // import called adk reads as though we wrote the framework.
 //
-// Four callbacks and nothing at the call sites. Everything the record needs —
-// which request, which user, which session, which agent, which model, how many
-// tokens, whether it succeeded — is already on the callback context or the
-// model response, so an adopting team adds the callbacks and changes no other
-// code.
+// Callbacks and nothing at the call sites. Everything the record needs, which request, user, session, agent and model, how many tokens and whether it succeeded, is already on the callback context or the model response, so an adopting team adds the callbacks and changes no other code.
+//
+// Register BeforeModel, AfterModel and OnModelError for model calls, BeforeTool, AfterTool and OnToolError for tool calls, and AfterAgent on the agent that owns the turn. The two error callbacks are the only ones the framework runs for a model call that returned an error or a tool the model named that does not exist, so without them those calls are never recorded.
 //
 // Which tenant the turn is for, and which unit of work inside it, are the two the framework cannot know. They are read from the callback context where the product put them, at its sign-in, and never asked for here — see recorder.WithWorkspace.
 //
@@ -31,9 +29,9 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -224,8 +222,9 @@ func userIDOf(ctx agent.ReadonlyContext) string {
 // mode every chunk arrives here, and counting them would multiply a turn's
 // usage by however many chunks it happened to be split into.
 //
-// A chunk is still read for the model it reports, because the final response
-// of a streamed call arrives without one (see inFlightModels).
+// A chunk is still read for the model and usage it reports, because the final response of a streamed call arrives without the model, and a call that fails partway arrives at OnModelError with neither (see inFlightModels).
+//
+// A response substituted for a call OnModelError already recorded is not recorded again.
 func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback {
 	return func(ctx agent.CallbackContext, response *adkmodel.LLMResponse, callErr error) (*adkmodel.LLMResponse, error) {
 		if response == nil {
@@ -233,10 +232,13 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 		}
 		key := callKey(ctx)
 		if response.Partial {
-			inFlight.served(key, response.ModelVersion)
+			inFlight.chunk(key, response.ModelVersion, response.UsageMetadata)
 			return nil, nil
 		}
 		known := inFlight.take(key)
+		if known.failed {
+			return nil, nil
+		}
 
 		// What the provider said about a failure, beside the one word the code
 		// reduces to. A framework that flattens its model's error to a message
@@ -268,6 +270,53 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			OccurredAt:       timestamppb.Now(),
 		}
 		applyUsage(activity, response.UsageMetadata)
+
+		r.RecordIn(ctx, activity)
+		return nil, nil
+	}
+}
+
+// OnModelError records a model call that ended in an error.
+//
+// The framework runs AfterModel only for a call that returned a response, so a rejected request, a quota, a deadline, a cancelled turn and a stream that broke partway are seen here and nowhere else. The call is recorded as failed with its code, how long it ran, the model it asked for and whatever usage its chunks had already reported, because a provider bills for the work done before a failure.
+//
+// It returns nothing, so the error reaches the agent exactly as the model returned it. The framework stops at the first error callback that returns a response, so this one belongs first in the list: a call another callback rescues before this one runs is recorded by AfterModel as the response it was rescued with.
+func OnModelError(r *recorder.Recorder, opts Options) llmagent.OnModelErrorCallback {
+	return func(ctx agent.CallbackContext, request *adkmodel.LLMRequest, callErr error) (*adkmodel.LLMResponse, error) {
+		if callErr == nil {
+			return nil, nil
+		}
+		known := inFlight.fail(callKey(ctx))
+		model := modelOf(&adkmodel.LLMResponse{}, known)
+		if model == "" && request != nil {
+			model = request.Model
+		}
+		reported := recorder.ReportedErrorFor(callErr, opts.billedBy())
+
+		activity := &pb.Activity{
+			Agent:            opts.Agent,
+			Request:          requestOf(ctx),
+			Session:          ctx.SessionID(),
+			User:             userOf(r, ctx),
+			CallerService:    opts.Service,
+			ObservedAs:       pb.Agent_AGENT,
+			SubAgent:         ctx.AgentName(),
+			CallerComponent:  componentOf(ctx),
+			Skill:            opts.Skill,
+			Project:          recorder.ProjectFrom(ctx),
+			Model:            model,
+			BilledBy:         opts.billedBy(),
+			Region:           opts.region(),
+			Framework:        framework,
+			FrameworkVersion: frameworkVersion(),
+			DurationMs:       millisSince(known.startedAt, time.Now),
+			Status:           pb.Activity_FAILED,
+			ErrorCode:        recorder.ErrorCode(callErr),
+			ErrorFormat:      reported.Format,
+			ReportedError:    reported.Fields,
+			OccurredAt:       timestamppb.Now(),
+		}
+		applyUsage(activity, known.usage)
 
 		r.RecordIn(ctx, activity)
 		return nil, nil
@@ -444,7 +493,7 @@ func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decid
 		return decideOutcome{}
 	case governancepb.DecideResponse_DENY:
 		r.NoteDenied()
-		recordDenied(r, ctx, opts)
+		recordDenied(r, ctx, opts, requestedModel)
 		return decideOutcome{denied: deniedResponse(opts)}
 	case governancepb.DecideResponse_DOWNGRADE:
 		r.NoteDowngraded()
@@ -471,7 +520,9 @@ func deniedResponse(opts Options) *adkmodel.LLMResponse {
 // recordDenied files the refused call as a zero-cost activity. Nothing was
 // spent — the call never reached the provider — but a refusal still has to
 // be countable, which is what Activity_DENIED is for.
-func recordDenied(r *recorder.Recorder, ctx agent.CallbackContext, opts Options) {
+//
+// The model is the one the call asked for, so a refusal reads against the model it would have spent on.
+func recordDenied(r *recorder.Recorder, ctx agent.CallbackContext, opts Options, model string) {
 	r.RecordIn(ctx, &pb.Activity{
 		Agent:            opts.Agent,
 		Request:          requestOf(ctx),
@@ -483,6 +534,7 @@ func recordDenied(r *recorder.Recorder, ctx agent.CallbackContext, opts Options)
 		CallerComponent:  componentOf(ctx),
 		Skill:            opts.Skill,
 		Project:          recorder.ProjectFrom(ctx),
+		Model:            model,
 		BilledBy:         opts.billedBy(),
 		Region:           opts.region(),
 		Framework:        framework,

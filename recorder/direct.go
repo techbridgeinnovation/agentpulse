@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"runtime"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"google.golang.org/grpc/codes"
 
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
@@ -70,6 +73,11 @@ type observed struct {
 	failed  bool
 	code    string
 	failure ReportedFailure
+
+	// ended is a stream that said it was over, where nothing else it said names a finish.
+	ended bool
+	// cut is a reply the caller stopped reading before it was whole, and code why.
+	cut bool
 }
 
 // setReported replaces what a reply said it counted. A streamed reply states its counts more than once, each a running total, so the last one stated is the one that stands.
@@ -91,13 +99,16 @@ func (rp *Reporter) observe(p protocol, req *http.Request, next func(*http.Reque
 	if rp == nil {
 		return next(req)
 	}
-	recordable, requested := safeCall(p, req)
+	recordable, requested := rp.safeCall(p, req)
 	if !recordable {
+		// Every POST is a call an api can bill for, so one passed through unrecorded is counted where a host can see it.
+		if req != nil && req.Method == http.MethodPost {
+			rp.recorder.noteUnrecorded()
+		}
 		return next(req)
 	}
 
 	ctx := req.Context()
-	start := time.Now()
 	component := ComponentFrom(ctx)
 	if component == "" {
 		component = callerOf()
@@ -130,34 +141,63 @@ func (rp *Reporter) observe(p protocol, req *http.Request, next func(*http.Reque
 	}
 
 	c := &call{
-		rp: rp, p: p, ctx: ctx, start: start, component: component, billedBy: billedBy,
+		rp: rp, p: p, ctx: ctx, component: component, billedBy: billedBy,
 		format:  p.format(req, billedBy),
 		attempt: attemptOf(req),
 		region:  regionOf(req),
 	}
 	c.o.model = requested
 
+	// Timed from here so a wait for the spend decision is not counted as the model's.
+	c.start = time.Now()
 	resp, err := next(req)
 	if err != nil {
 		c.o.failed = true
 		c.o.code = ErrorCode(err)
 		c.o.failure = ReportedErrorFor(err, billedBy)
-		c.finish()
+		c.finish(endComplete, nil)
 		return resp, err
 	}
-	if resp == nil || resp.Body == nil {
-		c.finish()
+	if resp == nil {
+		c.o.failed = true
+		c.o.code = codeNoResponse
+		c.finish(endComplete, nil)
 		return resp, err
 	}
 
 	c.status = resp.StatusCode
 	c.header = resp.Header
+	if resp.Body == nil {
+		if c.status < 400 {
+			c.o.failed = true
+			c.o.code = codeNoResponse
+		}
+		c.finish(endComplete, nil)
+		return resp, err
+	}
 	c.stream = strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 	// A body still compressed is one this cannot read without decompressing it a second time. Delivered untouched and recorded without its counts.
 	c.unreadable = resp.Header.Get("Content-Encoding") != ""
 	resp.Body = c.wrap(resp.Body)
 	return resp, nil
 }
+
+// codeNoResponse is the code for a call whose transport answered with no error and no reply to read.
+const codeNoResponse = "NO_RESPONSE"
+
+// ending is how the reading of a reply stopped.
+type ending int
+
+const (
+	// endComplete is a reply read to its end, or a call with no reply to read.
+	endComplete ending = iota
+	// endClosed is a reply the caller closed before reading it to its end.
+	endClosed
+	// endAbandoned is a reply left unread when the caller's context ended.
+	endAbandoned
+	// endFailed is a reply whose reading failed part way.
+	endFailed
+)
 
 // regionOf reads where a call is processed from its address: the location in a Vertex path, or the us or eu host OpenAI uses for data residency. Empty where the address says neither.
 func regionOf(req *http.Request) string {
@@ -180,9 +220,10 @@ func regionOf(req *http.Request) string {
 }
 
 // safeCall asks a protocol whether a request is a model call, and treats one that panics as not.
-func safeCall(p protocol, req *http.Request) (recordable bool, model string) {
+func (rp *Reporter) safeCall(p protocol, req *http.Request) (recordable bool, model string) {
 	defer func() {
 		if recover() != nil {
+			rp.recorder.NotePanicked()
 			recordable, model = false, ""
 		}
 	}()
@@ -214,13 +255,17 @@ type call struct {
 	overflow bool
 	line     []byte
 	skipping bool
+	sawDone  bool
 	o        observed
 	stop     func() bool
 }
 
 // wrap puts an observer in front of a reply body. The call is recorded once, when the caller reads to the end or closes it, or when the caller's context ends with the reply abandoned part way.
 func (c *call) wrap(body io.ReadCloser) io.ReadCloser {
-	c.stop = context.AfterFunc(c.ctx, c.finish)
+	// Set under the lock because a context already ended runs finish straight away, on another goroutine.
+	c.mu.Lock()
+	c.stop = context.AfterFunc(c.ctx, func() { c.finish(endAbandoned, c.ctx.Err()) })
+	c.mu.Unlock()
 	return &observedBody{ReadCloser: body, c: c}
 }
 
@@ -234,21 +279,28 @@ func (b *observedBody) Read(p []byte) (int, error) {
 	if n > 0 {
 		b.c.see(p[:n])
 	}
-	if err == io.EOF {
-		b.c.finish()
+	switch {
+	case err == io.EOF:
+		b.c.finish(endComplete, nil)
+	case err != nil:
+		b.c.finish(endFailed, err)
 	}
 	return n, err
 }
 
 func (b *observedBody) Close() error {
 	err := b.ReadCloser.Close()
-	b.c.finish()
+	b.c.finish(endClosed, nil)
 	return err
 }
 
 // see takes a piece of the reply as the caller reads it. It never fails and never holds more than the bounds allow.
 func (c *call) see(p []byte) {
-	defer func() { _ = recover() }()
+	defer func() {
+		if recover() != nil {
+			c.rp.recorder.NotePanicked()
+		}
+	}()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.done || c.unreadable {
@@ -308,49 +360,104 @@ func (c *call) readLine(line []byte) {
 	line = bytes.TrimRight(line, "\r")
 	data, ok := bytes.CutPrefix(line, []byte("data:"))
 	if !ok {
+		if bare, reads := c.p.(bareLines); reads && len(bytes.TrimSpace(line)) > 0 {
+			bare.bare(line, &c.o)
+		}
 		return
 	}
 	data = bytes.TrimSpace(data)
-	if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+	if bytes.Equal(data, []byte("[DONE]")) {
+		c.sawDone = true
+		return
+	}
+	if len(data) == 0 {
 		return
 	}
 	c.p.event(data, &c.o)
 }
 
-// finish records the call, once.
-func (c *call) finish() {
-	defer func() { _ = recover() }()
+// bareLines is a protocol whose client reads a stream line that is not an event, rather than skipping it as a server-sent event says to.
+type bareLines interface {
+	bare(line []byte, o *observed)
+}
+
+// finish records the call, once. Nothing in it can leave the lock held or reach the caller as a panic.
+func (c *call) finish(end ending, err error) {
+	defer func() {
+		if recover() != nil {
+			c.rp.recorder.NotePanicked()
+		}
+	}()
+	o, first := c.conclude(end, err)
+	if first {
+		c.rp.recordObserved(c, o)
+	}
+}
+
+// conclude settles what the call said, the first time it is asked.
+func (c *call) conclude(end ending, err error) (o observed, first bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.done {
-		c.mu.Unlock()
-		return
+		return observed{}, false
 	}
 	c.done = true
 	if c.stop != nil {
 		c.stop()
 	}
-	c.read()
-	o := c.o
+	complete := c.readSafely()
 	c.whole, c.head, c.tail, c.line = nil, nil, nil, nil
-	c.mu.Unlock()
 
-	c.rp.recordObserved(c, o)
+	// A reply that said all it had to is complete however the reading of it stopped.
+	if !c.o.failed && !complete {
+		switch end {
+		case endClosed:
+			c.o.cut, c.o.code = true, codes.Canceled.String()
+		case endAbandoned:
+			c.o.cut, c.o.code = true, ErrorCode(err)
+		case endFailed:
+			c.o.code = ErrorCode(err)
+			c.o.cut = isContextEnd(err)
+			c.o.failed = !c.o.cut
+		}
+	}
+	return c.o, true
 }
 
-// read makes what was held into what the call said, for a reply that has been read as far as it will be.
-func (c *call) read() {
-	if c.unreadable {
-		return
-	}
-	switch {
-	case c.status >= 400:
+// isContextEnd is an error that says the caller's context ended, which cuts a reply short rather than failing it.
+func isContextEnd(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// readSafely is read, with a protocol that panics counted and what was observed before it kept.
+func (c *call) readSafely() (complete bool) {
+	defer func() {
+		if recover() != nil {
+			c.rp.recorder.NotePanicked()
+			complete = true
+		}
+	}()
+	return c.read()
+}
+
+// read makes what was held into what the call said, for a reply that has been read as far as it will be, and says whether the reply was whole.
+func (c *call) read() (complete bool) {
+	if c.status >= 400 {
 		c.o.failed = true
 		c.o.failure = c.p.failure(c.whole, c.status, c.header, c.billedBy)
 		c.o.code = firstOf(codeOf(c.o.failure), "HTTP_"+strconv.Itoa(c.status))
+		return true
+	}
+	// A compressed reply cannot be read for whether it ended, so it is taken as whole.
+	if c.unreadable {
+		return true
+	}
+	switch {
 	case c.stream:
 		if len(c.line) > 0 && !c.skipping {
 			c.readLine(c.line)
 		}
+		return c.sawDone || c.o.ended || c.o.finish != ""
 	case c.overflow:
 		c.p.reply(func(name string) json.RawMessage {
 			if v := lastValue(c.tail, name); v != nil {
@@ -358,12 +465,15 @@ func (c *call) read() {
 			}
 			return firstValue(c.head, name)
 		}, &c.o)
+		return bytes.HasSuffix(bytes.TrimSpace(c.tail), []byte("}"))
 	case len(c.whole) > 0:
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(c.whole, &fields) == nil {
 			c.p.reply(func(name string) json.RawMessage { return fields[name] }, &c.o)
+			return true
 		}
 	}
+	return false
 }
 
 // recordObserved turns what a call said about itself into a record.
@@ -380,6 +490,9 @@ func (rp *Reporter) recordObserved(c *call, o observed) {
 	}
 
 	switch {
+	case o.cut:
+		activity.Status = pb.Activity_TRUNCATED
+		activity.ErrorCode = o.code
 	case o.failed:
 		activity.Status = pb.Activity_FAILED
 		activity.ErrorCode = o.code

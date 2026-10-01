@@ -6,66 +6,62 @@ import (
 	"time"
 )
 
-func TestInFlightDowngradeStorePutThenTake(t *testing.T) {
-	store := newInFlightDowngradeStore(8, time.Hour, time.Now)
-	store.put("call-1", "gemini-3.5-nano")
-
-	got, ok := store.take("call-1")
-	if !ok || got != "gemini-3.5-nano" {
-		t.Fatalf("take = (%q, %v), want (gemini-3.5-nano, true)", got, ok)
-	}
-}
-
-// take forgets what it returns, since the callback that pairs with it has
-// now run — a second take for the same call must find nothing, exactly like
-// adkhooks' own inFlightStore.
-func TestInFlightDowngradeStoreTakeForgetsTheEntry(t *testing.T) {
-	store := newInFlightDowngradeStore(8, time.Hour, time.Now)
-	store.put("call-1", "gemini-3.5-nano")
-
-	if _, ok := store.take("call-1"); !ok {
-		t.Fatal("first take found nothing")
-	}
-	if _, ok := store.take("call-1"); ok {
-		t.Fatal("second take for the same call found an entry, want it already forgotten")
-	}
-}
-
-func TestInFlightDowngradeStoreTakeOnAnUnknownKeyIsAMiss(t *testing.T) {
-	store := newInFlightDowngradeStore(8, time.Hour, time.Now)
-	if _, ok := store.take("never-put"); ok {
-		t.Fatal("take found an entry for a key nothing ever put, want a miss")
-	}
-}
-
-// A call that never reaches AfterModel — cut short elsewhere — must not
-// make the store grow without bound for as long as the process runs.
-func TestInFlightDowngradeStoreStaysWithinItsCap(t *testing.T) {
+// A call that never reaches its final response — cut short by another
+// before-model callback — must not make the store grow for as long as the
+// process runs.
+func TestTheInFlightStoreStaysWithinItsCap(t *testing.T) {
 	clock := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
-	store := newInFlightDowngradeStore(8, time.Hour, func() time.Time { return clock })
+	store := newInFlightModels(8, time.Hour, func() time.Time { return clock })
 
 	for i := range 100 {
-		store.put(fmt.Sprintf("call-%d", i), "gemini-3.5-nano")
+		store.requested(fmt.Sprintf("call-%d", i), "gemini-3.5-nano")
 		clock = clock.Add(time.Second)
 	}
 
 	if size := store.size(); size > 8 {
 		t.Fatalf("store holds %d calls, want at most 8", size)
 	}
-	if _, ok := store.take("call-99"); !ok {
+	if got := store.take("call-99"); got.requested == "" {
 		t.Fatal("the most recent call was evicted ahead of older ones")
 	}
 }
 
-func TestInFlightDowngradeStoreExpiredEntryIsNotUsed(t *testing.T) {
-	clock := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
-	store := newInFlightDowngradeStore(8, time.Minute, func() time.Time { return clock })
+// take forgets what it returns, since the callback that pairs with it has now run.
+func TestTakeForgetsTheCall(t *testing.T) {
+	store := newInFlightModels(8, time.Hour, time.Now)
+	store.requested("call-1", "gemini-3.5-nano")
 
-	store.put("call", "gemini-3.5-nano")
+	if got := store.take("call-1"); got.requested != "gemini-3.5-nano" {
+		t.Fatalf("first take = %+v, want the model requested", got)
+	}
+	if got := store.take("call-1"); got.requested != "" {
+		t.Fatalf("second take = %+v, want the call already forgotten", got)
+	}
+}
+
+func TestAnExpiredCallIsNotUsed(t *testing.T) {
+	clock := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	store := newInFlightModels(8, time.Minute, func() time.Time { return clock })
+
+	store.requested("call", "gemini-3.5-nano")
 	clock = clock.Add(2 * time.Minute)
 
-	if _, ok := store.take("call"); ok {
-		t.Fatal("take returned an entry past its ttl, want a miss")
+	if got := store.take("call"); got.requested != "" || got.served != "" {
+		t.Fatalf("take returned %+v for a call past its ttl, want nothing", got)
+	}
+}
+
+// A chunk arriving for a call past its life must not revive what was held for it, or a failure would be timed from a call long gone.
+func TestAnExpiredCallIsNotRevivedByALaterChunk(t *testing.T) {
+	clock := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	store := newInFlightModels(8, time.Minute, func() time.Time { return clock })
+
+	store.requested("call", "gemini-3.5-nano")
+	clock = clock.Add(2 * time.Minute)
+	store.chunk("call", "gemini-3.5-nano-001", nil)
+
+	if got := store.fail("call"); got.requested != "" || !got.startedAt.IsZero() {
+		t.Fatalf("fail returned %+v for a call past its ttl, want only what the late chunk reported", got)
 	}
 }
 
