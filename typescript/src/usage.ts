@@ -50,3 +50,17 @@ export function reportedQuantities(reported: Record<string, number> | undefined)
     .filter((unit) => unit.trim() && isWhole(reported[unit]) && reported[unit] !== 0)
     .map((unit) => ({ unit, quantity: reported[unit]! }));
 }
+
+/** How large a tool's result is, as the JSON it reaches the model in, and whether it was empty. A result that cannot be serialised is unmeasured, which is not empty: zero bytes would claim the tool returned nothing when it may have returned plenty. */
+export function resultSize(result: unknown): { bytes: number; empty: boolean } {
+  if (result === undefined || result === null) return { bytes: 0, empty: true };
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(result);
+  } catch {
+    return { bytes: 0, empty: false };
+  }
+  if (json === undefined) return { bytes: 0, empty: false };
+  if (json === "{}" || json === "[]" || json === '""' || json === "null") return { bytes: 0, empty: true };
+  return { bytes: Buffer.byteLength(json, "utf8"), empty: false };
+}

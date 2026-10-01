@@ -3,7 +3,7 @@
 // Neither a model call nor a tool call states a cost. A service says what happened and the server prices it, which is what stops an agent asserting what its own work was worth.
 
 import { currentScope, workspaceName } from "./context.ts";
-import { middleware, type Middleware, type MiddlewareOptions } from "./aisdk.ts";
+import { embeddingMiddleware, type EmbeddingMiddleware, middleware, type Middleware, type MiddlewareOptions, type Tools, tools } from "./aisdk.ts";
 import { blockedFinish, errorCode, truncatedFinish } from "./failure.ts";
 import { ConfigError, Gateway } from "./gateway.ts";
 import { ask, CachingDecider, type Decider, DEFAULT_DECIDE_TIMEOUT_MS, DEFAULT_FAILURE_BACKOFF_MS, GatewayDecider, type Verdict, verdict } from "./governance.ts";
@@ -41,6 +41,8 @@ export interface ModelCall {
   error?: unknown;
   /** What the provider said ended the call, e.g. "length" or "content-filter". */
   finishReason?: string;
+  /** The call was cut short and did partial work, where no finish reason says so, such as a stream that ended without one. */
+  truncated?: boolean;
   charges?: Charge[];
   framework?: string;
   frameworkVersion?: string;
@@ -51,6 +53,10 @@ export interface ToolCall {
   tool: string;
   durationMs?: number;
   error?: unknown;
+  /** How large the result was, in bytes, never the result itself. */
+  resultBytes?: number;
+  /** The tool succeeded and returned nothing the agent could use. */
+  emptyResult?: boolean;
   charges?: Charge[];
   framework?: string;
   frameworkVersion?: string;
@@ -168,7 +174,7 @@ export class Reporter {
       if (call.framework) activity.framework = call.framework;
       if (call.frameworkVersion) activity.frameworkVersion = call.frameworkVersion;
       if (call.error === undefined) {
-        if (truncatedFinish(call.finishReason)) {
+        if (call.truncated || truncatedFinish(call.finishReason)) {
           activity.status = STATUS_TRUNCATED;
           activity.errorCode = call.finishReason;
         } else if (blockedFinish(call.finishReason)) {
@@ -187,11 +193,25 @@ export class Reporter {
     return middleware(this, options);
   }
 
+  /** A middleware for the Vercel AI SDK's `wrapEmbeddingModel`, from AI SDK 6, that records every embedding call made with the wrapped model. */
+  aiSdkEmbeddingMiddleware(options?: MiddlewareOptions): EmbeddingMiddleware {
+    return embeddingMiddleware(this, options);
+  }
+
+  /** The same AI SDK tools, each recorded when it runs: how long it took, how it failed and how large its result was, never what it was given or returned. */
+  aiSdkTools<T extends Tools>(set: T): T {
+    return tools(this, set);
+  }
+
   /** Records a finished tool call and returns immediately. */
   toolCall(call: ToolCall, framework?: Framework): void {
     try {
       const activity = this.activity(`tool:${call.tool}`, call.durationMs ?? 0, call.error, framework, call.charges);
       activity.tool = call.tool;
+      if (call.error === undefined) {
+        activity.resultBytes = call.resultBytes && call.resultBytes > 0 ? Math.round(call.resultBytes) : undefined;
+        activity.emptyResult = call.emptyResult || undefined;
+      }
       if (call.framework) activity.framework = call.framework;
       if (call.frameworkVersion) activity.frameworkVersion = call.frameworkVersion;
       this.recorder.record(activity);

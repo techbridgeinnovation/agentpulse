@@ -5,8 +5,13 @@
 // Dropped records are counted and the count is readable in `stats()`. That counter is the one thing here that cannot be turned off, because silent loss is worse than visible loss.
 //
 // The flush timer is unreferenced, so a recorder never keeps a process alive on its own.
+//
+// A batch the gateway turned away for a reason that passes, such as being unavailable or out of time, is sent again a few times with a growing wait, under the same request id, so the server can tell a retry from new records. What is still waiting when the recorder closes is counted as dropped.
+
+import { randomUUID } from "node:crypto";
 
 import { currentScope, type User } from "./context.ts";
+import { RpcError } from "./gateway.ts";
 import { Discard, type Sink } from "./sinks.ts";
 import type { Activity } from "./wire.ts";
 
@@ -16,6 +21,16 @@ const DEFAULT_FLUSH_EVERY_MS = 2000;
 const DEFAULT_SEND_TIMEOUT_MS = 10_000;
 const DEFAULT_EXIT_TIMEOUT_MS = 2000;
 const MAX_REMEMBERED_NAMES = 10_000;
+const MAX_ATTEMPTS = 3;
+const FIRST_RETRY_MS = 250;
+const MAX_RETRY_MS = 2000;
+
+// The gRPC codes that say the same call may succeed if sent again. The gateway reports an HTTP 429, 502, 503 or 504 and an unreachable host as unavailable.
+const TRANSIENT = new Set([4, 8, 10, 14]);
+
+function transient(err: unknown): boolean {
+  return err instanceof RpcError && TRANSIENT.has(err.code);
+}
 
 export interface Config {
   /** Each sink receives every record, independently, so one failing does not affect the others. Empty means discard. */
@@ -28,7 +43,7 @@ export interface Config {
   flushEveryMs?: number;
   /** The longest one delivery may take, so a hung destination cannot stall the flush for ever. */
   sendTimeoutMs?: number;
-  /** How long the process waits before exiting for what is still queued. Zero leaves the flush at exit to the host. */
+  /** How long the process waits, on SIGTERM, SIGINT or the event loop emptying, for what is still queued. Zero leaves the flush at exit to the host. Neither `process.exit` nor a serverless platform freezing the process gives it a chance: there, await `close()` before returning. */
   exitTimeoutMs?: number;
 }
 
@@ -39,6 +54,8 @@ export interface Stats {
   dropped: number;
   delivered: number;
   failed: number;
+  /** Batches sent again after a failure that passes. */
+  retried: number;
   /** Times something run on the host's behalf threw where it never should. Above zero means this library has a bug; the agent was unaffected. */
   panicked: number;
   notified: number;
@@ -60,6 +77,7 @@ function emptyStats(): Stats {
     dropped: 0,
     delivered: 0,
     failed: 0,
+    retried: 0,
     panicked: 0,
     notified: 0,
     denied: 0,
@@ -91,6 +109,9 @@ export class Recorder {
   private timer: ReturnType<typeof setInterval> | undefined;
   private draining: Promise<void> | undefined;
   private closed = false;
+  private readonly waiting = new Set<{ timer: ReturnType<typeof setTimeout>; wake: () => void }>();
+  private flushing = 0;
+  private atExit: (() => void) | undefined;
 
   constructor(config: Config = {}) {
     this.sinks = config.sinks?.length ? [...config.sinks] : [new Discard()];
@@ -99,9 +120,12 @@ export class Recorder {
     this.flushEveryMs = positive(config.flushEveryMs, DEFAULT_FLUSH_EVERY_MS);
     this.sendTimeoutMs = positive(config.sendTimeoutMs, DEFAULT_SEND_TIMEOUT_MS);
     const exitTimeoutMs = config.exitTimeoutMs ?? DEFAULT_EXIT_TIMEOUT_MS;
-    if (exitTimeoutMs > 0) {
-      // beforeExit fires when the event loop has emptied, so a last flush can still send; it does not fire on process.exit or a signal, which a host owns.
-      process.once("beforeExit", () => void this.flush(exitTimeoutMs));
+    // Where there is no Node process, such as a browser or an edge runtime, there is no exit to flush at.
+    if (exitTimeoutMs > 0 && typeof process !== "undefined" && typeof process.on === "function") {
+      // beforeExit fires when the event loop has emptied, so a last flush can still send; it does not fire on process.exit, which a host owns.
+      this.atExit = () => void this.flush(exitTimeoutMs);
+      process.once("beforeExit", this.atExit);
+      flushOnSignal(this, exitTimeoutMs);
     }
   }
 
@@ -158,6 +182,9 @@ export class Recorder {
 
   /** Delivers everything queued so far and resolves whether that finished within `timeoutMs`. For a process that may be frozen as soon as it answers, such as a serverless function: await it before returning. */
   async flush(timeoutMs = 5000): Promise<boolean> {
+    this.flushing++;
+    // A retry's wait holds the process open while someone waits on a flush, and never otherwise.
+    for (const w of this.waiting) w.timer.ref?.();
     try {
       if (this.records.length === 0 && this.people.length === 0 && !this.draining) return true;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -175,15 +202,25 @@ export class Recorder {
     } catch {
       this.note("panicked");
       return false;
+    } finally {
+      if (--this.flushing === 0) for (const w of this.waiting) w.timer.unref?.();
     }
   }
 
-  /** Stops the recorder after a final attempt to deliver what is queued. Records handed over afterwards are dropped and counted. */
+  /** Stops the recorder after a final attempt to deliver what is queued, within `timeoutMs`. What is still queued or waiting to be retried then, and every record handed over afterwards, is dropped and counted. For a process that may be frozen as soon as it answers, such as a serverless function, await it, or `flush`, before returning. */
   async close(timeoutMs = 5000): Promise<boolean> {
     const flushed = await this.flush(timeoutMs);
     this.closed = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    forgetOnSignal(this);
+    if (this.atExit) process.removeListener("beforeExit", this.atExit);
+    this.atExit = undefined;
+    for (const w of this.waiting) w.wake();
+    this.note("dropped", this.records.length);
+    this.note("namesDropped", this.people.length);
+    this.records = [];
+    this.people = [];
     return flushed;
   }
 
@@ -218,10 +255,10 @@ export class Recorder {
     const jobs: Promise<void>[] = [];
     for (const [workspace, activities] of byWorkspace(batch)) {
       for (const sink of this.sinks) {
+        const requestId = randomUUID();
         jobs.push(
-          sink.send(activities, workspace, this.sendTimeoutMs).then(
-            () => this.note("delivered", activities.length),
-            () => this.note("failed", activities.length),
+          this.attempt(() => sink.send(activities, workspace, this.sendTimeoutMs, requestId)).then((outcome) =>
+            this.note(outcome === "sent" ? "delivered" : outcome, activities.length),
           ),
         );
       }
@@ -233,11 +270,51 @@ export class Recorder {
     const jobs: Promise<void>[] = [];
     for (const [workspace, users] of byWorkspace(batch)) {
       for (const sink of this.sinks) {
-        if (!sink.sendUsers) continue;
-        jobs.push(sink.sendUsers(users, workspace, this.sendTimeoutMs).then(undefined, () => this.note("namesFailed", users.length)));
+        const sendUsers = sink.sendUsers?.bind(sink);
+        if (!sendUsers) continue;
+        jobs.push(
+          this.attempt(() => sendUsers(users, workspace, this.sendTimeoutMs)).then((outcome) => {
+            if (outcome !== "sent") this.note(outcome === "failed" ? "namesFailed" : "namesDropped", users.length);
+          }),
+        );
       }
     }
     await Promise.all(jobs);
+  }
+
+  /** One delivery, sent again after a failure that passes, until it is sent, refused for good, or the recorder closes while it waits. Never rejects. */
+  private async attempt(send: () => Promise<void>): Promise<"sent" | "failed" | "dropped"> {
+    for (let n = 1; ; n++) {
+      try {
+        await send();
+        return "sent";
+      } catch (err) {
+        if (!transient(err) || n >= MAX_ATTEMPTS) return "failed";
+      }
+      // Jittered, so many processes refused by one outage do not all return at the same moment.
+      const wait = Math.min(MAX_RETRY_MS, FIRST_RETRY_MS * 2 ** (n - 1)) * (0.5 + Math.random());
+      if (this.closed || !(await this.pause(wait))) return "dropped";
+      this.note("retried");
+    }
+  }
+
+  /** Waits, and resolves false where the recorder closed first. */
+  private pause(ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const w = {
+        timer: setTimeout(() => {
+          this.waiting.delete(w);
+          resolve(!this.closed);
+        }, ms),
+        wake: () => {
+          clearTimeout(w.timer);
+          this.waiting.delete(w);
+          resolve(false);
+        },
+      };
+      if (this.flushing === 0) w.timer.unref?.();
+      this.waiting.add(w);
+    });
   }
 }
 
@@ -249,4 +326,41 @@ function byWorkspace<T>(batch: [T, string][]): Map<string, T[]> {
     else out.set(workspace, [item]);
   }
   return out;
+}
+
+// One listener for each signal, however many recorders there are, so the count of other listeners says whether the host handles the signal itself.
+const SIGNALS = ["SIGTERM", "SIGINT"] as const;
+const onSignal = new Map<Recorder, number>();
+let stopping = false;
+
+// Put first, so a host's own `process.once` listener is still counted when this runs: one that ran earlier would have removed itself, and the signal would be raised under the host's own shutdown.
+function flushOnSignal(recorder: Recorder, timeoutMs: number): void {
+  if (onSignal.size === 0) for (const s of SIGNALS) process.prependListener(s, signalled);
+  onSignal.set(recorder, timeoutMs);
+}
+
+function forgetOnSignal(recorder: Recorder): void {
+  if (onSignal.delete(recorder) && onSignal.size === 0) for (const s of SIGNALS) process.removeListener(s, signalled);
+}
+
+// Flushes, then does what the signal would have done without this listener. A host with a listener of its own decides what the signal does, and this only flushes beside it.
+function signalled(signal: NodeJS.Signals): void {
+  const hostHandles = process.listenerCount(signal) > 1;
+  if (stopping) {
+    // A second signal while the first is still flushing is not kept waiting.
+    if (!hostHandles) raise(signal);
+    return;
+  }
+  stopping = true;
+  const flushed = Promise.allSettled([...onSignal].map(([recorder, timeoutMs]) => recorder.flush(timeoutMs)));
+  void flushed.then(() => {
+    stopping = false;
+    if (!hostHandles) raise(signal);
+  });
+}
+
+function raise(signal: NodeJS.Signals): void {
+  for (const s of SIGNALS) process.removeListener(s, signalled);
+  onSignal.clear();
+  process.kill(process.pid, signal);
 }

@@ -2,10 +2,15 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
 
 import { scope } from "../src/context.ts";
+import { blockedFinish, errorCode, truncatedFinish } from "../src/failure.ts";
 import { ConfigError } from "../src/gateway.ts";
 import { forgetRefusals } from "../src/governance.ts";
 import { connect } from "../src/report.ts";
-import { DECISION_DENY, fields, STATUS_DENIED } from "../src/wire.ts";
+import { Recorder } from "../src/recorder.ts";
+import { Reporter } from "../src/report.ts";
+import { resultSize } from "../src/usage.ts";
+import { DECISION_DENY, fields, STATUS_DENIED, STATUS_TRUNCATED } from "../src/wire.ts";
+import { MemorySink } from "./fakes.ts";
 import { FakeGateway } from "./fakes.ts";
 
 let gw: FakeGateway;
@@ -89,4 +94,40 @@ test("a governance that cannot answer lets the call through and is counted", asy
   const v = await rp.decide("gpt-5");
   assert.equal(v.proceed, true);
   assert.equal(rp.recorder.stats().decisionErrors, 1);
+});
+
+test("a caller stopping a call is told apart from a deadline", () => {
+  const abort = (cause?: unknown) => Object.assign(new Error("SECRET"), { name: "AbortError", cause });
+  assert.equal(errorCode(abort()), "Canceled");
+  assert.equal(errorCode(abort(new DOMException("t", "TimeoutError"))), "DeadlineExceeded");
+  assert.equal(errorCode(new DOMException("t", "TimeoutError")), "DeadlineExceeded");
+});
+
+test("Gemini's image refusals fail a call and Anthropic's full context window cuts one short", () => {
+  assert.ok(blockedFinish("IMAGE_SAFETY"));
+  assert.ok(truncatedFinish("model_context_window_exceeded"));
+  assert.ok(!blockedFinish("end_turn"));
+});
+
+test("a tool call by hand carries the size of its result and whether it was empty", async () => {
+  const sink = new MemorySink();
+  const rp = new Reporter(new Recorder({ sinks: [sink], exitTimeoutMs: 0 }), { agent: "organisations/acme/agents/a", service: "svc" });
+  rp.toolCall({ tool: "search", resultBytes: resultSize({ hits: ["a"] }).bytes });
+  rp.toolCall({ tool: "search", resultBytes: 0, emptyResult: resultSize([]).empty });
+  rp.toolCall({ tool: "search", resultBytes: 10, error: new Error("x") });
+  rp.modelCall({ model: "m", truncated: true });
+  await rp.recorder.flush(1000);
+  const [sized, empty, failed, cut] = sink.activities;
+  assert.deepEqual([sized!.resultBytes, sized!.emptyResult], [JSON.stringify({ hits: ["a"] }).length, undefined]);
+  assert.deepEqual([empty!.resultBytes, empty!.emptyResult], [undefined, true]);
+  assert.equal(failed!.resultBytes, undefined);
+  assert.equal(cut!.status, STATUS_TRUNCATED);
+});
+
+test("an error whose causes lead back to each other still reduces to a code", () => {
+  const a: { name: string; cause?: unknown } = { name: "AbortError" };
+  const b = { name: "Error", cause: a };
+  a.cause = b;
+  assert.equal(errorCode(a), "Canceled");
+  assert.equal(errorCode(b), "Canceled");
 });
