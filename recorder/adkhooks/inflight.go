@@ -49,18 +49,15 @@ func (s *inFlightStore[T]) put(key string, value T) {
 	s.store(key, value)
 }
 
-// update changes what is held for a call in one step, so two callbacks writing about the same call cannot read and write around each other.
+// update changes what is held for a call in one step, so two callbacks writing about the same call cannot read and write around each other. An entry older than the store's life is changed as though it were never there, for the same reason take ignores one.
 func (s *inFlightStore[T]) update(key string, change func(T) T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.store(key, change(s.entries[key].value))
-}
-
-// forget drops a call without reading it.
-func (s *inFlightStore[T]) forget(key string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.entries, key)
+	var held T
+	if entry, ok := s.entries[key]; ok && s.now().Before(entry.touchedAt.Add(s.ttl)) {
+		held = entry.value
+	}
+	s.store(key, change(held))
 }
 
 // take returns what is known about a call and forgets it, since the callback that pairs with it has now run. An entry older than the store's life is returned as though it were never there: it belongs to a call nothing is coming back for.

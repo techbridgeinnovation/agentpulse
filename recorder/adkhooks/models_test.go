@@ -1,6 +1,8 @@
 package adkhooks
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -8,8 +10,8 @@ import (
 	adkmodel "google.golang.org/adk/model"
 	"google.golang.org/genai"
 
-	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 	"github.com/techbridgeinnovation/agentpulse/recorder"
+	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
 // contextFor is newContext in its own invocation, so a test's calls never meet
@@ -199,5 +201,148 @@ func TestAnExpiredCallIsNotUsed(t *testing.T) {
 
 	if got := store.take("call"); got.requested != "" || got.served != "" {
 		t.Fatalf("take returned %+v for a call past its ttl, want nothing", got)
+	}
+}
+
+// promptQuote is what a provider's error message looks like: it quotes the prompt back, which is why no field on a record may carry it.
+const promptQuote = "request rejected while processing: <the user's prompt>"
+
+// The framework skips AfterModel for a call that returned an error, so a rejected call was never recorded at all.
+func TestARejectedModelCallIsRecordedAsFailed(t *testing.T) {
+	ctx := contextFor(t.Name(), "atlas")
+	var resp *adkmodel.LLMResponse
+	var err error
+	got := record(t, func(r *recorder.Recorder) {
+		before, _ := hooks(r)
+		before(ctx, "gemini-3.1-pro-preview")
+		time.Sleep(2 * time.Millisecond)
+		resp, err = OnModelError(r, options())(ctx, &adkmodel.LLMRequest{Model: "gemini-3.1-pro-preview"},
+			genai.APIError{Code: 400, Status: "INVALID_ARGUMENT", Message: promptQuote})
+	})
+
+	if resp != nil || err != nil {
+		t.Fatalf("OnModelError = (%v, %v), want (nil, nil) so the error reaches the agent unchanged", resp, err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("recorded %d activities, want 1", len(got))
+	}
+	a := got[0]
+	if a.GetStatus() != pb.Activity_FAILED {
+		t.Errorf("status = %v, want FAILED", a.GetStatus())
+	}
+	if a.GetErrorCode() != "INVALID_ARGUMENT" {
+		t.Errorf("error code = %q, want INVALID_ARGUMENT", a.GetErrorCode())
+	}
+	if a.GetErrorFormat() == "" || len(a.GetReportedError()) == 0 {
+		t.Errorf("reported error = %q %v, want the provider's own fields", a.GetErrorFormat(), a.GetReportedError())
+	}
+	for _, field := range a.GetReportedError() {
+		if field.GetValue() == promptQuote {
+			t.Fatal("the provider's message reached the record")
+		}
+	}
+	if a.GetModel() != "gemini-3.1-pro-preview" {
+		t.Errorf("model = %q, want the model requested", a.GetModel())
+	}
+	if a.GetDurationMs() < 1 {
+		t.Errorf("duration = %dms, want the time since BeforeModel", a.GetDurationMs())
+	}
+	if a.GetFramework() != framework {
+		t.Errorf("framework = %q, want %q", a.GetFramework(), framework)
+	}
+}
+
+// A stream that breaks partway has already been billed for the chunks it delivered, and those chunks are the only place the usage was reported.
+func TestAStreamThatBreaksKeepsTheUsageItsChunksReported(t *testing.T) {
+	ctx := contextFor(t.Name(), "atlas")
+	got := record(t, func(r *recorder.Recorder) {
+		before, after := hooks(r)
+		before(ctx, "gemini-3.1-pro-preview")
+		after(ctx, &adkmodel.LLMResponse{ModelVersion: "gemini-3.1-pro-preview-001", Partial: true,
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 800, CandidatesTokenCount: 10, TotalTokenCount: 810}})
+		after(ctx, &adkmodel.LLMResponse{Partial: true,
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 800, CandidatesTokenCount: 40, TotalTokenCount: 840}})
+		OnModelError(r, options())(ctx, &adkmodel.LLMRequest{Model: "gemini-3.1-pro-preview"}, context.DeadlineExceeded)
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("recorded %d activities, want 1", len(got))
+	}
+	a := got[0]
+	if a.GetModel() != "gemini-3.1-pro-preview-001" {
+		t.Errorf("model = %q, want the model the stream reported", a.GetModel())
+	}
+	if a.GetPromptTokens() != 800 || a.GetCandidateTokens() != 40 || a.GetTotalTokens() != 840 {
+		t.Errorf("tokens = %d/%d/%d, want the latest chunk's 800/40/840", a.GetPromptTokens(), a.GetCandidateTokens(), a.GetTotalTokens())
+	}
+	if a.GetErrorCode() != "DeadlineExceeded" {
+		t.Errorf("error code = %q, want DeadlineExceeded", a.GetErrorCode())
+	}
+}
+
+// An error callback may hand the framework a response in place of the error, which then reaches AfterModel as an ordinary success. That is the same call, already recorded.
+func TestACallRescuedAfterItFailedIsRecordedOnce(t *testing.T) {
+	ctx := contextFor(t.Name(), "atlas")
+	got := record(t, func(r *recorder.Recorder) {
+		before, after := hooks(r)
+		before(ctx, "gemini-3.1-pro-preview")
+		OnModelError(r, options())(ctx, &adkmodel.LLMRequest{Model: "gemini-3.1-pro-preview"}, genai.APIError{Code: 429, Status: "RESOURCE_EXHAUSTED"})
+		after(ctx, &adkmodel.LLMResponse{Content: genai.NewContentFromText("try again later", genai.RoleModel)})
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("recorded %d activities, want 1", len(got))
+	}
+	if got[0].GetStatus() != pb.Activity_FAILED {
+		t.Errorf("status = %v, want the failure, not the substitute's success", got[0].GetStatus())
+	}
+}
+
+func TestTheCallAfterAFailedOneIsRecorded(t *testing.T) {
+	ctx := contextFor(t.Name(), "atlas")
+	got := record(t, func(r *recorder.Recorder) {
+		before, after := hooks(r)
+		before(ctx, "gemini-3.1-pro-preview")
+		OnModelError(r, options())(ctx, &adkmodel.LLMRequest{Model: "gemini-3.1-pro-preview"}, context.Canceled)
+		before(ctx, "gemini-2.5-flash")
+		after(ctx, &adkmodel.LLMResponse{UsageMetadata: usage()})
+	})
+
+	if len(got) != 2 {
+		t.Fatalf("recorded %d activities, want 2", len(got))
+	}
+	if got[1].GetStatus() != pb.Activity_OK || got[1].GetModel() != "gemini-2.5-flash" {
+		t.Errorf("second call = %v %q, want OK against its own model", got[1].GetStatus(), got[1].GetModel())
+	}
+}
+
+// An agent that registers the error callback and not BeforeModel still records the model the request named.
+func TestAFailedCallWithoutBeforeModelNamesTheRequestedModel(t *testing.T) {
+	got := record(t, func(r *recorder.Recorder) {
+		OnModelError(r, options())(contextFor(t.Name(), "atlas"), &adkmodel.LLMRequest{Model: "gemini-2.5-flash"}, errors.New(promptQuote))
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("recorded %d activities, want 1", len(got))
+	}
+	if got[0].GetModel() != "gemini-2.5-flash" {
+		t.Errorf("model = %q, want gemini-2.5-flash", got[0].GetModel())
+	}
+	if got[0].GetErrorCode() == promptQuote {
+		t.Fatal("the error's message reached the record")
+	}
+}
+
+// A chunk arriving for a call past its life must not revive what was held for it, or a failure would be timed from a call long gone.
+func TestAnExpiredCallIsNotRevivedByALaterChunk(t *testing.T) {
+	clock := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	store := newInFlightModels(8, time.Minute, func() time.Time { return clock })
+
+	store.requested("call", "gemini-3.1-pro-preview")
+	clock = clock.Add(2 * time.Minute)
+	store.chunk("call", "gemini-3.1-pro-preview-001", nil)
+
+	if got := store.fail("call"); got.requested != "" || !got.startedAt.IsZero() {
+		t.Fatalf("fail returned %+v for a call past its ttl, want only what the late chunk reported", got)
 	}
 }

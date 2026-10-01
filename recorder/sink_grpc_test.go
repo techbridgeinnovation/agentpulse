@@ -32,14 +32,23 @@ type fakeMetering struct {
 	users       []*pb.User
 	userParents []string
 	err         error
+	// refusals are answered, one per call, before any call is accepted.
+	refusals   []error
+	requestIDs []string
 }
 
 func (f *fakeMetering) BatchCreateActivities(_ context.Context, req *pb.BatchCreateActivitiesRequest) (*pb.BatchCreateActivitiesResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requestIDs = append(f.requestIDs, req.GetRequestId())
 	if f.err != nil {
 		return nil, f.err
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	if len(f.refusals) > 0 {
+		err := f.refusals[0]
+		f.refusals = f.refusals[1:]
+		return nil, err
+	}
 	f.parents = append(f.parents, req.GetParent())
 	f.seen = append(f.seen, req.GetActivities()...)
 	return &pb.BatchCreateActivitiesResponse{Activities: req.GetActivities()}, nil
@@ -120,16 +129,69 @@ func TestGRPCSinkSendsOneCallPerBatchNotPerRecord(t *testing.T) {
 }
 
 func TestGRPCSinkReportsARejectedBatchWithoutRetrying(t *testing.T) {
-	service := &fakeMetering{err: status.Error(codes.PermissionDenied, "no")}
+	for _, code := range []codes.Code{codes.PermissionDenied, codes.InvalidArgument, codes.Unauthenticated} {
+		service := &fakeMetering{err: status.Error(code, "no")}
+		sink := NewGRPCSink(serve(t, service), "organisations/techbridge")
+
+		// A refusal that would only be repeated is reported at once.
+		if err := sink.Send(context.Background(), []*pb.Activity{activity("a")}); err == nil {
+			t.Fatalf("%v: Send returned nil for a rejected batch", code)
+		}
+		if got := service.count(); got != 0 {
+			t.Fatalf("%v: service stored %d activities despite refusing, want 0", code, got)
+		}
+		if got := len(service.requestIDs); got != 1 {
+			t.Errorf("%v: sent %d times, want once", code, got)
+		}
+	}
+}
+
+// A batch refused for a reason that can pass is sent again, under the one request id that lets metering write it once.
+func TestGRPCSinkSendsABatchAgainWhileTheRefusalCanPass(t *testing.T) {
+	service := &fakeMetering{refusals: []error{
+		status.Error(codes.Unavailable, "down"),
+		status.Error(codes.ResourceExhausted, "busy"),
+		status.Error(codes.DeadlineExceeded, "slow"),
+	}}
 	sink := NewGRPCSink(serve(t, service), "organisations/techbridge")
 
-	// Reported, not retried: the queue has already accounted for these, and a
-	// duplicate record costs more than a gap.
-	if err := sink.Send(context.Background(), []*pb.Activity{activity("a")}); err == nil {
-		t.Fatal("Send returned nil for a rejected batch")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sink.Send(ctx, []*pb.Activity{activity("a")}); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
-	if got := service.count(); got != 0 {
-		t.Fatalf("service stored %d activities despite refusing, want 0", got)
+	if got := service.count(); got != 1 {
+		t.Fatalf("service stored %d activities, want 1", got)
+	}
+	ids := service.requestIDs
+	if len(ids) != 4 || ids[0] == "" || ids[0] != ids[1] || ids[1] != ids[2] || ids[2] != ids[3] {
+		t.Errorf("request ids %v, want one id on every attempt", ids)
+	}
+
+	if err := sink.Send(ctx, []*pb.Activity{activity("b")}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got := service.requestIDs[4]; got == ids[0] {
+		t.Error("a second batch reused the first batch's request id")
+	}
+}
+
+// Retrying never outlasts the deadline the recorder gave the send.
+func TestGRPCSinkStopsRetryingAtItsDeadline(t *testing.T) {
+	service := &fakeMetering{err: status.Error(codes.Unavailable, "down")}
+	sink := NewGRPCSink(serve(t, service), "organisations/techbridge")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := sink.Send(ctx, []*pb.Activity{activity("a")}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("Send = %v, want the last refusal", err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("took %v, want no longer than the deadline", took)
+	}
+	if got := len(service.requestIDs); got < 2 || got > maxSendAttempts {
+		t.Errorf("sent %d times, want a retry within the bound", got)
 	}
 }
 

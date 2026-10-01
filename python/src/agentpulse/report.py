@@ -7,8 +7,10 @@ Neither a model call nor a tool call states a cost. A service says what happened
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import importlib.metadata
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
@@ -128,6 +130,38 @@ def _installed_version(distribution: str) -> str:
     except Exception:
         return ""
     return version if isinstance(version, str) else ""
+
+
+def _jsonable(value: Any) -> Any:
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json")
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return dataclasses.asdict(value)
+    raise TypeError("not serialisable")
+
+
+def result_size(result: Any) -> tuple[int, bool]:
+    """How many bytes a tool handed back, and whether it handed back nothing, measured the way the Go recorder measures it: from the JSON the result is sent to the model as. Text is measured as itself, since that is what the model is given.
+
+    A size, never the content. A result that cannot be serialised is unmeasured, zero bytes and not empty, because calling it empty would claim the tool returned nothing when it may have returned plenty.
+    """
+    try:
+        if result is None:
+            return 0, True
+        if isinstance(result, str):
+            size = len(result.encode("utf-8"))
+            return size, size == 0
+        if isinstance(result, (bytes, bytearray)):
+            return len(result), len(result) == 0
+        if isinstance(result, (Mapping, list, tuple, set, frozenset)) and len(result) == 0:
+            return 0, True
+        if isinstance(result, (set, frozenset)):
+            result = list(result)
+        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=_jsonable)
+        return len(encoded.encode("utf-8")), False
+    except Exception:
+        return 0, False
 
 
 def _user_id(framework: _Framework | None) -> str:
@@ -276,11 +310,13 @@ class Reporter:
 
         return langchain.handler(self)
 
-    def openai_agents_hooks(self) -> Any:
-        """Run hooks for the OpenAI Agents SDK, for `Runner.run(..., hooks=...)`, that record every model call and tool call the run makes, and refuse a model call a budget has run out on by raising SpendDenied when the reporter is governed."""
+    def openai_agents_hooks(self, *, run_config: Any = None) -> Any:
+        """Run hooks for the OpenAI Agents SDK, for `Runner.run(..., hooks=...)`, that record every model call and tool call the run makes, and refuse a model call a budget has run out on by raising SpendDenied when the reporter is governed.
+
+        `run_config` is the `RunConfig` the run is given, where it names the model, since the SDK does not show it to hooks."""
         from . import openai_agents
 
-        return openai_agents.hooks(self)
+        return openai_agents.hooks(self, run_config)
 
     def transport(self, inner: Any, *, asynchronous: bool = False) -> Any:
         """Wraps an httpx or httpx2 transport so every model call through it is recorded, for a client this library has no helper for."""

@@ -4,6 +4,7 @@ Each test builds a client the way an adopter would and makes an ordinary call. W
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -148,6 +149,8 @@ def test_a_call_that_is_not_a_model_call_passes_through_unrecorded(provider):
     provider.json({"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}], "model": "e", "usage": {"prompt_tokens": 1, "total_tokens": 1}})
     client.embeddings.create(model="e", input="x")
     assert recorded(rp, sink) == []
+    # Counted, so an endpoint this version does not know is visible.
+    assert rp.recorder.stats().unrecognised == 1
 
 
 def test_perplexity_through_the_openai_sdk_is_billed_and_read_as_perplexity(provider):
@@ -464,3 +467,73 @@ def test_a_gemini_developer_api_call_records_no_region(provider):
     client.models.generate_content(model="gemini-2.5-pro", contents="x")
     [a] = recorded(rp, sink)
     assert a.region == ""
+
+
+def test_a_brotli_reply_is_read_where_brotli_is_installed(provider):
+    brotli = pytest.importorskip("brotli")
+    rp, sink = reporter()
+    client = openai_client(rp, provider)
+    provider.replies.append((200, {"content-type": "application/json", "content-encoding": "br"}, brotli.compress(json.dumps(CHAT).encode())))
+    assert client.chat.completions.create(model="gpt-5", messages=[]).usage.total_tokens == 150
+    [a] = recorded(rp, sink)
+    assert (a.status, usage(a)["total_tokens"]) == (_wire.STATUS_OK, 150)
+
+
+def test_a_refusal_in_an_encoding_that_cannot_be_read_is_still_a_failure(provider):
+    openai = pytest.importorskip("openai")
+    rp, sink = reporter()
+    client = openai_client(rp, provider)
+    provider.replies.append((500, {"content-type": "application/json", "content-encoding": "x-unknown"}, b"SECRET"))
+    with pytest.raises(openai.InternalServerError):
+        client.chat.completions.create(model="gpt-5", messages=[])
+    [a] = recorded(rp, sink)
+    assert (a.status, a.error_code) == (_wire.STATUS_FAILED, "HTTP_500")
+
+
+def test_a_stream_the_caller_closes_early_is_cut_short_with_the_counts_it_reached(provider):
+    rp, sink = reporter()
+    client = anthropic_client(rp, provider)
+    provider.sse(
+        [
+            {"type": "message_start", "message": {**MESSAGE, "content": [], "stop_reason": None, "usage": {"input_tokens": 10, "output_tokens": 1}}},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "SECRET"}},
+        ],
+        named=True,
+    )
+    stream = client.messages.create(model="claude-sonnet-5", max_tokens=10, messages=[], stream=True)
+    next(iter(stream))
+    stream.close()
+    [a] = recorded(rp, sink)
+    assert (a.status, a.error_code) == (_wire.STATUS_TRUNCATED, "Canceled")
+    assert usage(a) == {"input_tokens": 10, "output_tokens": 1}
+
+
+@pytest.mark.parametrize("generator_first", [True, False])
+def test_a_stream_whose_reader_stops_is_cut_short_whichever_end_is_closed_first(provider, generator_first):
+    httpx = pytest.importorskip("httpx")
+    rp, sink = reporter()
+    chunk = {"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "gpt-5"}
+    provider.sse([{**chunk, "choices": [{"index": 0, "delta": {"content": "SECRET"}}]}, {**chunk, "choices": [], "usage": {"prompt_tokens": 7, "completion_tokens": 1, "total_tokens": 8}}], done=False)
+    client = httpx.Client(transport=rp.transport(httpx.HTTPTransport()))
+    with client.stream("POST", provider.url + "/v1/chat/completions", json={"model": "gpt-5", "stream": True}) as response:
+        parts = response.iter_raw()
+        next(parts)
+        if generator_first:
+            parts.close()
+            del parts
+    [a] = recorded(rp, sink)
+    assert (a.status, a.error_code) == (_wire.STATUS_TRUNCATED, "Canceled")
+
+
+def test_a_stream_read_to_its_end_is_whole_even_without_a_finish(provider):
+    httpx = pytest.importorskip("httpx")
+    rp, sink = reporter()
+    chunk = {"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "gpt-5"}
+    provider.sse([{**chunk, "choices": [{"index": 0, "delta": {"content": "SECRET"}}]}], done=True)
+    client = httpx.Client(transport=rp.transport(httpx.HTTPTransport()))
+    with client.stream("POST", provider.url + "/v1/chat/completions", json={"model": "gpt-5", "stream": True}) as response:
+        for _ in response.iter_raw():
+            pass
+    [a] = recorded(rp, sink)
+    assert (a.status, a.error_code) == (_wire.STATUS_OK, "")

@@ -77,6 +77,8 @@ func (openAIProtocol) reply(field func(string) json.RawMessage, o *observed) {
 // responseFinish reads how a Responses reply ended from its status.
 func responseFinish(status string, incomplete, failure json.RawMessage, o *observed) {
 	switch status {
+	case "completed":
+		o.ended = true
 	case "incomplete":
 		var d struct {
 			Reason string `json:"reason"`

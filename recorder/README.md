@@ -58,12 +58,14 @@ rec := recorder.New(recorder.Config{
 
 // Decider makes budgets stop calls as well as count them; leave it out and they only count.
 opts := adkhooks.Options{Agent: agentName, Service: "atlas-agent", Decider: recorder.NewGRPCDecider(conn)}
-// register adkhooks.BeforeModel, adkhooks.AfterModel, adkhooks.BeforeTool, adkhooks.AfterTool and adkhooks.AfterAgent on the agent
+// register adkhooks.BeforeModel, AfterModel, OnModelError, BeforeTool, AfterTool, OnToolError and AfterAgent on the agent, ahead of any callback of your own
 ```
 
 Every field on the record comes from the framework's own callback context: which request, which user, which session, which agent, which model, how many tokens, whether it succeeded. A user set on the context with `recorder.WithUser` before the runner is invoked wins over the framework's own user id, name and all. Which tenant the turn is for, and which unit of work inside it, are read from the same context — the framework knows neither.
 
-`adkhooks` is the first major version of the framework and `adkv2hooks` the second. They are different libraries as far as Go is concerned, with unrelated types, so one package cannot serve both. They read the same things, and differ in two ways: only `adkhooks` has `BeforeTool`, which times each tool call, and only `adkv2hooks` takes `Model`, which names the model where a streamed answer does not.
+`adkhooks` is the first major version of the framework and `adkv2hooks` the second. They are different libraries as far as Go is concerned, with unrelated types, so one package cannot serve both. They read the same things, and differ in one way: only `adkv2hooks` takes `Model`, which names the model where neither the framework nor `BeforeModel` does.
+
+`OnModelError` and `OnToolError` are what record a call that failed: the framework skips `AfterModel` when a model call returns an error, and skips every other tool callback when the model asks for a tool the agent does not have. Registered after a callback that answers the error itself, they never run, so they go first.
 
 `BeforeModel` labels each request with the user and component, which the cloud billing export carries, but only on Vertex: the Gemini API refuses a request with any label. It reads the backend from `GOOGLE_GENAI_USE_ENTERPRISE` and `GOOGLE_GENAI_USE_VERTEXAI`, as the genai client does. An agent that chooses Vertex in code instead sets `Options.Backend` to the same value.
 

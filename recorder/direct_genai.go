@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"google.golang.org/genai"
+	"google.golang.org/grpc/codes"
 )
 
 // InstrumentGenAI records every generate call made through a genai client, Gemini api and Vertex alike:
@@ -15,9 +16,9 @@ import (
 //
 // Called on the client once it is built rather than on its config, because the client builds its own authenticated transport for Vertex and this has to sit in front of that one rather than replace it. Every call the client makes afterwards passes through it, including the ones written later.
 //
-// Each call is recorded under the reporter's attribution, with the user, request, session, workspace and project read from the call's context, and the part of the product that made it from WithComponent or, where none is named, the function that made the call. Token counting, embeddings and file uploads pass through unrecorded, and so does the Live api, which does not travel over the client's transport at all.
+// Each call is recorded under the reporter's attribution, with the user, request, session, workspace and project read from the call's context, and the part of the product that made it from WithComponent or, where none is named, the function that made the call. Token counting, embeddings and file uploads pass through unrecorded and are counted in Stats.Unrecorded, and the Live api, which does not travel over the client's transport at all, passes by unseen.
 //
-// A client built on an http.Client the product shares with other code instruments that client for all of it. Only generate calls are ever recorded, so the other code is passed through untouched.
+// A client built on an http.Client the product shares with other code instruments that client for all of it. Only generate calls are ever recorded, so the other code is passed through untouched, and what it posts is counted in Stats.Unrecorded.
 func (rp *Reporter) InstrumentGenAI(client *genai.Client) {
 	if rp == nil || client == nil {
 		return
@@ -91,6 +92,23 @@ func (genaiProtocol) event(data []byte, o *observed) {
 		return
 	}
 	readGenerate(e.UsageMetadata, e.ModelVersion, e.Candidates, e.PromptFeedback, o)
+}
+
+// bare reads a stream line that is not an event. The genai client raises every such line as an error, a stated one where the line holds one, so each is recorded as the failure the caller was given, under the code its error reduces to where the line states none.
+func (genaiProtocol) bare(line []byte, o *observed) {
+	var e struct {
+		Error *genai.APIError `json:"error"`
+	}
+	if json.Unmarshal(line, &e) == nil && e.Error != nil {
+		o.failed = true
+		o.failure = reportedGenAI(*e.Error)
+		o.code = firstOf(codeOf(o.failure), "error")
+		return
+	}
+	if !o.failed {
+		o.failed = true
+		o.code = codes.Unknown.String()
+	}
 }
 
 func readGenerate(usage, version, candidates, feedback json.RawMessage, o *observed) {

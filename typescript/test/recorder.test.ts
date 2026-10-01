@@ -1,9 +1,28 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { test } from "node:test";
 
 import { scope } from "../src/context.ts";
+import { RpcError } from "../src/gateway.ts";
 import { Recorder } from "../src/recorder.ts";
+import type { Sink } from "../src/sinks.ts";
+import type { Activity } from "../src/wire.ts";
 import { MemorySink } from "./fakes.ts";
+
+/** A sink that refuses with each code in turn, then accepts, remembering the request id of every attempt. */
+class Flaky implements Sink {
+  readonly name = "flaky";
+  readonly ids: (string | undefined)[] = [];
+  private readonly codes: number[];
+  constructor(codes: number[]) {
+    this.codes = codes;
+  }
+  async send(_activities: Activity[], _workspace: string, _timeoutMs: number, requestId?: string): Promise<void> {
+    this.ids.push(requestId);
+    const code = this.codes.shift();
+    if (code !== undefined) throw new RpcError(code);
+  }
+}
 
 test("a full queue drops the record and counts it, and never throws or waits", async () => {
   const sink = new MemorySink();
@@ -64,4 +83,87 @@ test("a slow sink does not hold flush past its timeout", async () => {
   const started = performance.now();
   assert.equal(await rec.flush(50), false);
   assert.ok(performance.now() - started < 500);
+});
+
+test("a batch refused for a reason that passes is sent again under the same request id", async () => {
+  const sink = new Flaky([14, 4]);
+  const rec = new Recorder({ sinks: [sink], exitTimeoutMs: 0 });
+  rec.record({ model: "x" });
+  assert.equal(await rec.flush(5000), true);
+  assert.equal(sink.ids.length, 3);
+  assert.ok(sink.ids[0] && sink.ids.every((id) => id === sink.ids[0]));
+  assert.deepEqual([rec.stats().delivered, rec.stats().retried, rec.stats().failed], [1, 2, 0]);
+  await rec.close();
+});
+
+test("a batch refused for a reason that does not pass is not sent again", async () => {
+  const sink = new Flaky([16]);
+  const rec = new Recorder({ sinks: [sink], exitTimeoutMs: 0 });
+  rec.record({ model: "x" });
+  await rec.flush(1000);
+  assert.deepEqual([sink.ids.length, rec.stats().failed, rec.stats().retried], [1, 1, 0]);
+  await rec.close();
+});
+
+test("retries are bounded, and what is still waiting at close is counted as dropped", async () => {
+  const bounded = new Flaky([14, 14, 14, 14]);
+  const rec = new Recorder({ sinks: [bounded], exitTimeoutMs: 0 });
+  rec.record({ model: "x" });
+  await rec.flush(5000);
+  assert.deepEqual([bounded.ids.length, rec.stats().failed], [3, 1]);
+  await rec.close();
+
+  const waiting = new Recorder({ sinks: [new Flaky([14, 14, 14])], exitTimeoutMs: 0 });
+  waiting.record({ model: "y" });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(await waiting.close(1), false);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual([waiting.stats().dropped, waiting.stats().failed], [1, 0]);
+});
+
+// A child process, so the signal reaches nothing but the recorder under test.
+function child(code: string): Promise<{ signal: NodeJS.Signals | null; status: number | null; out: string }> {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, ["--input-type=module", "-e", code], { cwd: new URL("..", import.meta.url), stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    p.stdout.on("data", (d: Buffer) => (out += d.toString()));
+    p.on("exit", (status, signal) => resolve({ signal, status, out }));
+  });
+}
+
+const RECORDING_CHILD = `
+  import { Recorder } from "./src/recorder.ts";
+  const sink = { name: "slow", send: async () => { await new Promise((r) => setTimeout(r, 100)); process.stdout.write("delivered;"); } };
+  const rec = new Recorder({ sinks: [sink], exitTimeoutMs: 2000 });
+  rec.record({ model: "x" });
+`;
+
+test("SIGTERM delivers what is queued, then ends the process as the signal would have", async () => {
+  const { signal, out } = await child(RECORDING_CHILD + `setInterval(() => {}, 1000); process.kill(process.pid, "SIGTERM");`);
+  assert.equal(out, "delivered;");
+  assert.equal(signal, "SIGTERM");
+});
+
+test("a host with its own SIGINT handler keeps it, and the recorder flushes beside it", async () => {
+  const { signal, status, out } = await child(
+    RECORDING_CHILD + `process.on("SIGINT", () => setTimeout(() => { process.stdout.write("host;"); process.exit(7); }, 300)); setInterval(() => {}, 1000); process.kill(process.pid, "SIGINT");`,
+  );
+  assert.deepEqual([signal, status, out], [null, 7, "delivered;host;"]);
+});
+
+test("a host's own once handler, added before the recorder, still decides what SIGTERM does", async () => {
+  const { signal, status, out } = await child(
+    `process.once("SIGTERM", () => setTimeout(() => { process.stdout.write("host;"); process.exit(7); }, 300));` + RECORDING_CHILD + `setInterval(() => {}, 1000); process.kill(process.pid, "SIGTERM");`,
+  );
+  assert.deepEqual([signal, status, out], [null, 7, "delivered;host;"]);
+});
+
+test("closing removes the exit listeners, however many recorders there were", async () => {
+  const before = [process.listenerCount("SIGTERM"), process.listenerCount("SIGINT"), process.listenerCount("beforeExit")];
+  const a = new Recorder({ exitTimeoutMs: 100 });
+  const b = new Recorder({ exitTimeoutMs: 100 });
+  assert.ok(process.listenerCount("SIGTERM") <= before[0]! + 1);
+  await a.close();
+  await b.close();
+  assert.deepEqual([process.listenerCount("SIGTERM"), process.listenerCount("SIGINT"), process.listenerCount("beforeExit")], before);
 });

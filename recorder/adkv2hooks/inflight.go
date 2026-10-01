@@ -9,91 +9,86 @@ import (
 )
 
 const (
-	// maxInFlightDowngrades is the most calls this store holds at once.
+	// maxInFlightCalls is the most calls one store holds at once.
 	//
-	// Fixed rather than configurable, so the store is incapable of growing
-	// without bound whatever an adopter does. An entry is a key and a model
-	// name beside it, so a store at its cap is a fraction of a megabyte.
-	maxInFlightDowngrades = 4096
+	// Fixed rather than configurable, for the same reason the recorder's running totals are: it is what makes the store incapable of growing without bound whatever an adopter does. An entry is a key and a little beside it, so a store at its cap is a fraction of a megabyte.
+	maxInFlightCalls = 4096
 
-	// inFlightDowngradeTTL is how long a call is held without being heard
-	// from. Far longer than a streamed call lasts, so a live call is never
-	// forgotten under it; short enough that a call whose AfterModel never
-	// runs — cut short by another callback, or by a panic — is reclaimed
-	// while the process is still the same size.
-	inFlightDowngradeTTL = 15 * time.Minute
+	// inFlightCallTTL is how long a call is held without being heard from.
+	//
+	// Far longer than a streamed call or a tool call lasts, so a live call is never forgotten under it. Short enough that a call which never reached its second callback — cut short by another callback before it, or by a panic in the tool — is reclaimed while the process is still the same size.
+	inFlightCallTTL = 15 * time.Minute
 
-	// inFlightEvictionFraction is the share of the store dropped when it is
-	// full, as a divisor, so reaching the cap pays for one scan rather than
-	// one per call.
+	// inFlightEvictionFraction is the share of a store dropped when it is full, as a divisor, so reaching the cap pays for one scan rather than one per call.
 	inFlightEvictionFraction = 8
 )
 
-// inFlightDowngrades holds the model BeforeModel actually sent for a call —
-// after a downgrade was applied — until AfterModel reads it back.
+// inFlightStore holds what one callback learned until the callback that pairs with it runs.
 //
-// BeforeModel and AfterModel are built separately and the framework hands
-// neither anything that would let them recognise each other's work, so what
-// BeforeModel learned reaches AfterModel through here or not at all — the
-// same problem adkhooks solves with its own inFlightModels, ported here in
-// the narrower shape this package actually needs: modelOf already has a
-// static fallback (opts.Model) for the ordinary case, so this only ever
-// needs to hold the one exception a downgrade introduces.
-//
-// Written to only when a downgrade was actually applied: a call BeforeModel
-// never downgraded has no entry here, and AfterModel's existing fallback to
-// opts.Model covers it exactly as it always has.
-var inFlightDowngrades = newInFlightDowngradeStore(maxInFlightDowngrades, inFlightDowngradeTTL, time.Now)
-
-type inFlightDowngradeEntry struct {
-	model     string
-	touchedAt time.Time
-}
-
-type inFlightDowngradeStore struct {
+// The two callbacks in a pair are built separately and are handed nothing by the framework that would let them recognise each other's work, so what the first knows reaches the second through here or not at all. Bounded in both directions — a cap on how many calls are held and a life on each — because a callback that never fires must cost a fixed amount of memory rather than a growing one.
+type inFlightStore[T any] struct {
 	max int
 	ttl time.Duration
 	now func() time.Time
 
 	mu      sync.Mutex
-	entries map[string]inFlightDowngradeEntry
+	entries map[string]inFlightEntry[T]
 }
 
-func newInFlightDowngradeStore(max int, ttl time.Duration, now func() time.Time) *inFlightDowngradeStore {
-	return &inFlightDowngradeStore{max: max, ttl: ttl, now: now, entries: make(map[string]inFlightDowngradeEntry)}
+type inFlightEntry[T any] struct {
+	value     T
+	touchedAt time.Time
 }
 
-// put records the model applied for key, replacing anything held for it before.
-func (s *inFlightDowngradeStore) put(key, model string) {
+func newInFlightStore[T any](max int, ttl time.Duration, now func() time.Time) *inFlightStore[T] {
+	return &inFlightStore[T]{max: max, ttl: ttl, now: now, entries: make(map[string]inFlightEntry[T])}
+}
+
+// put writes what is known about a call, replacing anything known about it before.
+func (s *inFlightStore[T]) put(key string, value T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := s.now()
-	if _, exists := s.entries[key]; !exists && len(s.entries) >= s.max {
-		s.makeRoom(now)
-	}
-	s.entries[key] = inFlightDowngradeEntry{model: model, touchedAt: now}
+	s.store(key, value)
 }
 
-// take returns the model applied for key, if any, and forgets it. An entry
-// older than ttl is returned as though it were never there: it belongs to a
-// call nothing is coming back for.
-func (s *inFlightDowngradeStore) take(key string) (string, bool) {
+// update changes what is held for a call in one step, so two callbacks writing about the same call cannot read and write around each other. An entry older than the store's life is changed as though it were never there, for the same reason take ignores one.
+func (s *inFlightStore[T]) update(key string, change func(T) T) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var held T
+	if entry, ok := s.entries[key]; ok && s.now().Before(entry.touchedAt.Add(s.ttl)) {
+		held = entry.value
+	}
+	s.store(key, change(held))
+}
+
+// take returns what is known about a call and forgets it, since the callback that pairs with it has now run. An entry older than the store's life is returned as though it were never there: it belongs to a call nothing is coming back for.
+func (s *inFlightStore[T]) take(key string) (T, bool) {
+	var zero T
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[key]
 	if !ok {
-		return "", false
+		return zero, false
 	}
 	delete(s.entries, key)
 	if !s.now().Before(entry.touchedAt.Add(s.ttl)) {
-		return "", false
+		return zero, false
 	}
-	return entry.model, true
+	return entry.value, true
 }
 
-// makeRoom drops expired calls, then the longest-quiet share of the rest if
-// that was not enough. Callers hold s.mu.
-func (s *inFlightDowngradeStore) makeRoom(now time.Time) {
+// store writes an entry, making room first when a new call would take the store past its cap. Callers hold s.mu.
+func (s *inFlightStore[T]) store(key string, value T) {
+	now := s.now()
+	if _, exists := s.entries[key]; !exists && len(s.entries) >= s.max {
+		s.makeRoom(now)
+	}
+	s.entries[key] = inFlightEntry[T]{value: value, touchedAt: now}
+}
+
+// makeRoom drops expired calls, then the longest-quiet share of the rest if that was not enough. Callers hold s.mu.
+func (s *inFlightStore[T]) makeRoom(now time.Time) {
 	for key, entry := range s.entries {
 		if !now.Before(entry.touchedAt.Add(s.ttl)) {
 			delete(s.entries, key)
@@ -117,17 +112,13 @@ func (s *inFlightDowngradeStore) makeRoom(now time.Time) {
 }
 
 // size reports how many calls are held, for tests.
-func (s *inFlightDowngradeStore) size() int {
+func (s *inFlightStore[T]) size() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.entries)
 }
 
-// callKey identifies one agent's model calls within one invocation. An agent
-// makes its model calls one after another, so the key names the call
-// currently in flight; the agent and branch keep a sub-agent's or a parallel
-// branch's calls apart from the rest of the turn. Mirrors adkhooks' own
-// callKey exactly, for the same reason.
+// callKey identifies one agent's model calls within one invocation. An agent makes its model calls one after another, so the key names the call currently in flight; the agent and branch keep a sub-agent's or a parallel branch's calls apart from the rest of the turn.
 func callKey(ctx agent.ReadonlyContext) string {
 	return ctx.InvocationID() + "\x00" + ctx.AgentName() + "\x00" + ctx.Branch()
 }

@@ -3,18 +3,21 @@ package adkhooks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/genai"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 	"github.com/techbridgeinnovation/agentpulse/recorder"
+	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
 )
 
 // fakeToolContext stands in for what the framework hands a tool callback: a
@@ -166,6 +169,9 @@ func TestAToolFailureThatIsNotAGrpcStatusStillNamesItself(t *testing.T) {
 	if got[0].GetErrorCode() != "DeadlineExceeded" {
 		t.Errorf("error code = %q, want DeadlineExceeded", got[0].GetErrorCode())
 	}
+	if got[0].GetEmptyResult() {
+		t.Error("a tool that raised was recorded as handing back an empty result")
+	}
 }
 
 // The failure nothing reports: a tool catches what went wrong, hands back an
@@ -296,5 +302,115 @@ func TestAJudgementThatPanicsCostsTheToolCallNothing(t *testing.T) {
 	}
 	if panicked != 1 {
 		t.Errorf("panicked = %d, want the panic counted", panicked)
+	}
+}
+
+// functionTool is a tool the framework can call as a function, which is the kind it goes on to run AfterTool for once the tool has raised.
+type functionTool struct{ fakeTool }
+
+func (functionTool) Declaration() *genai.FunctionDeclaration { return nil }
+
+// A model that invents a tool's name reaches only the error callbacks, so without OnToolError the call is never recorded.
+func TestAToolTheAgentDoesNotHaveIsRecordedAsFailed(t *testing.T) {
+	var result map[string]any
+	var err error
+	got := record(t, func(r *recorder.Recorder) {
+		result, err = OnToolError(r, options())(newToolContext(t.Name()), fakeTool{name: "serach_web"}, nil,
+			errors.New("tool 'serach_web' not found"))
+	})
+
+	if result != nil || err != nil {
+		t.Fatalf("OnToolError = (%v, %v), want (nil, nil) so the error reaches the model unchanged", result, err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("recorded %d activities, want 1", len(got))
+	}
+	if got[0].GetStatus() != pb.Activity_FAILED || got[0].GetErrorCode() != toolNotFound {
+		t.Errorf("recorded %v %q, want FAILED %s", got[0].GetStatus(), got[0].GetErrorCode(), toolNotFound)
+	}
+	if got[0].GetTool() != "serach_web" {
+		t.Errorf("tool = %q, want the name the model used", got[0].GetTool())
+	}
+}
+
+// A tool that ran and raised reaches both callbacks, and is one call.
+func TestAToolThatRaisedIsRecordedOnce(t *testing.T) {
+	raised := status.Error(codes.Unavailable, "backend down")
+	got := record(t, func(r *recorder.Recorder) {
+		ctx := newToolContext(t.Name())
+		lookup := functionTool{fakeTool{name: "lookup"}}
+		BeforeTool(r, options())(ctx, lookup, nil)
+		OnToolError(r, options())(ctx, lookup, nil, raised)
+		AfterTool(r, options())(ctx, lookup, nil, nil, raised)
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("recorded %d activities, want 1", len(got))
+	}
+	if got[0].GetStatus() != pb.Activity_FAILED || got[0].GetErrorCode() != "Unavailable" {
+		t.Errorf("recorded %v %q, want FAILED Unavailable", got[0].GetStatus(), got[0].GetErrorCode())
+	}
+}
+
+// An error callback that rescues a tool hands AfterTool the substitute and no error, which without the kept error is recorded as a success.
+func TestAToolRescuedAfterItRaisedIsStillRecordedAsFailed(t *testing.T) {
+	before, held := runningTools.size(), 0
+	got := record(t, func(r *recorder.Recorder) {
+		ctx := newToolContext(t.Name())
+		lookup := functionTool{fakeTool{name: "lookup"}}
+		OnToolError(r, options())(ctx, lookup, nil, status.Error(codes.DeadlineExceeded, "slow"))
+		AfterTool(r, options())(ctx, lookup, nil, map[string]any{"fallback": true}, nil)
+		held = runningTools.size()
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("recorded %d activities, want 1", len(got))
+	}
+	if got[0].GetStatus() != pb.Activity_FAILED || got[0].GetErrorCode() != "DeadlineExceeded" {
+		t.Errorf("recorded %v %q, want FAILED DeadlineExceeded", got[0].GetStatus(), got[0].GetErrorCode())
+	}
+	if got[0].GetResultBytes() == 0 {
+		t.Error("the substitute result was not measured")
+	}
+	if held != before {
+		t.Errorf("the store holds %d calls after the call was recorded, want %d", held, before)
+	}
+}
+
+// A tool waiting on a person has not run. The framework runs it again once they answer, and that run is the call.
+func TestAToolAwaitingConfirmationIsNotRecorded(t *testing.T) {
+	pending := fmt.Errorf("error tool %q %w", "send_email", tool.ErrConfirmationRequired)
+	got := record(t, func(r *recorder.Recorder) {
+		ctx := newToolContext(t.Name())
+		send := functionTool{fakeTool{name: "send_email"}}
+		BeforeTool(r, options())(ctx, send, nil)
+		OnToolError(r, options())(ctx, send, nil, pending)
+		AfterTool(r, options())(ctx, send, nil, nil, pending)
+	})
+
+	if len(got) != 0 {
+		t.Fatalf("recorded %d activities, want none for a call that has not run", len(got))
+	}
+}
+
+// A tool's record carries what a model call's does about where it ran, and how much it handed back.
+func TestAToolCallRecordsItsFrameworkAndResultSize(t *testing.T) {
+	got := record(t, func(r *recorder.Recorder) {
+		AfterTool(r, options())(newToolContext(t.Name()), fakeTool{name: "read_file"}, nil, map[string]any{"content": "package main"}, nil)
+		AfterTool(r, options())(newToolContext(t.Name()+"-empty"), fakeTool{name: "read_file"}, nil, nil, nil)
+	})
+
+	if len(got) != 2 {
+		t.Fatalf("recorded %d activities, want 2", len(got))
+	}
+	a := got[0]
+	if a.GetFramework() != framework || a.GetFrameworkVersion() != frameworkVersion() || a.GetRegion() != options().region() {
+		t.Errorf("framework, version, region = %q %q %q, want %q %q %q", a.GetFramework(), a.GetFrameworkVersion(), a.GetRegion(), framework, frameworkVersion(), options().region())
+	}
+	if a.GetResultBytes() <= 0 || a.GetEmptyResult() {
+		t.Errorf("result bytes = %d, empty = %v, want the size of a result with content", a.GetResultBytes(), a.GetEmptyResult())
+	}
+	if !got[1].GetEmptyResult() {
+		t.Error("a tool that handed back nothing was not recorded as empty")
 	}
 }

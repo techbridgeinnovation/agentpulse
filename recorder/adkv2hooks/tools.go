@@ -1,12 +1,13 @@
-package adkhooks
+package adkv2hooks
 
 import (
 	"encoding/json"
 	"errors"
 	"time"
 
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -33,7 +34,7 @@ var runningTools = newInFlightStore[runningTool](maxInFlightCalls, inFlightCallT
 // toolKey identifies one tool call.
 //
 // The framework's id for the function call is what distinguishes two calls to the same tool in the same turn, which is exactly what a parallel agent does. Where there is none, the invocation and the tool's name still tell one tool's call apart from another's in the same turn — one call of each at a time, which is the sequential case.
-func toolKey(ctx tool.Context, name string) string {
+func toolKey(ctx agent.Context, name string) string {
 	if id := ctx.FunctionCallID(); id != "" {
 		return id
 	}
@@ -46,7 +47,7 @@ func toolKey(ctx tool.Context, name string) string {
 //
 // It records nothing and refuses nothing: a tool whose BeforeTool callback is not registered is still recorded by AfterTool, with no duration.
 func BeforeTool(_ *recorder.Recorder, _ Options) llmagent.BeforeToolCallback {
-	return func(ctx tool.Context, t tool.Tool, _ map[string]any) (map[string]any, error) {
+	return func(ctx agent.Context, t tool.Tool, _ map[string]any) (map[string]any, error) {
 		runningTools.put(toolKey(ctx, toolName(t)), runningTool{startedAt: time.Now()})
 		return nil, nil
 	}
@@ -63,7 +64,7 @@ func BeforeTool(_ *recorder.Recorder, _ Options) llmagent.BeforeToolCallback {
 //
 // A call waiting for a person to confirm it is not recorded. Its tool has not run, and the framework runs it again once the person answers, which is the call that is recorded.
 func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
-	return func(ctx tool.Context, t tool.Tool, _, result map[string]any, callErr error) (map[string]any, error) {
+	return func(ctx agent.Context, t tool.Tool, _, result map[string]any, callErr error) (map[string]any, error) {
 		name := toolName(t)
 		held, _ := runningTools.take(toolKey(ctx, name))
 		if callErr == nil {
@@ -91,7 +92,7 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 //
 // It returns nothing, so the error reaches the model exactly as the tool raised it. The framework stops at the first error callback that returns a result, so this one belongs first in the list.
 func OnToolError(r *recorder.Recorder, opts Options) llmagent.OnToolErrorCallback {
-	return func(ctx tool.Context, t tool.Tool, _ map[string]any, callErr error) (map[string]any, error) {
+	return func(ctx agent.Context, t tool.Tool, _ map[string]any, callErr error) (map[string]any, error) {
 		if callErr == nil {
 			return nil, nil
 		}
@@ -126,7 +127,7 @@ func awaitingConfirmation(err error) bool {
 }
 
 // recordTool files one tool call.
-func recordTool(r *recorder.Recorder, ctx tool.Context, opts Options, name string, started time.Time, status pb.Activity_Status, code string, bytes int64, empty bool) {
+func recordTool(r *recorder.Recorder, ctx agent.Context, opts Options, name string, started time.Time, status pb.Activity_Status, code string, bytes int64, empty bool) {
 	r.RecordIn(ctx, &pb.Activity{
 		Agent:            opts.Agent,
 		Request:          requestOf(ctx),

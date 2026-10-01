@@ -2,7 +2,9 @@
 //
 // It sits beside adkhooks rather than replacing it because the two majors are different libraries as far as Go is concerned: they have different import paths and their types are unrelated, so one package cannot serve both. Agents already in production are on the first, and the platform's own agent blocks scaffold onto the second, so both are live at once and the library has to reach both.
 //
-// The four callbacks and everything they read are the same. The one difference the port turns on is that the first major hands a model callback a CallbackContext and a tool callback a ToolContext, while this one hands them all a single Context. Every field the record needs is on it either way.
+// The callbacks and everything they read are the same. The one difference the port turns on is that the first major hands a model callback a CallbackContext and a tool callback a ToolContext, while this one hands them all a single Context. Every field the record needs is on it either way.
+//
+// Register BeforeModel, AfterModel and OnModelError for model calls, BeforeTool, AfterTool and OnToolError for tool calls, and AfterAgent on the agent that owns the turn. The two error callbacks are the only ones the framework runs for a model call that returned an error or a tool the model named that does not exist, so without them those calls are never recorded.
 //
 // Which tenant the turn is for, and which unit of work inside it, are the two the framework cannot know. They are read from the callback context where the product put them, at its sign-in, and never asked for here — see recorder.WithWorkspace.
 //
@@ -19,13 +21,12 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	adkmodel "google.golang.org/adk/v2/model"
-	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // defaultDecideTimeout bounds how long BeforeModel waits for a decision
@@ -66,7 +67,7 @@ type Options struct {
 	// Deprecated: set BilledBy. Kept so an agent configured before it existed still attributes its spend correctly.
 	Provider pb.Activity_Provider
 
-	// Model is the model this agent is configured to call, and stands in when the framework does not say which model answered.
+	// Model is the model this agent is configured to call, and stands in when neither the framework nor BeforeModel says which model answered.
 	//
 	// A streamed answer arrives as pieces which the framework assembles into one summary, and that summary carries the token counts but not the name of the model that produced them. Both majors do this. Pricing looks a rate up by model, so a record with no model prices against nothing — accurate counts attached to a cost of zero.
 	Model string
@@ -204,9 +205,22 @@ func userIDOf(ctx agent.ReadonlyContext) string {
 // AfterModel records one activity per model call.
 //
 // Per call rather than per turn: a turn makes as many calls as the loop needs, and they all carry the same request id, so the rows answer both what the turn cost and what each call cost. Partial responses are skipped — in streaming mode every chunk arrives here, and counting them would multiply a turn's usage by however many chunks it happened to be split into.
+//
+// A chunk is still read for the model and usage it reports, because the final response of a streamed call arrives without the model, and a call that fails partway arrives at OnModelError with neither (see inFlightModels).
+//
+// A response substituted for a call OnModelError already recorded is not recorded again.
 func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback {
 	return func(ctx agent.Context, response *adkmodel.LLMResponse, callErr error) (*adkmodel.LLMResponse, error) {
-		if response == nil || response.Partial {
+		if response == nil {
+			return nil, nil
+		}
+		key := callKey(ctx)
+		if response.Partial {
+			inFlight.chunk(key, response.ModelVersion, response.UsageMetadata)
+			return nil, nil
+		}
+		known := inFlight.take(key)
+		if known.failed {
 			return nil, nil
 		}
 
@@ -227,11 +241,12 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			CallerComponent:  componentOf(ctx),
 			Skill:            opts.Skill,
 			Project:          recorder.ProjectFrom(ctx),
-			Model:            modelOf(ctx, response, opts),
+			Model:            modelOf(response, known, opts.Model),
 			BilledBy:         opts.billedBy(),
 			Region:           opts.region(),
 			Framework:        framework,
 			FrameworkVersion: frameworkVersion(),
+			DurationMs:       millisSince(known.startedAt, time.Now),
 			Status:           statusOf(response, callErr),
 			ErrorCode:        errorCodeOf(response, callErr),
 			ErrorFormat:      reported.Format,
@@ -245,21 +260,23 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 	}
 }
 
-// AfterTool records one activity per tool call.
+// OnModelError records a model call that ended in an error.
 //
-// A tool call is a priced unit of work in its own right: a search or a lookup is charged per request, not per token, and those charges are invisible to anything that only counts tokens. Recorded on completion, so a tool that never ran is not counted.
+// The framework runs AfterModel only for a call that returned a response, so a rejected request, a quota, a deadline, a cancelled turn and a stream that broke partway are seen here and nowhere else. The call is recorded as failed with its code, how long it ran, the model it asked for and whatever usage its chunks had already reported, because a provider bills for the work done before a failure.
 //
-// The error is read for its code, not its message, the same way a model call's is: a report that says a tool failed and not how it failed leaves a team to guess between a timeout, a bad argument and an outage.
-func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
-	return func(ctx agent.Context, t tool.Tool, _, result map[string]any, callErr error) (map[string]any, error) {
-		name := ""
-		if t != nil {
-			name = t.Name()
+// It returns nothing, so the error reaches the agent exactly as the model returned it. The framework stops at the first error callback that returns a response, so this one belongs first in the list: a call another callback rescues before this one runs is recorded by AfterModel as the response it was rescued with.
+func OnModelError(r *recorder.Recorder, opts Options) llmagent.OnModelErrorCallback {
+	return func(ctx agent.Context, request *adkmodel.LLMRequest, callErr error) (*adkmodel.LLMResponse, error) {
+		if callErr == nil {
+			return nil, nil
 		}
+		known := inFlight.fail(callKey(ctx))
+		if known.requested == "" && request != nil {
+			known.requested = request.Model
+		}
+		reported := recorder.ReportedErrorFor(callErr, opts.billedBy())
 
-		status, code := toolOutcome(r, opts, name, result, callErr)
-
-		r.RecordIn(ctx, &pb.Activity{
+		activity := &pb.Activity{
 			Agent:            opts.Agent,
 			Request:          requestOf(ctx),
 			Session:          ctx.SessionID(),
@@ -267,18 +284,24 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 			CallerService:    opts.Service,
 			ObservedAs:       pb.Agent_AGENT,
 			SubAgent:         ctx.AgentName(),
-			CallerComponent:  "tool:" + name,
-			Tool:             name,
+			CallerComponent:  componentOf(ctx),
 			Skill:            opts.Skill,
 			Project:          recorder.ProjectFrom(ctx),
+			Model:            modelOf(&adkmodel.LLMResponse{}, known, opts.Model),
 			BilledBy:         opts.billedBy(),
 			Region:           opts.region(),
 			Framework:        framework,
 			FrameworkVersion: frameworkVersion(),
-			Status:           status,
-			ErrorCode:        code,
+			DurationMs:       millisSince(known.startedAt, time.Now),
+			Status:           pb.Activity_FAILED,
+			ErrorCode:        recorder.ErrorCode(callErr),
+			ErrorFormat:      reported.Format,
+			ReportedError:    reported.Fields,
 			OccurredAt:       timestamppb.Now(),
-		})
+		}
+		applyUsage(activity, known.usage)
+
+		r.RecordIn(ctx, activity)
 		return nil, nil
 	}
 }
@@ -314,10 +337,9 @@ func AfterAgent(r *recorder.Recorder, _ Options) agent.AfterAgentCallback {
 // would ask this agent's own model client for a model it cannot serve. Where
 // it does not match, or governance named no replacement at all, the call
 // proceeds with the model it originally asked for; Stats.DowngradeApplied
-// and Stats.DowngradeNotApplied report which happened. An applied
-// replacement is remembered in inFlightDowngrades so AfterModel records it,
-// not the agent's static configured model, for a streamed call whose final
-// response reports no model of its own.
+// and Stats.DowngradeNotApplied report which happened.
+//
+// It also notes which model the call asks for, after any downgrade, and when, so a call whose provider reports no model is still recorded against the one sent, and every call reports how long it took.
 //
 // If opts.DecideCacheTTL is positive, opts.Decider is wrapped in a
 // recorder.CachingDecider exactly once, here, before the callback is
@@ -359,6 +381,8 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 
 		outcome := decide(ctx, r, opts, decider, request.Model)
 		if outcome.denied != nil {
+			// AfterModel never runs for a short-circuited response, so this is the only place this call's in-flight entry is cleared.
+			inFlight.take(callKey(ctx))
 			return outcome.denied, nil
 		}
 		if outcome.replacementModel != "" {
@@ -367,9 +391,10 @@ func BeforeModel(r *recorder.Recorder, opts Options) llmagent.BeforeModelCallbac
 			} else {
 				request.Model = outcome.replacementModel
 				r.NoteDowngradeApplied()
-				inFlightDowngrades.put(callKey(ctx), outcome.replacementModel)
 			}
 		}
+		// Noted after any downgrade has been applied, so a call whose provider reports no model falls back to what was actually sent.
+		inFlight.requested(callKey(ctx), request.Model)
 		return nil, nil
 	}
 }
@@ -428,7 +453,7 @@ func decide(ctx agent.Context, r *recorder.Recorder, opts Options, decider recor
 		return decideOutcome{}
 	case governancepb.DecideResponse_DENY:
 		r.NoteDenied()
-		recordDenied(r, ctx, opts)
+		recordDenied(r, ctx, opts, requestedModel)
 		return decideOutcome{denied: deniedResponse(opts)}
 	case governancepb.DecideResponse_DOWNGRADE:
 		r.NoteDowngraded()
@@ -458,7 +483,9 @@ func deniedResponse(opts Options) *adkmodel.LLMResponse {
 // AfterModel never runs for a short-circuited response — ADK skips it along
 // with the model call — so this is the only place a denied call is
 // recorded.
-func recordDenied(r *recorder.Recorder, ctx agent.Context, opts Options) {
+//
+// The model is the one the call asked for, so a refusal reads against the model it would have spent on.
+func recordDenied(r *recorder.Recorder, ctx agent.Context, opts Options, model string) {
 	r.RecordIn(ctx, &pb.Activity{
 		Agent:            opts.Agent,
 		Request:          requestOf(ctx),
@@ -470,6 +497,7 @@ func recordDenied(r *recorder.Recorder, ctx agent.Context, opts Options) {
 		CallerComponent:  componentOf(ctx),
 		Skill:            opts.Skill,
 		Project:          recorder.ProjectFrom(ctx),
+		Model:            model,
 		BilledBy:         opts.billedBy(),
 		Region:           opts.region(),
 		Framework:        framework,
@@ -487,24 +515,6 @@ func componentOf(ctx agent.ReadonlyContext) string {
 		return name
 	}
 	return "model_call"
-}
-
-// modelOf says which model answered.
-//
-// The framework reports it on a response it received whole, and does not
-// report it on one it assembled from a stream, so the configured name
-// stands in there — unless BeforeModel applied a downgrade to this same
-// call, in which case that replacement is what was actually sent and is
-// preferred over the static configured name. Recording no model would leave
-// the counts unpriceable, since a rate is looked up by model.
-func modelOf(ctx agent.ReadonlyContext, response *adkmodel.LLMResponse, opts Options) string {
-	if reported := response.ModelVersion; reported != "" {
-		return reported
-	}
-	if applied, ok := inFlightDowngrades.take(callKey(ctx)); ok {
-		return applied
-	}
-	return opts.Model
 }
 
 // errorCodeOf names why a call did not succeed.
@@ -604,46 +614,4 @@ func labelValue(v string) string {
 func Describe(opts Options) string {
 	return fmt.Sprintf("recording as agent %s in service %q, billed to %s",
 		opts.Agent, opts.Service, opts.billedBy())
-}
-
-// toolOutcome reads how a tool call ended.
-//
-// A raised error is a failure whatever else is true, so it is read first and the
-// adopter's own judgement is not consulted: an error already says what went
-// wrong, in a code, and a result returned alongside one says nothing. Where
-// nothing was raised, the adopter decides, because only the product knows the
-// shape of its own tool's answer.
-func toolOutcome(r *recorder.Recorder, opts Options, tool string, result map[string]any, callErr error) (pb.Activity_Status, string) {
-	if callErr != nil {
-		return pb.Activity_FAILED, recorder.ErrorCode(callErr)
-	}
-	if opts.ToolFailed == nil {
-		return pb.Activity_OK, ""
-	}
-	if failed, code := judgeTool(r, opts, tool, result); failed {
-		// A failure the adopter named but gave no code for is still a failure. It is
-		// recorded under one the server can classify rather than under nothing, which
-		// would read as a success that happened to be marked.
-		if code == "" {
-			code = "TOOL_ERROR"
-		}
-		return pb.Activity_FAILED, code
-	}
-	return pb.Activity_OK, ""
-}
-
-// judgeTool runs the adopter's own judgement of a tool's result, and survives it
-// panicking.
-//
-// It is the adopter's code running inside the framework's callback, so a panic in
-// it would otherwise fail the tool call it was only meant to describe. A judgement
-// that panics is counted and the call is recorded as the framework saw it.
-func judgeTool(r *recorder.Recorder, opts Options, tool string, result map[string]any) (failed bool, code string) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			r.NotePanicked()
-			failed, code = false, ""
-		}
-	}()
-	return opts.ToolFailed(tool, result)
 }

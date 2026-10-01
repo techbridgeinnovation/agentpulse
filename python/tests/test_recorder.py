@@ -254,3 +254,46 @@ rec.record(Activity(request="last"))
 """
     subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
     assert out.read_text().split() == ["last"]
+
+
+def test_a_record_that_cannot_be_priced_is_still_sent(monkeypatch):
+    from agentpulse import pricing
+
+    def broken(card, activity):
+        raise ArithmeticError("bug in pricing")
+
+    sink = MemorySink()
+    rec = recorder(sink, flush_every=60)
+    rec._card = object()
+    monkeypatch.setattr(pricing, "price_of", broken)
+    rec.record(Activity(request="r"))
+    assert rec.flush(timeout=2)
+    assert [a.request for a in sink.activities] == ["r"]
+    stats = rec.stats()
+    assert (stats.recorded, stats.delivered, stats.panicked) == (1, 1, 1)
+
+
+def test_a_batch_lost_to_a_fault_in_delivery_is_counted_as_failed():
+    rec = recorder(MemorySink(), flush_every=60)
+
+    def broken(batch):
+        raise RuntimeError("bug in delivery")
+
+    rec._deliver = broken
+    for _ in range(3):
+        rec.record(Activity(request="r"))
+    rec.flush(timeout=2)
+    stats = rec.stats()
+    assert (stats.failed, stats.panicked) == (3, 1)
+
+
+def test_what_is_still_queued_when_close_runs_out_of_time_is_counted_as_dropped():
+    sink = MemorySink(delay=1.0)
+    rec = recorder(sink, batch_size=1, flush_every=60)
+    for _ in range(4):
+        rec.record(Activity(request="r"))
+    time.sleep(0.1)
+    assert rec.close(timeout=0.1) is False
+    stats = rec.stats()
+    # One batch is with the slow sink; the rest will never be sent, and say so.
+    assert stats.dropped == 3

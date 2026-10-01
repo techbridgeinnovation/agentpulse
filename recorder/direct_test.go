@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -283,7 +284,7 @@ func TestAReplyLongerThanIsHeldIsStillCounted(t *testing.T) {
 	}
 }
 
-// A stream the caller stops reading and closes is still recorded, once, with what it had said so far.
+// A stream the caller stops reading and closes is still recorded, once, with what it had said so far, as cut short.
 func TestAnAbandonedStreamIsRecordedOnce(t *testing.T) {
 	stream := `data: {"type":"message_start","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":1000}}}` + "\n\n" + strings.Repeat(`data: {"type":"content_block_delta","delta":{"text":"x"}}`+"\n\n", 2000)
 	server := provider(t, 200, "text/event-stream", stream)
@@ -301,6 +302,9 @@ func TestAnAbandonedStreamIsRecordedOnce(t *testing.T) {
 	}))
 	if counts(a)["input_tokens"] != 1000 {
 		t.Errorf("counts = %v, want what the stream had said", counts(a))
+	}
+	if a.GetStatus() != pb.Activity_TRUNCATED || a.GetErrorCode() != "Canceled" {
+		t.Errorf("status %v code %q, want a call the caller cut short", a.GetStatus(), a.GetErrorCode())
 	}
 }
 
@@ -754,5 +758,193 @@ func TestADowngradeIsNeverTreatedAsADeny(t *testing.T) {
 	}
 	if got.GetStatus() != pb.Activity_OK {
 		t.Errorf("status = %v, want OK", got.GetStatus())
+	}
+}
+
+// panickingProtocol is a protocol with a bug in how it reads a whole reply.
+type panickingProtocol struct{ openAIProtocol }
+
+func (panickingProtocol) reply(func(string) json.RawMessage, *observed) { panic("protocol bug") }
+
+// A protocol that panics while a reply is read never leaves the call locked or reaches the caller, and the call is still recorded and the panic counted.
+func TestAProtocolThatPanicsNeitherHangsNorLosesTheRecord(t *testing.T) {
+	server := provider(t, 200, "application/json", `{"model":"gpt-5"}`)
+
+	got, rec := directWithRecorder(t, service, func(rp *Reporter) {
+		req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", nil)
+		resp, err := rp.observe(panickingProtocol{}, req, http.DefaultTransport.RoundTrip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closed := make(chan struct{})
+		go func() {
+			_, _ = io.ReadAll(resp.Body)
+			_, _ = resp.Body.Read(make([]byte, 8))
+			_ = resp.Body.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(2 * time.Second):
+			t.Fatal("closing the reply hung after the protocol panicked")
+		}
+	})
+	only(t, got)
+	if rec.Stats().Panicked != 1 {
+		t.Errorf("panicked = %d, want 1", rec.Stats().Panicked)
+	}
+}
+
+// A reply that breaks off part way is recorded as the failure it was, under the code its error reduces to, not as a call that succeeded and counted nothing.
+func TestAReplyThatBreaksOffIsRecordedAsAFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "1000")
+		_, _ = io.WriteString(w, `{"model":"gpt-5",`)
+	}))
+	defer server.Close()
+
+	a := only(t, direct(t, service, func(rp *Reporter) {
+		through(t, context.Background(), rp.OpenAIMiddleware(), server.URL+"/v1/chat/completions")
+	}))
+	if a.GetStatus() != pb.Activity_FAILED || a.GetErrorCode() != ErrorCode(io.ErrUnexpectedEOF) {
+		t.Errorf("status %v code %q, want a failure", a.GetStatus(), a.GetErrorCode())
+	}
+}
+
+// A refusal whose body is compressed is still recorded as a refusal, from its status.
+func TestACompressedRefusalIsRecordedAsAFailure(t *testing.T) {
+	server := provider(t, 503, "application/json", "compressed bytes", "Content-Encoding", "gzip")
+
+	a := only(t, direct(t, service, func(rp *Reporter) {
+		through(t, context.Background(), rp.OpenAIMiddleware(), server.URL+"/v1/chat/completions", "Accept-Encoding", "gzip")
+	}))
+	if a.GetStatus() != pb.Activity_FAILED || a.GetErrorCode() == "" {
+		t.Errorf("status %v code %q, want a failure with a code", a.GetStatus(), a.GetErrorCode())
+	}
+}
+
+// A genai stream that ends in an error line with no event prefix is recorded as that error, which is what the genai client raises.
+func TestAGenAIStreamEndingInABareErrorIsRecordedAsAFailure(t *testing.T) {
+	stream := "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"the \"}]}}],\"usageMetadata\":{\"promptTokenCount\":700},\"modelVersion\":\"gemini-2.5-flash-001\"}\n\n" +
+		"{\"error\":{\"code\":429,\"message\":\"the prompt said\",\"status\":\"RESOURCE_EXHAUSTED\"}}\n"
+	server := provider(t, 200, "text/event-stream", stream)
+
+	a := only(t, direct(t, service, func(rp *Reporter) {
+		client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+			Backend: genai.BackendGeminiAPI, APIKey: "test", HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rp.InstrumentGenAI(client)
+		var failed error
+		for _, err := range client.Models.GenerateContentStream(context.Background(), "gemini-2.5-flash", genai.Text("the prompt"), nil) {
+			if err != nil {
+				failed = err
+			}
+		}
+		if failed == nil {
+			t.Fatal("the client raised no error for the stream")
+		}
+	}))
+	if a.GetStatus() != pb.Activity_FAILED || a.GetErrorCode() != "RESOURCE_EXHAUSTED" {
+		t.Errorf("status %v code %q, want the stream's error", a.GetStatus(), a.GetErrorCode())
+	}
+	if counts(a)["promptTokenCount"] != 700 {
+		t.Errorf("counts = %v, want what the stream said before it failed", counts(a))
+	}
+}
+
+// A whole reply the caller has read in full is complete, even where it is closed before the end of the body is reported.
+func TestAWholeReplyClosedOnceReadIsComplete(t *testing.T) {
+	reply := `{"model":"gpt-5","choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":10}}`
+	a := only(t, direct(t, service, func(rp *Reporter) {
+		req, _ := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/chat/completions", nil)
+		resp, err := rp.OpenAIMiddleware()(req, func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(reply))}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.ReadFull(resp.Body, make([]byte, len(reply)))
+		_ = resp.Body.Close()
+	}))
+	if a.GetStatus() != pb.Activity_OK || counts(a)["prompt_tokens"] != 10 {
+		t.Errorf("status %v counts %v, want a complete call", a.GetStatus(), counts(a))
+	}
+}
+
+// A stream whose caller's context ends part way is recorded as cut short, under the context's code, with what it had said.
+func TestAStreamWhoseContextEndsIsRecordedAsCutShort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"type":"message_start","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":1000}}}`+"\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	a := only(t, direct(t, service, func(rp *Reporter) {
+		ctx, cancel := context.WithCancel(context.Background())
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/messages", nil)
+		resp, err := rp.AnthropicMiddleware()(req, http.DefaultTransport.RoundTrip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = resp.Body.Read(make([]byte, 4096))
+		cancel()
+		_, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+	}))
+	if a.GetStatus() != pb.Activity_TRUNCATED || a.GetErrorCode() != "Canceled" || counts(a)["input_tokens"] != 1000 {
+		t.Errorf("status %v code %q counts %v, want a call cut short", a.GetStatus(), a.GetErrorCode(), counts(a))
+	}
+}
+
+// A transport that answers with neither a reply nor an error is recorded as a failure.
+func TestACallWithNoReplyIsRecordedAsAFailure(t *testing.T) {
+	a := only(t, direct(t, service, func(rp *Reporter) {
+		req, _ := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/chat/completions", nil)
+		_, _ = rp.OpenAIMiddleware()(req, func(*http.Request) (*http.Response, error) { return nil, nil })
+	}))
+	if a.GetStatus() != pb.Activity_FAILED || a.GetErrorCode() != codeNoResponse {
+		t.Errorf("status %v code %q, want a failure", a.GetStatus(), a.GetErrorCode())
+	}
+}
+
+// slowDecider allows every call after a wait.
+type slowDecider struct{ wait time.Duration }
+
+func (d slowDecider) Decide(context.Context, *governancepb.DecideRequest) (*governancepb.DecideResponse, error) {
+	time.Sleep(d.wait)
+	return &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}, nil
+}
+
+// How long a call took is the model's time alone, not the wait for governance before it.
+func TestACallsDurationLeavesOutTheSpendDecision(t *testing.T) {
+	server := provider(t, 200, "application/json", anthropicReply)
+	a := only(t, direct(t, service, func(rp *Reporter) {
+		through(t, context.Background(), rp.Governed(Governance{Decider: slowDecider{wait: 300 * time.Millisecond}}).AnthropicMiddleware(), server.URL+"/v1/messages")
+	}))
+	if a.GetDurationMs() >= 250 {
+		t.Errorf("duration = %dms, want the decision's wait left out", a.GetDurationMs())
+	}
+}
+
+// A post through an instrumented client that is not recorded is counted, so the spend it may carry is not invisible. A read is not.
+func TestARequestPassedThroughUnrecordedIsCounted(t *testing.T) {
+	server := provider(t, 200, "application/json", `{"input_tokens":12}`)
+	_, rec := directWithRecorder(t, service, func(rp *Reporter) {
+		through(t, context.Background(), rp.AnthropicMiddleware(), server.URL+"/v1/messages/count_tokens")
+		req, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/models", nil)
+		resp, err := rp.AnthropicMiddleware()(req, http.DefaultTransport.RoundTrip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+	})
+	if got := rec.Stats().Unrecorded; got != 1 {
+		t.Errorf("unrecorded = %d, want 1", got)
 	}
 }

@@ -10,7 +10,7 @@ import (
 //
 //	client := anthropic.NewClient(option.WithMiddleware(reporter.AnthropicMiddleware()))
 //
-// Each call is recorded under the reporter's attribution, with the user, request, session, workspace and project read from the call's context, and the part of the product that made it from WithComponent or, where none is named, the function that made the call. Token counting and every other endpoint pass through unrecorded.
+// Each call is recorded under the reporter's attribution, with the user, request, session, workspace and project read from the call's context, and the part of the product that made it from WithComponent or, where none is named, the function that made the call. Token counting and every other endpoint pass through unrecorded, and are counted in Stats.Unrecorded.
 //
 // Claude served through Vertex or Bedrock is billed by Google or by Amazon, not by Anthropic, so set Attribution.BilledBy for such a client. Register this before the sdk's `vertex` or `bedrock` option: those rewrite the request into their own shape, and on Bedrock into a binary stream this does not read.
 func (rp *Reporter) AnthropicMiddleware() Middleware {
@@ -97,6 +97,8 @@ func (anthropicProtocol) event(data []byte, o *observed) {
 		if json.Unmarshal(e.Message.Usage, &u) == nil && u.ServiceTier != "" {
 			o.tier = u.ServiceTier
 		}
+	case "message_stop":
+		o.ended = true
 	case "message_delta":
 		if e.Delta.StopReason != "" {
 			o.finish = e.Delta.StopReason

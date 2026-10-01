@@ -220,3 +220,22 @@ def test_a_framework_version_that_cannot_be_read_is_left_empty_and_read_once(mon
         assert asked == ["not-installed-anywhere"]
     finally:
         _installed_version.cache_clear()
+
+
+def test_a_tool_result_is_measured_as_the_json_it_is_sent_as_and_never_kept():
+    from dataclasses import dataclass
+
+    from agentpulse.report import result_size
+
+    @dataclass
+    class Found:
+        city: str
+
+    assert result_size({"city": "Nairobi", "rain": True}) == (len('{"city":"Nairobi","rain":true}'), False)
+    assert result_size("Nairobi") == (7, False)
+    assert result_size("é") == (2, False)
+    assert result_size(Found("Nairobi")) == (len('{"city":"Nairobi"}'), False)
+    for nothing in (None, "", {}, [], ()):
+        assert result_size(nothing) == (0, True)
+    # Unmeasurable is not empty: claiming a tool returned nothing when it may have returned plenty is the wrong error.
+    assert result_size({"handle": object()}) == (0, False)

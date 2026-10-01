@@ -12,9 +12,9 @@ import (
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // fakeContext stands in for what the framework hands a callback.
@@ -660,7 +660,7 @@ func TestBeforeModelRecordsTheDenialAsAZeroCostDeniedActivity(t *testing.T) {
 	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DENY}}
 
 	sink := delivered(t, func(r *recorder.Recorder) {
-		if _, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{}); err != nil {
+		if _, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{Model: "gemini-3.5-pro"}); err != nil {
 			t.Fatalf("BeforeModel: %v", err)
 		}
 	})
@@ -674,6 +674,10 @@ func TestBeforeModelRecordsTheDenialAsAZeroCostDeniedActivity(t *testing.T) {
 	}
 	if got.GetEstimatedCostMicros() != 0 || got.GetTotalTokens() != 0 {
 		t.Fatalf("activity = %+v, want zero cost and zero tokens — nothing was spent", got)
+	}
+	// A refusal reads against the model it would have spent on.
+	if got.GetModel() != "gemini-3.5-pro" {
+		t.Fatalf("model = %q, want the model the call asked for", got.GetModel())
 	}
 }
 

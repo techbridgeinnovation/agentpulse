@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,9 +12,9 @@ import (
 	adkmodel "google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
+	"github.com/techbridgeinnovation/agentpulse/recorder"
 	governancepb "github.com/techbridgeinnovation/agentpulse/recorder/pb/governance"
 	pb "github.com/techbridgeinnovation/agentpulse/recorder/pb/metering"
-	"github.com/techbridgeinnovation/agentpulse/recorder"
 )
 
 // fakeContext stands in for what the framework hands a callback.
@@ -25,6 +26,8 @@ type fakeContext struct {
 	user       string
 	sessionID  string
 	agentName  string
+
+	functionCallID string
 }
 
 func (f *fakeContext) InvocationID() string { return f.invocation }
@@ -32,11 +35,11 @@ func (f *fakeContext) AgentName() string    { return f.agentName }
 func (f *fakeContext) UserID() string       { return f.user }
 func (f *fakeContext) SessionID() string    { return f.sessionID }
 
-// Branch is stubbed to empty because callKey now reads it, for the same
-// reason the fields above already are — a downgrade's in-flight tracking
-// needs to tell a sub-agent's or a parallel branch's calls apart from the
-// rest of the turn, exactly as adkhooks' own callKey already does.
+// Branch is stubbed to empty because callKey reads it, to tell a sub-agent's or a parallel branch's calls apart from the rest of the turn.
 func (f *fakeContext) Branch() string { return "" }
+
+// FunctionCallID is the id of the function call a tool callback runs for, which is what tells two calls of the same tool apart.
+func (f *fakeContext) FunctionCallID() string { return f.functionCallID }
 
 func newContext() *fakeContext {
 	return &fakeContext{
@@ -76,6 +79,14 @@ func delivered(t *testing.T, run func(*recorder.Recorder)) *collector {
 	defer cancel()
 	r.Close(ctx)
 	return sink
+}
+
+// contextFor is newContext in its own invocation, so a test's calls never meet another test's in the shared in-flight stores.
+func contextFor(invocation string) *fakeContext {
+	ctx := newContext()
+	ctx.invocation = invocation
+	ctx.functionCallID = invocation
+	return ctx
 }
 
 func options() Options {
@@ -613,7 +624,7 @@ func TestBeforeModelRecordsTheDenialAsAZeroCostDeniedActivity(t *testing.T) {
 	opts.Decider = &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_DENY}}
 
 	sink := delivered(t, func(r *recorder.Recorder) {
-		if _, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{}); err != nil {
+		if _, err := BeforeModel(r, opts)(newContext(), &adkmodel.LLMRequest{Model: "gemini-3.5-pro"}); err != nil {
 			t.Fatalf("BeforeModel: %v", err)
 		}
 	})
@@ -627,6 +638,10 @@ func TestBeforeModelRecordsTheDenialAsAZeroCostDeniedActivity(t *testing.T) {
 	}
 	if got.GetEstimatedCostMicros() != 0 || got.GetTotalTokens() != 0 {
 		t.Fatalf("activity = %+v, want zero cost and zero tokens — nothing was spent", got)
+	}
+	// A refusal reads against the model it would have spent on.
+	if got.GetModel() != "gemini-3.5-pro" {
+		t.Fatalf("model = %q, want the model the call asked for", got.GetModel())
 	}
 }
 
@@ -762,5 +777,41 @@ func TestBeforeModelSendsTheRequestedModelAndProviderToGovernance(t *testing.T) 
 
 	if decider.got.GetRequestedProvider() != "VERTEX_AI" || decider.got.GetRequestedModel() != "gemini-3.5-pro" {
 		t.Fatalf("requested = %q/%q, want VERTEX_AI/gemini-3.5-pro", decider.got.GetRequestedProvider(), decider.got.GetRequestedModel())
+	}
+}
+
+// A tool's result is what a later turn carries, so its size is the figure that
+// finds the expensive tool in an agent. It was not being recorded at all.
+func TestAToolResultIsMeasured(t *testing.T) {
+	bytes, empty := resultSize(map[string]any{"content": "package main"})
+	if empty {
+		t.Error("a result with content is not empty")
+	}
+	if bytes <= 0 {
+		t.Errorf("bytes = %d, want the size of the encoded result", bytes)
+	}
+	// Bigger content must measure bigger; the figure is comparative or it is
+	// useless for finding which tool costs the most.
+	larger, _ := resultSize(map[string]any{"content": strings.Repeat("x", 4096)})
+	if larger <= bytes {
+		t.Errorf("a larger result measured %d against %d", larger, bytes)
+	}
+}
+
+func TestAnEmptyResultIsRecordedAsEmpty(t *testing.T) {
+	for _, r := range []map[string]any{nil, {}} {
+		bytes, empty := resultSize(r)
+		if !empty || bytes != 0 {
+			t.Errorf("result %v gave bytes=%d empty=%t, want 0/true", r, bytes, empty)
+		}
+	}
+}
+
+// Zero bytes and empty are the same claim, so a result that cannot be measured
+// must not be reported as one that was empty.
+func TestAnUnmeasurableResultIsNotCalledEmpty(t *testing.T) {
+	_, empty := resultSize(map[string]any{"ch": make(chan int)})
+	if empty {
+		t.Error("an unmarshalable result should not be reported as empty")
 	}
 }

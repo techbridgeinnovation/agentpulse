@@ -50,9 +50,19 @@ import { wrapLanguageModel } from "ai";
 const model = wrapLanguageModel({ model: openai("gpt-5"), middleware: reporter.aiSdkMiddleware() });
 ```
 
-Every `generateText`, `streamText`, `generateObject` and agent step made with that model is recorded, a streamed call once when its stream ends or is cancelled. The SDK hands a middleware the provider's own usage, so a call to OpenAI, Anthropic or Gemini is recorded in that provider's convention, and billed by Google where it is served through Vertex. Any other provider is recorded in the SDK's own convention, `AI_SDK`, which `metering/v1` reads with a reader of its own.
+Every `generateText`, `streamText`, `generateObject` and agent step made with that model is recorded, a streamed call once when its stream ends or is cancelled. A stream that ends with no finish part is recorded as truncated, one cancelled before its finish as truncated with the code `Canceled`, as the Go and Python recorders record it, and one that nothing reads or cancels the same way once it is garbage collected, which can be late and, at exit, never. The SDK hands a middleware the provider's own usage, so a call to OpenAI, Anthropic or Gemini is recorded in that provider's convention, and billed by Google where it is served through Vertex. Any other provider is recorded in the SDK's own convention, `AI_SDK`, which `metering/v1` reads with a reader of its own.
 
 A governed reporter's middleware refuses a call a budget has run out on by throwing `SpendDenied` before the provider is called; `denied(err)` recognises it. A middleware cannot change which model its call uses, so a DOWNGRADE lets the call through as asked and is counted in `stats()` as not applied. `specificationVersion` is `v4` for AI SDK 7, and can be set to `v3` or `v2` for an earlier major.
+
+Embedding models are wrapped the same way, from AI SDK 6, and tools are wrapped where they are declared:
+
+```ts
+const embedder = wrapEmbeddingModel({ model: openai.embedding("text-embedding-3-small"), middleware: reporter.aiSdkEmbeddingMiddleware() });
+
+const tools = reporter.aiSdkTools({ search, lookup });
+```
+
+Each tool call is recorded with its duration, its failure code and the size of its result as JSON, never its arguments or its result. A result that cannot be serialised is recorded with no size and is not called empty.
 
 ## Recording by hand
 
@@ -65,7 +75,20 @@ const verdict = await reporter.decide("gpt-5", { provider: "OPENAI" });
 if (!verdict.proceed) return refuse();
 ```
 
+A tool call by hand states the size of its result, never the result:
+
+```ts
+const { bytes, empty } = resultSize(result);
+reporter.toolCall({ tool: "search", durationMs, resultBytes: bytes, emptyResult: empty });
+```
+
 Only a genuine DENY refuses. Governance unreachable or slower than a second and a half lets the call go ahead and is counted, unless it refused the same question within the hour, which it then does again.
+
+## Delivery and exit
+
+Records leave on a background flush. A batch the gateway refuses for a reason that passes, such as being unavailable or out of time, is sent again up to three times in all, with a growing wait, under the same request id. What is still queued or waiting when the recorder closes is counted in `stats().dropped`.
+
+On SIGTERM, SIGINT and the event loop emptying, the recorder waits up to `exitTimeoutMs` for what is queued. After a signal it then ends the process as the signal would have, unless the host has a listener of its own, which then decides. `process.exit`, and a serverless platform freezing the process once it answers, give it no chance: await `reporter.recorder.close()`, or `flush()`, before returning.
 
 ## Layout
 

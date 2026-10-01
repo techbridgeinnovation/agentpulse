@@ -379,3 +379,34 @@ func TestAWorkspaceThatFailsDoesNotLoseAnother(t *testing.T) {
 		t.Fatalf("stats = %+v, want globex's two delivered and acme's one failed", s)
 	}
 }
+
+// Records still queued when Close gives up are counted as dropped, so the counters account for every record accepted.
+func TestCloseCountsWhatItCouldNotDeliverAsDropped(t *testing.T) {
+	sink := &captureSink{block: time.Hour}
+	r := New(Config{Sinks: []Sink{sink}, BatchSize: 1, FlushEvery: time.Hour, SendTimeout: time.Hour})
+	for range 5 {
+		r.Record(activity("a"))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	r.Close(ctx)
+
+	if s := r.Stats(); s.Recorded != 5 || s.Dropped < 4 {
+		t.Errorf("recorded %d, dropped %d, want the four never sent counted as dropped", s.Recorded, s.Dropped)
+	}
+}
+
+// A record handed over after Close has nothing left to deliver it, so it is counted as dropped rather than accepted.
+func TestARecordAfterCloseIsCountedAsDropped(t *testing.T) {
+	r := New(Config{})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	r.Close(ctx)
+
+	r.Record(activity("a"))
+
+	if s := r.Stats(); s.Recorded != 0 || s.Dropped != 1 {
+		t.Errorf("recorded %d, dropped %d, want it dropped", s.Recorded, s.Dropped)
+	}
+}

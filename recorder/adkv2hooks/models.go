@@ -1,10 +1,9 @@
-package adkhooks
+package adkv2hooks
 
 import (
 	"time"
 
-	"google.golang.org/adk/agent"
-	adkmodel "google.golang.org/adk/model"
+	adkmodel "google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
 
@@ -35,11 +34,6 @@ type inFlightModels struct {
 
 func newInFlightModels(max int, ttl time.Duration, now func() time.Time) *inFlightModels {
 	return &inFlightModels{newInFlightStore[calledModel](max, ttl, now)}
-}
-
-// callKey identifies one agent's model calls within one invocation. An agent makes its model calls one after another, so the key names the call currently in flight; the agent and branch keep a sub-agent's or a parallel branch's calls apart from the rest of the turn.
-func callKey(ctx agent.ReadonlyContext) string {
-	return ctx.InvocationID() + "\x00" + ctx.AgentName() + "\x00" + ctx.Branch()
 }
 
 // requested notes the model a call is about to ask for, and when it was asked for. It starts what is known about the call afresh, so nothing learned about the previous call carries over.
@@ -81,15 +75,17 @@ func (m *inFlightModels) take(key string) calledModel {
 
 // modelOf names the model a final response is recorded against.
 //
-// A model the response itself reports is never replaced. Otherwise the model the provider reported while streaming is preferred over the one the agent asked for, since it is what was actually served and billed.
-func modelOf(response *adkmodel.LLMResponse, known calledModel) string {
+// A model the response itself reports is never replaced. Otherwise the model the provider reported while streaming is preferred over the one the agent asked for, since it is what was actually served and billed. The model the agent is configured with stands in last, for an agent whose BeforeModel callback is not registered, because a record with no model prices against nothing.
+func modelOf(response *adkmodel.LLMResponse, known calledModel, configured string) string {
 	switch {
 	case response.ModelVersion != "":
 		return response.ModelVersion
 	case known.served != "":
 		return known.served
-	default:
+	case known.requested != "":
 		return known.requested
+	default:
+		return configured
 	}
 }
 

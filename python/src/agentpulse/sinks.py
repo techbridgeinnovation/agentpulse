@@ -5,14 +5,23 @@ A sink runs on the recorder's worker and never on the caller's turn. It is hande
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+import random
+import time
+import uuid
+from typing import Callable, Protocol, runtime_checkable
 
-from . import _wire
+from . import _grpcweb, _wire
 from .context import User, workspace_name
 from .gateway import ConfigError, Gateway
 
 _BATCH_CREATE_ACTIVITIES = "/techbridge.ap.metering.v1.ActivitiesService/BatchCreateActivities"
 _BATCH_UPSERT_USERS = "/techbridge.ap.metering.v1.UsersService/BatchUpsertUsers"
+
+# The outcomes worth another attempt: the gateway or metering busy, restarting or briefly out of reach. A refused key or a malformed batch fails the same way every time, so it is never retried.
+_TRANSIENT = {_grpcweb.UNAVAILABLE, _grpcweb.RESOURCE_EXHAUSTED, _grpcweb.ABORTED, _grpcweb.DEADLINE_EXCEEDED}
+_DEFAULT_RETRIES = 2
+_FIRST_BACKOFF = 0.5
+_MAX_BACKOFF = 4.0
 
 
 @runtime_checkable
@@ -53,23 +62,25 @@ class MeteringSink:
 
     name = "metering"
 
-    def __init__(self, gateway: Gateway, organisation: str = ""):
+    def __init__(self, gateway: Gateway, organisation: str = "", *, retries: int = _DEFAULT_RETRIES):
         organisation = (organisation or gateway.organisation).strip()
         if not organisation:
             raise ConfigError("agentpulse: the metering sink needs the organisation the records are filed under")
         self._gateway = gateway
         self._organisation = organisation
+        self._retries = max(0, retries)
+        self._sleep: Callable[[float], None] = time.sleep
 
     def _parent(self, workspace: str) -> str:
         # A batch naming no workspace is filed under the organisation on its own, which lands it in the organisation's default workspace. A tenant a caller did not name is never invented here.
         return workspace_name(self._organisation, workspace) or self._organisation
 
     def send(self, activities: list[_wire.Activity], workspace: str, timeout: float) -> None:
-        """One call per batch. A rejected batch is not retried: the queue has already accounted for those records, and a duplicate costs more than a gap."""
+        """One call per batch, tried again after a transient failure. Every attempt carries the same request id, so metering stores a batch once however many attempts reached it."""
         if not activities:
             return
-        message = _wire.batch_create_activities(self._parent(workspace), activities)
-        self._gateway.call(_BATCH_CREATE_ACTIVITIES, message, timeout)
+        message = _wire.batch_create_activities(self._parent(workspace), activities, request_id=str(uuid.uuid4()))
+        self._call(_BATCH_CREATE_ACTIVITIES, message, timeout)
 
     def send_users(self, users: list[User], workspace: str, timeout: float) -> None:
         """Names people in the directory of the workspace their records are filed in, which is the one they join to."""
@@ -77,4 +88,21 @@ class MeteringSink:
             return
         parent = self._parent(workspace)
         rows = [_wire.User(name=f"{parent}/users/{user.id}", display_name=user.name, email=user.email) for user in users]
-        self._gateway.call(_BATCH_UPSERT_USERS, _wire.batch_upsert_users(parent, rows), timeout)
+        self._call(_BATCH_UPSERT_USERS, _wire.batch_upsert_users(parent, rows), timeout)
+
+    def _call(self, method: str, message: bytes, timeout: float) -> None:
+        """The call, with a few attempts more for a transient failure, all inside `timeout` so a struggling gateway holds up the worker no longer than one slow call would. Runs on the worker, never on the host's turn."""
+        deadline = time.monotonic() + timeout
+        backoff = _FIRST_BACKOFF
+        attempt = 0
+        while True:
+            try:
+                self._gateway.call(method, message, max(0.001, deadline - time.monotonic()))
+                return
+            except _grpcweb.RPCError as err:
+                pause = backoff * random.uniform(0.5, 1.0)
+                if err.code not in _TRANSIENT or attempt >= self._retries or time.monotonic() + pause >= deadline:
+                    raise
+            attempt += 1
+            self._sleep(pause)
+            backoff = min(backoff * 2, _MAX_BACKOFF)

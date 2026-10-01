@@ -14,8 +14,8 @@ const BATCH_UPSERT_USERS = "/techbridge.ap.metering.v1.UsersService/BatchUpsertU
 export interface Sink {
   /** Identifies the sink, so a team can tell which destination is failing. */
   readonly name: string;
-  /** Delivers one workspace's records. An empty workspace is the ordinary case for a product with one tenant. */
-  send(activities: Activity[], workspace: string, timeoutMs: number): Promise<void>;
+  /** Delivers one workspace's records. An empty workspace is the ordinary case for a product with one tenant. `requestId` is the same on every retry of one batch, so a destination can tell a retry from new records. A rejection with an RpcError whose code passes, such as Unavailable, is retried. */
+  send(activities: Activity[], workspace: string, timeoutMs: number, requestId?: string): Promise<void>;
   /** Delivers one workspace's people to name. A sink without it receives records and no names. */
   sendUsers?(users: User[], workspace: string, timeoutMs: number): Promise<void>;
 }
@@ -43,10 +43,10 @@ export class MeteringSink implements Sink {
     return workspaceName(this.organisation, workspace) || this.organisation;
   }
 
-  /** One call per batch. A rejected batch is not retried: a duplicate costs more than a gap. */
-  async send(activities: Activity[], workspace: string, timeoutMs: number): Promise<void> {
+  /** One call per batch, carrying the batch's request id, which is how the server keeps a retried batch from being written twice. */
+  async send(activities: Activity[], workspace: string, timeoutMs: number, requestId = ""): Promise<void> {
     if (activities.length === 0) return;
-    await this.gateway.call(BATCH_CREATE_ACTIVITIES, batchCreateActivities(this.parent(workspace), activities), timeoutMs);
+    await this.gateway.call(BATCH_CREATE_ACTIVITIES, batchCreateActivities(this.parent(workspace), activities, requestId), timeoutMs);
   }
 
   async sendUsers(users: User[], workspace: string, timeoutMs: number): Promise<void> {
