@@ -205,6 +205,9 @@ func TestAToolThatRaisedIsRecordedOnce(t *testing.T) {
 	if got[0].GetDurationMs() < 1 {
 		t.Errorf("duration = %dms, want the time since BeforeTool", got[0].GetDurationMs())
 	}
+	if got[0].GetEmptyResult() {
+		t.Error("a tool that raised was recorded as handing back an empty result")
+	}
 }
 
 // An error callback that rescues a tool hands AfterTool the substitute and no error, which without the kept error is recorded as a success.

@@ -13,6 +13,7 @@ A governed reporter's handler asks before each model call, and refuses one by ra
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import time
 from typing import Any
@@ -22,8 +23,8 @@ from .adk import _InFlight
 from .clients import SpendDenied
 from .context import current_component, current_request
 from .failure import blocked_finish, reported_error_for, truncated_finish
-from .report import Reporter, _Framework, _installed_version
-from .usage import FORMAT_LANGCHAIN, reported_from, reported_quantities
+from .report import Reporter, _Framework, _installed_version, result_size
+from .usage import FORMAT_LANGCHAIN, FORMAT_OPENAI_CHAT, FORMAT_PERPLEXITY, PROVIDER_PERPLEXITY, reported_from, reported_quantities
 
 LANGCHAIN = "langchain-ai/langchain"
 LANGGRAPH = "langchain-ai/langgraph"
@@ -176,7 +177,8 @@ def _build_handler_class() -> type:
             try:
                 known = self._models.take(run_id)
                 if known:
-                    known["context"].run(self._record_model, known, None, error)
+                    # A stream that fails part way is handed over with what it had produced, whose counts are what the call is billed for.
+                    known["context"].run(self._record_model, known, kwargs.get("response"), error)
             except Exception:
                 self._panicked()
 
@@ -201,6 +203,20 @@ def _build_handler_class() -> type:
             if usage:
                 activity.usage_format = FORMAT_LANGCHAIN
                 activity.reported_usage = reported_quantities(usage)
+            else:
+                # A completion model has no message to carry LangChain's counts, and states the provider's own on the result instead.
+                output = getattr(response, "llm_output", None)
+                output = output if isinstance(output, dict) else {}
+                activity.model = _str(output.get("model_name")) or activity.model
+                usage = reported_from(output.get("token_usage"))
+                if usage:
+                    activity.usage_format = _token_usage_format(usage, activity.billed_by)
+                    activity.reported_usage = reported_quantities(usage)
+            if isinstance(error, (asyncio.CancelledError, GeneratorExit)):
+                # Cut short by the caller rather than failed by the provider, and billed for whatever it had produced.
+                activity.status = _wire.STATUS_TRUNCATED
+                activity.error_code = "Canceled"
+                activity.error_format, activity.reported_error = "", []
             if error is None:
                 finish = ""
                 for source in (meta, info):
@@ -234,37 +250,51 @@ def _build_handler_class() -> type:
                 self._panicked()
 
         def on_tool_end(self, output: Any, *, run_id: Any, parent_run_id: Any = None, **kwargs: Any) -> None:
-            self._tool_done(run_id, None)
+            self._tool_done(run_id, None, output)
 
         def on_tool_error(self, error: BaseException, *, run_id: Any, parent_run_id: Any = None, **kwargs: Any) -> None:
-            self._tool_done(run_id, error)
+            self._tool_done(run_id, error, None)
 
-        def _tool_done(self, run_id: Any, error: BaseException | None) -> None:
+        def _tool_done(self, run_id: Any, error: BaseException | None, output: Any) -> None:
             try:
                 self._roots.take(run_id)
                 known = self._tools.take(run_id)
                 if known:
-                    known["context"].run(self._record_tool, known, error)
+                    known["context"].run(self._record_tool, known, error, output)
             except Exception:
                 self._panicked()
 
-        def _record_tool(self, known: dict, error: BaseException | None) -> None:
+        def _record_tool(self, known: dict, error: BaseException | None, output: Any) -> None:
             # A search or a lookup is charged per use, which is spend that counting tokens can never see.
             rp = self._reporter
             name = known.get("name", "")
             started = known.get("started")
             activity = rp._activity(f"tool:{name}", time.monotonic() - started if started else 0.0, error, (), known["framework"])
             activity.tool = name
+            if error is None:
+                # A tool message is measured by its content, which is what the model is handed.
+                activity.result_bytes, activity.empty_result = result_size(getattr(output, "content", output))
             rp.recorder.record(activity)
 
     return AgentPulseHandler
 
 
 def _reply(response: Any) -> tuple[Any, dict]:
-    """The message a model call answered with and the generation's own info, from the first generation that has a message."""
+    """The message a model call answered with and the generation's own info, from the first generation that has a message, or only the info of the first generation where none has one, as from a completion model."""
+    first: dict | None = None
     for generations in getattr(response, "generations", None) or ():
         for generation in generations or ():
+            info = getattr(generation, "generation_info", None) or {}
             message = getattr(generation, "message", None)
             if message is not None:
-                return message, getattr(generation, "generation_info", None) or {}
-    return None, {}
+                return message, info
+            if first is None:
+                first = info
+    return None, first or {}
+
+
+def _token_usage_format(usage: dict, billed_by: str) -> str:
+    """The convention a completion model's own counts are in. OpenAI's field names are the only shape LangChain's completion models share; any other is recorded unread rather than read under a convention it may not follow."""
+    if not any(name in usage for name in ("prompt_tokens", "completion_tokens")):
+        return ""
+    return FORMAT_PERPLEXITY if billed_by.upper() == PROVIDER_PERPLEXITY else FORMAT_OPENAI_CHAT

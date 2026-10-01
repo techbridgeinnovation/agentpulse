@@ -169,6 +169,9 @@ func TestAToolFailureThatIsNotAGrpcStatusStillNamesItself(t *testing.T) {
 	if got[0].GetErrorCode() != "DeadlineExceeded" {
 		t.Errorf("error code = %q, want DeadlineExceeded", got[0].GetErrorCode())
 	}
+	if got[0].GetEmptyResult() {
+		t.Error("a tool that raised was recorded as handing back an empty result")
+	}
 }
 
 // The failure nothing reports: a tool catches what went wrong, hands back an

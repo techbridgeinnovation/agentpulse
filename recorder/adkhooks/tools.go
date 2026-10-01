@@ -74,7 +74,12 @@ func AfterTool(r *recorder.Recorder, opts Options) llmagent.AfterToolCallback {
 		}
 
 		status, code := toolOutcome(r, opts, name, result, callErr)
-		bytes, empty := resultSize(result)
+		// A tool that raised and was not rescued handed nothing back, which is not the same claim as handing back something empty.
+		var bytes int64
+		var empty bool
+		if callErr == nil || result != nil {
+			bytes, empty = resultSize(result)
+		}
 		recordTool(r, ctx, opts, name, held.startedAt, status, code, bytes, empty)
 		return nil, nil
 	}

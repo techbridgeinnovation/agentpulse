@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from agentpulse import ConfigError, Gateway, MeteringSink, _wire, organisation_of_key
@@ -24,7 +26,55 @@ def test_a_batch_reaches_metering_with_the_key_and_secret_on_the_call(fake):
     assert call.headers["x-api-key"] == KEY
     assert call.headers["x-api-secret"] == "s3cret"
     assert call.headers["content-type"] == "application/grpc-web+proto"
-    assert call.message == _wire.batch_create_activities("organisations/acme/workspaces/w1", [_wire.Activity(agent="organisations/acme/agents/a", request="r")])
+    request_id = _request_id(call.message)
+    assert len(request_id) == 36
+    assert call.message == _wire.batch_create_activities("organisations/acme/workspaces/w1", [_wire.Activity(agent="organisations/acme/agents/a", request="r")], request_id=request_id)
+
+
+def _request_id(message):
+    return next(value.decode() for number, value in _wire.fields(message) if number == 3)
+
+
+def _sink(fake, **options):
+    sink = MeteringSink(Gateway(fake.address, KEY, "s"), **options)
+    sink._sleep = lambda seconds: None
+    return sink
+
+
+@pytest.mark.parametrize("reply", [Reply(header_status=14), Reply(trailer_status=8), Reply(trailer_status=10), Reply(http_status=503, trailer_status=None), Reply(http_status=429, trailer_status=None)])
+def test_a_transient_failure_is_tried_again_under_the_same_request_id(fake, reply):
+    fake.replies += [reply, Reply()]
+    _sink(fake).send([_wire.Activity(request="r")], "", timeout=2)
+    assert len(fake.calls) == 2
+    first, second = (_request_id(c.message) for c in fake.calls)
+    assert first == second
+
+
+@pytest.mark.parametrize("reply", [Reply(header_status=16), Reply(trailer_status=7), Reply(trailer_status=3)])
+def test_a_refusal_is_never_tried_again(fake, reply):
+    fake.replies.append(reply)
+    with pytest.raises(RPCError):
+        _sink(fake).send([_wire.Activity(request="r")], "", timeout=2)
+    assert len(fake.calls) == 1
+
+
+def test_retries_are_bounded_and_each_batch_has_its_own_request_id(fake):
+    fake.replies += [Reply(header_status=14)] * 5
+    sink = _sink(fake, retries=2)
+    with pytest.raises(RPCError):
+        sink.send([_wire.Activity(request="r")], "", timeout=2)
+    assert len(fake.calls) == 3
+    sink.send([_wire.Activity(request="r")], "", timeout=2)
+    assert _request_id(fake.calls[3].message) != _request_id(fake.calls[0].message)
+
+
+def test_retries_never_run_past_the_send_timeout(fake):
+    fake.replies += [Reply(header_status=14)] * 5
+    sink = MeteringSink(Gateway(fake.address, KEY, "s"))
+    started = time.monotonic()
+    with pytest.raises(RPCError):
+        sink.send([_wire.Activity(request="r")], "", timeout=0.3)
+    assert time.monotonic() - started < 1.0
 
 
 def test_a_batch_with_no_workspace_is_filed_under_the_organisation(fake):

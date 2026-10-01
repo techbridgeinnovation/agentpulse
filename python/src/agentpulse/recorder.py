@@ -90,6 +90,8 @@ class Stats:
     delivered: int = 0
     # Records a sink refused or could not be reached with.
     failed: int = 0
+    # Requests through an instrumented client that were not a model call this library can read, and so were passed through unrecorded. Climbing where a model is being called means a provider endpoint this version does not recognise.
+    unrecognised: int = 0
     # Times something run on the host's behalf raised where it never should, such as the recorder building a record. Above zero means this library has a bug; the agent was unaffected.
     panicked: int = 0
     # Spend checks that came back NOTIFY, DENY or DOWNGRADE, and ones that could not be completed.
@@ -161,7 +163,11 @@ class Recorder:
             # Kept whether or not the record survives the queue: a dropped record still cost money, and a spend decision that ignored it would be wrong in the one direction that matters.
             card = self._card
             if card is not None and activity.request:
-                self._totals.add(activity.request, pricing.price_of(card, activity))
+                # A price that cannot be worked out leaves the running total short, never the record unsent.
+                try:
+                    self._totals.add(activity.request, pricing.price_of(card, activity))
+                except Exception:
+                    self._note("panicked")
             with self._lock:
                 if not self._ensure_worker():
                     self._counters["dropped"] += 1
@@ -246,7 +252,7 @@ class Recorder:
             return False
 
     def close(self, timeout: float = 5.0) -> bool:
-        """Stops the recorder after a final attempt to deliver what is queued, and returns whether that finished within `timeout` seconds. Records handed over afterwards are dropped and counted."""
+        """Stops the recorder after a final attempt to deliver what is queued, and returns whether that finished within `timeout` seconds. Records handed over afterwards are dropped and counted, and so is whatever was still queued when the time ran out."""
         try:
             with self._lock:
                 self._closing = True
@@ -256,7 +262,15 @@ class Recorder:
             if thread is None or thread is threading.current_thread():
                 return True
             thread.join(max(0.0, timeout))
-            return not thread.is_alive()
+            if not thread.is_alive():
+                return True
+            # The worker is still on an earlier batch and will not reach these before the process goes, so they are counted as lost rather than left uncounted.
+            with self._lock:
+                self._counters["dropped"] += len(self._records)
+                self._counters["names_dropped"] += len(self._people)
+                self._records.clear()
+                self._people.clear()
+            return False
         except Exception:
             self._note("panicked")
             return False
@@ -345,13 +359,19 @@ class Recorder:
                 people = _take(self._people, self._config.batch_size)
             if not records and not people:
                 return
-            try:
-                if records:
+            # A batch already off the queue is counted whatever happens to it, so a fault here is never a silent loss.
+            if records:
+                try:
                     self._deliver(records)
-                if people:
+                except Exception:
+                    self._note("panicked")
+                    self._note("failed", len(records))
+            if people:
+                try:
                     self._deliver_names(people)
-            except Exception:
-                self._note("panicked")
+                except Exception:
+                    self._note("panicked")
+                    self._note("names_failed", len(people))
 
     def _deliver(self, batch: list[tuple[_wire.Activity, str]]) -> None:
         jobs = [

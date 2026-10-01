@@ -100,6 +100,10 @@ class _Observed:
     code: str = ""
     failure: ReportedFailure = field(default_factory=ReportedFailure)
     region: str = ""
+    # A stream that said it was over, where nothing else it said names a finish.
+    ended: bool = False
+    # A reply cut short before it said all it had to: closed early, abandoned or cancelled.
+    cut: bool = False
 
     def set_reported(self, usage: Any) -> None:
         # A streamed reply states its counts more than once, each a running total, so the last one stated is the one that stands.
@@ -188,7 +192,9 @@ class _OpenAI(_Protocol):
             self._response_finish(status, field("incomplete_details"), field("error"), o)
 
     def _response_finish(self, status, incomplete, error, o):
-        if status == "incomplete":
+        if status == "completed":
+            o.ended = True
+        elif status == "incomplete":
             o.finish = _str(_dict(incomplete).get("reason")) or "incomplete"
         elif status == "failed":
             code = _str(_dict(error).get("code"))
@@ -283,6 +289,8 @@ class _Anthropic(_Protocol):
         elif kind == "message_delta":
             o.finish = _str(_dict(e.get("delta")).get("stop_reason")) or o.finish
             o.set_reported(e.get("usage"))
+        elif kind == "message_stop":
+            o.ended = True
         elif kind == "error":
             # A failure after the reply began, such as an overload part way through, arrives as an event rather than a status.
             error_type = _str(_dict(e.get("error")).get("type"))
@@ -418,6 +426,7 @@ class _Call:
         self.overflow = False
         self.line = bytearray()
         self.skipping = False
+        self.saw_done = False
 
     def responded(self, status: int, headers: Any) -> None:
         self.status = status
@@ -425,13 +434,10 @@ class _Call:
         content_type = _header(headers, "content-type")
         self.stream = content_type.startswith("text/event-stream")
         encoding = _header(headers, "content-encoding").strip().lower()
-        # The sdk decodes the body after it leaves the transport, so what passes through here is still compressed. gzip and deflate are decoded again for reading; anything else is delivered untouched and recorded without its counts.
-        if encoding in ("gzip", "x-gzip"):
-            self.decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
-        elif encoding == "deflate":
-            self.decoder = zlib.decompressobj()
-        elif encoding not in ("", "identity"):
-            self.unreadable = True
+        # The sdk decodes the body after it leaves the transport, so what passes through here is still compressed. It is decoded again for reading where this process can decode it; anything else is delivered untouched and recorded without its counts.
+        if encoding not in ("", "identity"):
+            self.decoder = _decoder_for(encoding)
+            self.unreadable = self.decoder is None
 
     def see(self, chunk: bytes) -> None:
         try:
@@ -484,25 +490,48 @@ class _Call:
         if not line.startswith(b"data:"):
             return
         data = line[5:].strip()
-        if not data or data == b"[DONE]":
+        if data == b"[DONE]":
+            self.saw_done = True
+            return
+        if not data:
             return
         event = _loads(data)
         if event is not None:
             self.protocol.event(event, self.o)
 
-    def failed_with(self, error: BaseException) -> None:
+    def unanswered(self, error: BaseException) -> None:
+        """A call the transport raised on before any reply arrived, which is a failure however it was raised."""
         self.o.failed = True
         self.o.code = error_code(error)
         self.o.failure = reported_error_for(error, self.billed_by)
-        self.finish()
+        self.finish(_COMPLETE)
 
-    def finish(self) -> None:
+    def failed_with(self, error: BaseException) -> None:
+        # The caller closing a stream it stopped reading is how a generator ends early, not a failure.
+        self.finish(_CLOSED if isinstance(error, GeneratorExit) else _FAILED, error)
+
+    def finish(self, end: str = "complete", error: BaseException | None = None) -> None:
+        """Records the call, once, however the reading of it stopped. A reply that said all it had to is complete whatever stopped the reading; one that did not was cut short, unless reading it failed for a reason of its own."""
         try:
             if self.done:
                 return
             self.done = True
-            self._read()
-            observed = self.o
+            try:
+                complete = self._read()
+            except Exception:
+                self.rp.recorder._note("panicked")
+                complete = True
+            o = self.o
+            if not o.failed and not complete:
+                if end in (_CLOSED, _ABANDONED):
+                    o.cut, o.code = True, _CANCELED
+                elif end == _FAILED and error is not None:
+                    o.code = error_code(error)
+                    o.cut = o.code in (_CANCELED, _DEADLINE)
+                    if not o.cut:
+                        o.failed = True
+                        o.failure = reported_error_for(error, self.billed_by)
+            observed = o
             self.whole = self.tail = self.line = bytearray()
             self.head = b""
         except Exception:
@@ -513,23 +542,83 @@ class _Call:
         except Exception:
             self.rp.recorder._note("panicked")
 
-    def _read(self) -> None:
-        if self.unreadable:
-            return
+    def _read(self) -> bool:
+        """Makes what was held into what the call said, and says whether the reply was whole."""
+        # The status first: a refusal is a refusal whether or not its body can be read.
         if self.status >= 400:
             self.o.failed = True
             self.o.failure = self.protocol.failure(_loads(bytes(self.whole)), self.status, self.headers, self.billed_by)
             self.o.code = code_of(self.o.failure) or f"HTTP_{self.status}"
-        elif self.stream:
+            return True
+        # A reply that cannot be decoded cannot be read for whether it ended, so it is taken as whole.
+        if self.unreadable:
+            return True
+        if self.stream:
             if self.line and not self.skipping:
                 self._read_line(bytes(self.line))
-        elif self.overflow:
+            return self.saw_done or self.o.ended or bool(self.o.finish)
+        if self.overflow:
             head, tail = self.head.decode("utf-8", "replace"), self.tail.decode("utf-8", "replace")
             self.protocol.reply(lambda name: _last_value(tail, name) if _last_value(tail, name) is not None else _first_value(head, name), self.o)
-        elif self.whole:
-            fields = _dict(_loads(bytes(self.whole)))
-            if fields:
+            return tail.rstrip().endswith("}")
+        if self.whole:
+            fields = _loads(bytes(self.whole))
+            if isinstance(fields, dict):
                 self.protocol.reply(fields.get, self.o)
+                return True
+        return False
+
+
+# How the reading of a reply stopped.
+_COMPLETE = "complete"
+_CLOSED = "closed"
+_ABANDONED = "abandoned"
+_FAILED = "failed"
+
+_CANCELED = "Canceled"
+_DEADLINE = "DeadlineExceeded"
+
+
+class _Decoder:
+    """A decompressor with zlib's `decompress(data, max_length)` shape, for one that has none."""
+
+    def __init__(self, decompress: Callable[[bytes], bytes]):
+        self._decompress = decompress
+
+    def decompress(self, data: bytes, max_length: int = 0) -> bytes:
+        out = self._decompress(data)
+        return out[:max_length] if max_length else out
+
+
+def _decoder_for(encoding: str) -> Any:
+    """A decoder for a reply's content encoding, from what this process already has installed, or None. Brotli and zstd are read only where their packages are present, since this library installs nothing into its host."""
+    try:
+        if encoding in ("gzip", "x-gzip"):
+            return zlib.decompressobj(16 + zlib.MAX_WBITS)
+        if encoding == "deflate":
+            return zlib.decompressobj()
+        if encoding == "br":
+            for name in ("brotli", "brotlicffi"):
+                try:
+                    module = importlib.import_module(name)
+                except ImportError:
+                    continue
+                decompressor = module.Decompressor()
+                return _Decoder(getattr(decompressor, "process", None) or decompressor.decompress)
+            return None
+        if encoding == "zstd":
+            try:
+                zstd = importlib.import_module("compression.zstd")
+                return zstd.ZstdDecompressor()
+            except ImportError:
+                pass
+            try:
+                return _Decoder(importlib.import_module("zstandard").ZstdDecompressor().decompressobj().decompress)
+            except ImportError:
+                return None
+    except Exception:
+        return None
+    return None
 
 
 def _header(headers: Any, name: str) -> str:
@@ -634,6 +723,8 @@ class _Transport:
         try:
             protocol, model = _recognise(request.method.upper(), request.url.path)
             if protocol is None:
+                # Counted, so a provider endpoint this version does not know shows up as a number rather than as calls nothing saw.
+                self._rp.recorder._note("unrecognised")
                 return request, None, None
             rp = self._rp
             component = current_component() or caller_of()
@@ -734,7 +825,7 @@ class ObservingTransport(_Transport):
         try:
             response = self._inner.handle_request(request)
         except BaseException as err:
-            call.failed_with(err)
+            call.unanswered(err)
             raise
         return self._observe(call, response, asynchronous=False)
 
@@ -761,7 +852,7 @@ class AsyncObservingTransport(_Transport):
         try:
             response = await self._inner.handle_async_request(request)
         except BaseException as err:
-            call.failed_with(err)
+            call.unanswered(err)
             raise
         return self._observe(call, response, asynchronous=True)
 
@@ -788,7 +879,7 @@ def _sync_stream(module: Any, inner: Any, call: _Call) -> Any:
                 self._inner = inner
                 self._call = call
                 # A reply the caller abandons without reading or closing is recorded when it is collected.
-                self._finalizer = weakref.finalize(self, call.finish)
+                self._finalizer = weakref.finalize(self, call.finish, _ABANDONED)
 
             def __iter__(self):
                 try:
@@ -798,13 +889,13 @@ def _sync_stream(module: Any, inner: Any, call: _Call) -> Any:
                 except BaseException as err:
                     self._call.failed_with(err)
                     raise
-                self._call.finish()
+                self._call.finish(_COMPLETE)
 
             def close(self) -> None:
                 try:
                     self._inner.close()
                 finally:
-                    self._call.finish()
+                    self._call.finish(_CLOSED)
 
         cls = _stream_classes[(module.__name__, False)] = Observed
     return cls(inner, call)
@@ -818,7 +909,7 @@ def _async_stream(module: Any, inner: Any, call: _Call) -> Any:
             def __init__(self, inner: Any, call: _Call):
                 self._inner = inner
                 self._call = call
-                self._finalizer = weakref.finalize(self, call.finish)
+                self._finalizer = weakref.finalize(self, call.finish, _ABANDONED)
 
             async def __aiter__(self):
                 try:
@@ -828,13 +919,13 @@ def _async_stream(module: Any, inner: Any, call: _Call) -> Any:
                 except BaseException as err:
                     self._call.failed_with(err)
                     raise
-                self._call.finish()
+                self._call.finish(_COMPLETE)
 
             async def aclose(self) -> None:
                 try:
                     await self._inner.aclose()
                 finally:
-                    self._call.finish()
+                    self._call.finish(_CLOSED)
 
         cls = _stream_classes[(module.__name__, True)] = Observed
     return cls(inner, call)
@@ -851,7 +942,11 @@ def record_observed(rp: "Reporter", call: _Call, o: _Observed) -> None:
     if o.reported:
         activity.usage_format = call.format
         activity.reported_usage = reported_quantities(o.reported)
-    if o.failed:
+    if o.cut:
+        # Cut short, and billed for whatever it had done: the counts it reached are on the record.
+        activity.status = _wire.STATUS_TRUNCATED
+        activity.error_code = o.code
+    elif o.failed:
         activity.status = _wire.STATUS_FAILED
         activity.error_code = o.code
         activity.error_format = o.failure.format

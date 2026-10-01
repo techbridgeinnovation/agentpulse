@@ -1,7 +1,9 @@
 """Runs of the real OpenAI Agents SDK against a provider on this machine. Skipped where the SDK is not installed."""
 
 import asyncio
+import gc
 import importlib.metadata
+import time
 
 import pytest
 
@@ -114,6 +116,8 @@ def test_an_agent_run_as_another_agent_s_tool_is_filed_under_itself_and_the_same
     activities = recorded(rp, sink)
     assert [a.sub_agent for a in activities if not a.tool] == ["boss", "researcher", "researcher", "boss"]
     assert sorted((a.sub_agent, a.tool) for a in activities if a.tool) == [("boss", "ask_researcher"), ("researcher", "lookup")]
+    # What a tool handed back is measured, never kept.
+    assert next((a.result_bytes, a.empty_result) for a in activities if a.tool == "lookup") == (len("SECRET RESULT"), False)
     assert len({a.request for a in activities}) == 1
     assert {a.session for a in activities} == {"conversation-7"}
     assert "SECRET" not in repr(sink.batches)
@@ -153,12 +157,83 @@ def test_hooks_that_fail_inside_are_counted_and_the_run_goes_on(provider):
     assert rp.recorder.stats().panicked >= 1
 
 
-def test_a_failed_model_call_reaches_the_caller_unchanged_and_is_not_recorded(provider):
+FAILURE = {"error": {"message": "SECRET QUOTED PROMPT", "type": "invalid_request_error", "code": "context_length_exceeded"}}
+
+
+def test_a_failed_model_call_reaches_the_caller_unchanged_and_is_recorded_as_failed_when_its_trace_ends(provider):
     rp, sink = reporter()
-    provider.json({"error": {"message": "SECRET QUOTED PROMPT", "type": "invalid_request_error", "code": "context_length_exceeded"}}, status=400)
+    provider.json(FAILURE, status=400)
     with pytest.raises(openai.BadRequestError):
         run(agents.Agent(name="helper", instructions="x", model=model(provider)), rp)
-    assert recorded(rp, sink) == []
+    [a] = recorded(rp, sink)
+    assert (a.model, a.sub_agent, a.status, a.error_code) == ("gpt-5", "helper", _wire.STATUS_FAILED, "Unknown")
+    assert "SECRET" not in repr(sink.batches)
+    assert rp.recorder.stats().panicked == 0
+
+
+def test_with_tracing_off_a_failed_model_call_is_recorded_when_its_run_is_released(provider):
+    rp, sink = reporter()
+    provider.json(FAILURE, status=400)
+    try:
+        run(agents.Agent(name="helper", instructions="x", model=model(provider)), rp, run_config=agents.RunConfig(tracing_disabled=True))
+    except openai.BadRequestError:
+        pass
+    gc.collect()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not recorded(rp, sink):
+        time.sleep(0.02)
+    [a] = recorded(rp, sink)
+    assert (a.status, a.error_code) == (_wire.STATUS_FAILED, "Unknown")
+
+
+def test_a_run_whose_context_takes_the_memory_of_a_released_one_is_neither_swept_by_it_nor_left_unwatched(monkeypatch):
+    from agentpulse import openai_agents
+
+    class Deferred(list):
+        put = list.append
+
+    swept = Deferred()
+    monkeypatch.setattr(openai_agents, "_sweeps", swept)
+    rp, sink = reporter()
+    hooks = rp.openai_agents_hooks()
+    agent = agents.Agent(name="helper", instructions="x", model="gpt-5")
+
+    class Response:
+        usage = None
+
+    async def main():
+        first = agents.RunContextWrapper(context=None)
+        identity = id(first)
+        await hooks.on_llm_start(first, agent, None, [])
+        await hooks.on_llm_end(first, agent, Response())
+        del first
+        gc.collect()
+        held, second = [], agents.RunContextWrapper(context=None)
+        while id(second) != identity and len(held) < 100000:
+            held.append(second)
+            second = agents.RunContextWrapper(context=None)
+        if id(second) != identity:
+            pytest.skip("the interpreter did not reuse the context's memory")
+        await hooks.on_llm_start(second, agent, None, [])
+        # The released run is swept while the next one's call is in flight.
+        for released, run in list(swept):
+            released._sweep(run)
+        await hooks.on_llm_end(second, agent, Response())
+        del second, held
+        gc.collect()
+
+    asyncio.run(main())
+    assert [(a.status, a.error_code) for a in recorded(rp, sink)] == [(_wire.STATUS_OK, "")] * 2
+    assert len(swept) == 2
+
+
+def test_the_model_a_run_configuration_names_wins_over_the_agent_s(provider):
+    rp, sink = reporter()
+    provider.json(response(1))
+    config = agents.RunConfig(model=model(provider, name="gpt-5-mini"))
+    asyncio.run(agents.Runner.run(agents.Agent(name="helper", instructions="x", model="gpt-5"), "hi", hooks=rp.openai_agents_hooks(run_config=config), run_config=config))
+    [a] = recorded(rp, sink)
+    assert a.model == "gpt-5-mini"
 
 
 def test_the_model_and_provider_come_from_how_the_agent_names_its_model():

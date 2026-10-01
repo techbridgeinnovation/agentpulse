@@ -84,7 +84,9 @@ app = App(name="research", root_agent=agent, plugins=[
 ])
 ```
 
-It records one activity per model call and one per tool call. The turn, the session, the user and the agent come from the framework's own context; a request or person set with `scope` wins, since it is what the product's sign-in put there. A streamed call is recorded once, from its final response, keeping the model its chunks reported, which the framework drops from the response it assembles. A tool that reports its own failure in its result rather than raising is judged by `tool_failed(tool, result) -> (failed, code)`, because only the product knows the shape of its tools' answers.
+It records one activity per model call and one per tool call. The turn, the session, the user and the agent come from the framework's own context; a request or person set with `scope` wins, since it is what the product's sign-in put there. A streamed call is recorded once, from its final response, keeping the model its chunks reported, which the framework drops from the response it assembles. A tool that reports its own failure in its result rather than raising is judged by `tool_failed(tool, result) -> (failed, code)`, because only the product knows the shape of its tools' answers. What a tool handed back is measured in `result_bytes`, from the JSON it is sent to the model as, and never kept.
+
+A call is recorded once however other plugins answer it. The framework stops at the first plugin that answers a model or tool error, so the plugin also watches the plugin manager's error dispatch, and the answer some plugin or callback gives for a failure is not recorded as a second, successful call. A failure part way through a stream keeps the counts and the model its chunks had reported. A call the framework never finishes, because the run was cancelled or its reader stopped reading, is recorded as `TRUNCATED` with the code `Canceled` and the counts it had reached, when the task that made it ends, when its run ends, when the next call in the same place begins, or when the runner closes the plugin. A run nested inside a tool releases the running total only of a request it opened itself. An agent run as a tool with `include_plugins=False` runs without this plugin, and its calls are not recorded.
 
 On a governed reporter each model call asks governance first. A DENY returns `denied_message` as the model's reply, so the framework never calls the model and the user reads the product's own words; a DOWNGRADE changes the model the framework sends, unless the replacement is another provider's.
 
@@ -121,7 +123,7 @@ agent.invoke(inputs, config={"callbacks": [reporter.langchain_handler()], "confi
 
 Each call is filed under the agent LangChain names for it (`create_agent(name=...)`), the LangGraph thread as the session, and the outermost run as the request, unless `agentpulse.scope` names them. A graph built without an agent is filed under the node the call ran in.
 
-LangChain restates every chat model's usage as `usage_metadata`, and Gemini's reaches a handler in no other form, so the counts are recorded in LangChain's convention, `LANGCHAIN`: the input count holds both the cache read and the cache write, and the output count holds the reasoning. Who served the call is LangChain's `ls_provider`.
+LangChain restates every chat model's usage as `usage_metadata`, and Gemini's reaches a handler in no other form, so the counts are recorded in LangChain's convention, `LANGCHAIN`: the input count holds both the cache read and the cache write, and the output count holds the reasoning. Who served the call is LangChain's `ls_provider`. A completion model has no message to carry them and states the provider's own counts on its result, which are recorded as `OPENAI_CHAT` where they are in OpenAI's shape and unread otherwise. A stream that fails part way is recorded with the counts it had reached, and a call cancelled by its caller as `TRUNCATED` with the code `Canceled`. What a tool handed back is measured in `result_bytes`, never kept.
 
 A governed handler asks before each model call and refuses one by raising `SpendDenied`, so the call is never sent. A handler cannot change the model a call uses, so a DOWNGRADE lets the call through as asked and is counted in `stats()` as not applied.
 
@@ -140,7 +142,11 @@ An agent run as another agent's tool is a run of its own and gets the hooks only
 
 The SDK restates every model's usage in the shape of OpenAI's Responses api, recorded as `OPENAI_RESPONSES`, and names the model the agent asked for rather than the version that answered. A model routed through LiteLLM, `litellm/<provider>/<model>`, is billed under that provider.
 
-A governed reporter's hooks refuse a call by raising `SpendDenied` before it is sent. A DOWNGRADE lets the call through as asked and is counted as not applied. The SDK tells hooks nothing about a model call that fails, so a failed call is not recorded; its exception reaches the caller as usual.
+The SDK does not show hooks the run's configuration, so a model set on `RunConfig` is read only where the same configuration is given to the hooks, `reporter.openai_agents_hooks(run_config=config)`. What a tool handed back is measured in `result_bytes`, never kept.
+
+A governed reporter's hooks refuse a call by raising `SpendDenied` before it is sent. A DOWNGRADE lets the call through as asked and is counted as not applied.
+
+The SDK tells hooks nothing about a model call that fails, and its exception reaches the caller as usual. A call whose start was seen and whose end never came is recorded as `FAILED` with the code `Unknown`, since no code was shown, when the run's trace ends, through a trace processor the hooks add once per process. Where tracing is off, or the product has replaced the SDK's trace processors since the hooks were built, it is recorded when the run's context is released instead, which waits on the garbage collector and on anything still holding the run, such as a log record of its exception. A cancelled run is recorded the same way, because the hooks cannot tell it from a failure.
 
 ## Recording from the client
 
@@ -153,11 +159,11 @@ client = Anthropic(http_client=reporter.anthropic_http_client())
 client = genai.Client(http_options=reporter.genai_http_options())
 ```
 
-Each sits in the client's HTTP transport and recognises a model call by its URL: Chat Completions and Responses, Messages native and through Vertex, and generate calls on the Gemini api and Vertex. Anything else the client does passes through unrecorded. What is read is the reply as the caller reads it, and only the model, the counts, the finish and the failure; every byte reaches the caller as it arrived. The part of the product that made the call is the component named on the context, or else the first function outside this library, the sdks and their transports.
+Each sits in the client's HTTP transport and recognises a model call by its URL: Chat Completions and Responses, Messages native and through Vertex, and generate calls on the Gemini api and Vertex. Anything else the client does passes through unrecorded and is counted in `stats().unrecognised`, so a model endpoint this version does not know shows up as a number. What is read is the reply as the caller reads it, and only the model, the counts, the finish and the failure; every byte reaches the caller as it arrived. The part of the product that made the call is the component named on the context, or else the first function outside this library, the sdks and their transports.
 
 The HTTP client is built from the sdk's own default client, so the sdk's timeouts and connection limits still apply. For Gemini, giving the async transport is also what keeps the sdk on httpx rather than switching to aiohttp, which this could not see. `reporter.transport(inner)` wraps any other httpx or httpx2 transport the same way.
 
-A reply compressed with anything but gzip or deflate is delivered untouched and recorded without its counts. A streamed chat reports its counts only when the request asks for them with `stream_options={"include_usage": True}`; this does not add that to a request, because it changes the stream the caller reads. A call routed through a proxy the HTTP client mounts from the environment does not pass through this transport.
+A reply compressed with gzip or deflate is read; one compressed with brotli or zstd is read where the `brotli`, `brotlicffi` or `zstandard` package is installed, or on Python 3.14 for zstd. Any other is delivered untouched and recorded without its counts, and a refusal is a failure whether its body can be read or not. A reply the caller stops reading before it says it is over, by closing it or leaving it unread, is recorded as `TRUNCATED` with the code `Canceled` and the counts it had reached. A streamed chat reports its counts only when the request asks for them with `stream_options={"include_usage": True}`; this does not add that to a request, because it changes the stream the caller reads. A call routed through a proxy the HTTP client mounts from the environment does not pass through this transport.
 
 On a governed reporter every call through the client asks governance first. A refused call is never sent: an OpenAI or Anthropic client raises its own permission error, marked not to be retried, and a Gemini client raises `SpendDenied`, and `agentpulse.denied(err)` recognises all three. A DOWNGRADE is applied to the outbound call by rewriting the model where the request names it, in the path or in the JSON body and nothing else in the body, unless the replacement is served by another provider, in which case the call goes ahead as asked. `stats()` counts both in `downgrade_applied` and `downgrade_not_applied`.
 
@@ -250,6 +256,10 @@ DEFINE=~/alis.build/techbridge/define python scripts/wire_fixtures.py
 That script needs `grpcio-tools` and `googleapis-common-protos`. The library does not.
 
 **HTTP 200 does not mean a call succeeded.** gRPC-web states the outcome in a trailer frame, and a refusal before any reply states it in the headers, both under 200. A call succeeds only when a status of zero was read from one of them.
+
+**A batch is tried again only after a transient failure,** the gateway or metering unavailable, overloaded, aborted or past its deadline, at most twice more with a growing pause and all within `Config.send_timeout`. Every attempt carries the same request id, which is what lets metering store a batch once however many attempts reached it. A refused key or a malformed batch fails the same way every time and is never retried.
+
+**Nothing taken from the queue goes uncounted.** A batch lost to a fault in delivery is counted as `failed`, what is still queued when `close` runs out of time as `dropped`, and a record whose price cannot be worked out is sent unpriced.
 
 **The queue cannot be made unbounded,** and the worker takes each batch off the queue only as it sends it, so the bound holds while a slow destination is waited on.
 

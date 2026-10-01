@@ -1,6 +1,7 @@
 """The plugin in a real Agent Development Kit run, with a scripted model in place of a provider. Skipped where the framework is not installed."""
 
 import asyncio
+import contextlib
 import importlib.metadata
 
 import pytest
@@ -12,6 +13,7 @@ from google.adk.agents.run_config import RunConfig, StreamingMode  # noqa: E402
 from google.adk.apps import App  # noqa: E402
 from google.adk.models.base_llm import BaseLlm  # noqa: E402
 from google.adk.models.llm_response import LlmResponse  # noqa: E402
+from google.adk.plugins.base_plugin import BasePlugin  # noqa: E402
 from google.adk.runners import InMemoryRunner  # noqa: E402
 from google.genai import types  # noqa: E402
 
@@ -67,7 +69,7 @@ class Answers:
         return self.response
 
 
-def run(replies, *, decider=None, streaming=False, prompt="SECRET PROMPT", scope=None, plugin_options=None, tools=(lookup, broken), model=None):
+def run(replies, *, decider=None, streaming=False, prompt="SECRET PROMPT", scope=None, plugin_options=None, tools=(lookup, broken), model=None, ahead=(), agent_options=None):
     sink = MemorySink()
     rec = agentpulse.Recorder(agentpulse.Config(sinks=[sink], exit_timeout=0, flush_every=60))
     rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=AGENT, service="research-agent", skill="research"))
@@ -75,8 +77,8 @@ def run(replies, *, decider=None, streaming=False, prompt="SECRET PROMPT", scope
         rp = rp.governed(decider, cache_ttl=0)
     model = model or Scripted(model="gemini-2.5-pro")
     model.replies, model.asked = list(replies), []
-    agent = LlmAgent(name="researcher", model=model, instruction="Answer.", tools=list(tools))
-    app = App(name="probe", root_agent=agent, plugins=[rp.adk_plugin(**(plugin_options or {}))])
+    agent = LlmAgent(name="researcher", model=model, instruction="Answer.", tools=list(tools), **(agent_options or {}))
+    app = App(name="probe", root_agent=agent, plugins=[*ahead, rp.adk_plugin(**(plugin_options or {}))])
     events = []
 
     async def main():
@@ -258,3 +260,272 @@ def test_a_model_call_on_vertex_records_the_client_location():
 
     sink, _, _, _, _ = run([text("done")])
     assert sink.activities[0].region == ""
+
+
+class Answering(BasePlugin):
+    """A plugin registered ahead of ours that answers every model and tool error, which the framework then shows no plugin behind it."""
+
+    def __init__(self):
+        super().__init__(name="answering")
+
+    async def on_model_error_callback(self, *, callback_context, llm_request, error):
+        return text("fallback")
+
+    async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error):
+        return {"error": "handled"}
+
+
+def test_a_model_error_another_plugin_answers_first_is_one_failed_record():
+    sink, rp, _, _, error = run([TimeoutError("SECRET")], ahead=[Answering()])
+    assert error is None
+    [a] = sink.activities
+    assert (a.status, a.error_code, a.model) == (_wire.STATUS_FAILED, "DeadlineExceeded", "gemini-2.5-pro")
+    assert rp.recorder.stats().panicked == 0
+
+
+def test_a_model_error_the_agent_answers_after_ours_is_recorded_once():
+    sink, _, _, _, error = run([TimeoutError("SECRET")], agent_options={"on_model_error_callback": lambda callback_context, llm_request, error: text("fallback")})
+    assert error is None
+    [a] = sink.activities
+    assert (a.status, a.error_code) == (_wire.STATUS_FAILED, "DeadlineExceeded")
+
+
+def test_a_tool_error_another_plugin_answers_first_is_one_failed_record():
+    sink, _, _, _, error = run([calls("broken", city="x"), text("done")], ahead=[Answering()])
+    assert error is None
+    [tool] = [a for a in sink.activities if a.tool]
+    assert (tool.tool, tool.status, tool.error_code) == ("broken", _wire.STATUS_FAILED, "Unknown")
+    assert "SECRET" not in repr(sink.batches)
+
+
+def test_a_tool_error_the_agent_answers_after_ours_is_recorded_once():
+    sink, _, _, _, error = run([calls("broken", city="x"), text("done")], agent_options={"on_tool_error_callback": lambda tool, args, tool_context, error: {"error": "handled"}})
+    assert error is None
+    [tool] = [a for a in sink.activities if a.tool]
+    assert (tool.status, tool.error_code, tool.result_bytes, tool.empty_result) == (_wire.STATUS_FAILED, "Unknown", 0, False)
+
+
+def test_a_model_that_fails_part_way_through_a_stream_keeps_the_counts_and_the_model_it_served():
+    partial = LlmResponse(content=types.Content(role="model", parts=[types.Part(text="do")]), partial=True, model_version="gemini-2.5-pro-002", usage_metadata=USAGE)
+
+    class FailsMidStream(Scripted):
+        async def generate_content_async(self, llm_request, stream=False):
+            yield partial
+            raise ConnectionError("SECRET")
+
+    sink, _, _, _, error = run([], streaming=True, model=FailsMidStream(model="gemini-2.5-pro"))
+    assert isinstance(error, ConnectionError)
+    [a] = sink.activities
+    assert (a.status, a.model, usage(a)["totalTokenCount"]) == (_wire.STATUS_FAILED, "gemini-2.5-pro-002", 12)
+    assert "SECRET" not in repr(sink.batches)
+
+
+def _cancelled(model, tools=(lookup, broken), streaming=False):
+    """A run cancelled while the model or a tool is still working, as a server cancels the request of a caller that hung up."""
+    sink = MemorySink()
+    rec = agentpulse.Recorder(agentpulse.Config(sinks=[sink], exit_timeout=0, flush_every=60))
+    rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=AGENT, service="research-agent"))
+    agent = LlmAgent(name="researcher", model=model, instruction="Answer.", tools=list(tools))
+    app = App(name="probe", root_agent=agent, plugins=[rp.adk_plugin()])
+
+    async def main():
+        runner = InMemoryRunner(app=app)
+        session = await runner.session_service.create_session(app_name="probe", user_id="u")
+        message = types.Content(role="user", parts=[types.Part(text="hi")])
+        config = RunConfig(streaming_mode=StreamingMode.SSE) if streaming else RunConfig()
+
+        async def consume():
+            async for _ in runner.run_async(user_id="u", session_id=session.id, new_message=message, run_config=config):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.3)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.05)
+
+    asyncio.run(main())
+    rec.flush(timeout=2)
+    return sink, rp
+
+
+class Hangs(Scripted):
+    async def generate_content_async(self, llm_request, stream=False):
+        yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="do")]), partial=True, model_version="gemini-2.5-pro-002", usage_metadata=USAGE)
+        await asyncio.sleep(30)
+        yield text("never")
+
+
+def test_a_cancelled_model_call_is_recorded_as_cut_short_with_what_it_had_used():
+    sink, rp = _cancelled(Hangs(model="gemini-2.5-pro"), streaming=True)
+    [a] = sink.activities
+    assert (a.status, a.error_code, a.model, usage(a)["totalTokenCount"]) == (_wire.STATUS_TRUNCATED, "Canceled", "gemini-2.5-pro-002", 12)
+    assert rp.recorder.stats().panicked == 0
+
+
+async def slow(city: str) -> dict:
+    """Takes its time."""
+    await asyncio.sleep(30)
+    return {}
+
+
+def test_a_cancelled_tool_call_is_recorded_as_cut_short():
+    model = Scripted(model="gemini-2.5-pro")
+    model.replies = [calls("slow", city="x")]
+    sink, _ = _cancelled(model, tools=(slow,))
+    model_call, tool = sink.activities
+    assert model_call.status == _wire.STATUS_OK
+    assert (tool.tool, tool.status, tool.error_code) == ("slow", _wire.STATUS_TRUNCATED, "Canceled")
+
+
+def empty(city: str) -> dict:
+    """Finds nothing."""
+    return {}
+
+
+def test_a_tool_result_is_measured_and_never_kept():
+    sink, _, _, _, _ = run([calls("lookup", city="Nairobi"), calls("empty", city="x"), text("done")], tools=(lookup, empty))
+    found, nothing = [a for a in sink.activities if a.tool]
+    assert (found.result_bytes, found.empty_result) == (len(b'{"success":true}'), False)
+    assert (nothing.result_bytes, nothing.empty_result) == (0, True)
+    assert "success" not in repr(sink.batches)
+
+
+def test_a_run_nested_inside_a_tool_does_not_release_the_total_of_the_turn_around_it():
+    rec = agentpulse.Recorder(agentpulse.Config(exit_timeout=0))
+    rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=AGENT, service="s"))
+    released = []
+    rp.finish_request = released.append
+    plugin = rp.adk_plugin()
+    outer, inner = type("Run", (), {"invocation_id": "e-outer"})(), type("Run", (), {"invocation_id": "e-inner"})()
+
+    async def turn():
+        with agentpulse.scope(request="req-1"):
+            await plugin.before_run_callback(invocation_context=outer)
+            await plugin.before_run_callback(invocation_context=inner)
+            await plugin.after_run_callback(invocation_context=inner)
+            assert released == []
+            await plugin.after_run_callback(invocation_context=outer)
+        assert released == ["req-1"]
+
+    asyncio.run(turn())
+
+
+def test_a_run_reported_ending_twice_lets_go_of_its_turn_once():
+    rec = agentpulse.Recorder(agentpulse.Config(exit_timeout=0))
+    rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=AGENT, service="s"))
+    released = []
+    rp.finish_request = released.append
+    plugin = rp.adk_plugin()
+    outer, inner = type("Run", (), {"invocation_id": "e-outer"})(), type("Run", (), {"invocation_id": "e-inner"})()
+
+    async def turn():
+        with agentpulse.scope(request="req-1"):
+            await plugin.before_run_callback(invocation_context=outer)
+            await plugin.before_run_callback(invocation_context=inner)
+            # The framework reports a run whose after-run callbacks failed as failed as well.
+            await plugin.after_run_callback(invocation_context=inner)
+            await plugin.on_run_error_callback(invocation_context=inner, error=RuntimeError())
+            assert released == []
+            await plugin.after_run_callback(invocation_context=outer)
+        assert released == ["req-1"]
+
+    asyncio.run(turn())
+
+
+class _RenamedTally:
+    """The framework's tally of model calls under names the plugin does not know."""
+
+    def increment_and_enforce_llm_calls_limit(self, run_config):
+        pass
+
+
+def _rename_the_tally(monkeypatch):
+    from google.adk.agents.invocation_context import InvocationContext
+
+    monkeypatch.setattr(InvocationContext.__private_attributes__["_invocation_cost_manager"], "default_factory", _RenamedTally)
+
+
+def test_a_framework_without_the_tally_the_plugin_reads_still_runs_and_records(monkeypatch):
+    _rename_the_tally(monkeypatch)
+    sink, rp, _, _, error = run([calls("lookup", city="Nairobi"), TimeoutError("SECRET")], agent_options={"on_model_error_callback": lambda callback_context, llm_request, error: text("fallback")})
+    assert error is None
+    assert [(a.tool, a.status, a.error_code) for a in sink.activities] == [("", _wire.STATUS_OK, ""), ("lookup", _wire.STATUS_OK, ""), ("", _wire.STATUS_FAILED, "DeadlineExceeded")]
+    assert rp.recorder.stats().panicked == 0
+
+
+def test_without_the_tally_a_cancelled_call_is_still_recorded_once(monkeypatch):
+    _rename_the_tally(monkeypatch)
+    sink, rp = _cancelled(Hangs(model="gemini-2.5-pro"), streaming=True)
+    assert [(a.status, a.error_code) for a in sink.activities] == [(_wire.STATUS_TRUNCATED, "Canceled")]
+    assert rp.recorder.stats().panicked == 0
+
+
+def _plugin():
+    sink = MemorySink()
+    rec = agentpulse.Recorder(agentpulse.Config(sinks=[sink], exit_timeout=0, flush_every=60))
+    rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=AGENT, service="s"))
+    return sink, rp, rp.adk_plugin()
+
+
+def test_a_manager_without_the_error_dispatch_the_plugin_wraps_is_left_as_it_is():
+    _, rp, plugin = _plugin()
+    manager = type("Manager", (), {})()
+    plugin._watch(manager)
+    assert vars(manager) == {} and rp.recorder.stats().panicked == 0
+
+
+def test_a_manager_that_cannot_be_wrapped_costs_the_call_neither_its_record_nor_its_spend_check():
+    class Refuses:
+        def __contains__(self, item):
+            raise TypeError()
+
+    sink, rp, plugin = _plugin()
+    rp = rp.governed(Answers(_wire.DECISION_DENY), cache_ttl=0)
+    plugin = rp.adk_plugin()
+    plugin._watched = Refuses()
+    model = Scripted(model="gemini-2.5-pro")
+    model.replies, model.asked = [text("never")], []
+    app = App(name="probe", root_agent=LlmAgent(name="researcher", model=model, instruction="Answer."), plugins=[plugin])
+
+    async def main():
+        runner = InMemoryRunner(app=app)
+        session = await runner.session_service.create_session(app_name="probe", user_id="u")
+        async for _ in runner.run_async(user_id="u", session_id=session.id, new_message=types.Content(role="user", parts=[types.Part(text="hi")])):
+            pass
+
+    asyncio.run(main())
+    rp.recorder.flush(timeout=2)
+    assert model.asked == []
+    assert [a.status for a in sink.activities] == [_wire.STATUS_DENIED]
+    assert rp.recorder.stats().panicked >= 1
+
+
+def test_one_plugin_on_two_runners_that_share_a_manager_wraps_it_once():
+    sink = MemorySink()
+    rec = agentpulse.Recorder(agentpulse.Config(sinks=[sink], exit_timeout=0, flush_every=60))
+    rp = agentpulse.Reporter(rec, agentpulse.Attribution(agent=AGENT, service="s"))
+    plugin = rp.adk_plugin()
+    model = Scripted(model="gemini-2.5-pro")
+    model.replies = [TimeoutError("SECRET"), TimeoutError("SECRET")]
+    agent = LlmAgent(name="researcher", model=model, instruction="Answer.", on_model_error_callback=lambda callback_context, llm_request, error: text("fallback"))
+    app = App(name="probe", root_agent=agent, plugins=[Answering(), plugin])
+
+    async def main():
+        first = InMemoryRunner(app=app)
+        second = InMemoryRunner(app=app)
+        second.plugin_manager = first.plugin_manager
+        for runner in (first, second):
+            session = await runner.session_service.create_session(app_name="probe", user_id="u")
+            async for _ in runner.run_async(user_id="u", session_id=session.id, new_message=types.Content(role="user", parts=[types.Part(text="hi")])):
+                pass
+        return first.plugin_manager
+
+    manager = asyncio.run(main())
+    rec.flush(timeout=2)
+    assert [(a.status, a.error_code) for a in sink.activities] == [(_wire.STATUS_FAILED, "DeadlineExceeded")] * 2
+    # Wrapped once: the instance's method wraps the class's directly.
+    assert manager.run_on_model_error_callback.__closure__ is not None
+    inner = [c.cell_contents for c in manager.run_on_model_error_callback.__closure__ if callable(c.cell_contents) and getattr(c.cell_contents, "__self__", None) is manager]
+    assert len(inner) == 1

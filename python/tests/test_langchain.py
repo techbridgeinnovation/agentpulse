@@ -253,3 +253,50 @@ def test_an_async_call_is_recorded_under_the_scope_it_was_made_in(provider):
     asyncio.run(run())
     [a] = recorded(rp, sink)
     assert (a.request, a.project) == ("req-async", "p1")
+
+
+def test_a_completion_model_is_recorded_with_the_counts_on_its_result(provider):
+    rp, sink = reporter()
+    provider.json({"id": "t1", "object": "text_completion", "created": 1, "model": "gpt-3.5-turbo-instruct-0914", "choices": [{"text": "SECRET ANSWER", "index": 0, "finish_reason": "length", "logprobs": None}], "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}})
+    llm = langchain_openai.OpenAI(model="gpt-3.5-turbo-instruct", api_key="k", base_url=provider.url + "/v1", max_retries=0)
+    assert llm.invoke("SECRET PROMPT", config={"callbacks": [rp.langchain_handler()]}) == "SECRET ANSWER"
+    [a] = recorded(rp, sink)
+    assert (a.model, a.usage_format, usage(a), a.status) == ("gpt-3.5-turbo-instruct", "OPENAI_CHAT", {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}, _wire.STATUS_TRUNCATED)
+    assert "SECRET" not in repr(sink.batches)
+
+
+def test_a_stream_that_fails_part_way_is_recorded_with_the_counts_it_had_reached(provider):
+    openai = pytest.importorskip("openai")
+    rp, sink = reporter()
+    chunk = {"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "gpt-5-2026-08-01"}
+    provider.sse(
+        [
+            {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "SECRET"}, "finish_reason": None}]},
+            {**chunk, "choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}},
+            {"error": {"message": "SECRET QUOTED PROMPT", "type": "server_error", "code": "overloaded"}},
+        ],
+        done=False,
+    )
+    with pytest.raises(openai.APIError):
+        list(openai_model(provider, stream_usage=True).stream("x", config={"callbacks": [rp.langchain_handler()]}))
+    [a] = recorded(rp, sink)
+    assert a.status == _wire.STATUS_FAILED and usage(a)["input_tokens"] == 12
+    assert "SECRET" not in repr(sink.batches)
+
+
+def test_a_tool_result_is_measured_by_what_the_model_is_handed_and_never_kept():
+    import uuid
+
+    from langchain_core.messages import ToolMessage
+
+    rp, sink = reporter()
+    handler = rp.langchain_handler()
+    for output in (ToolMessage(content="SECRET RESULT", tool_call_id="t1"), "", {"found": "SECRET"}):
+        run_id = uuid.uuid4()
+        handler.on_tool_start({"name": "lookup"}, "SECRET ARGUMENT", run_id=run_id)
+        handler.on_tool_end(output, run_id=run_id)
+    message, empty, mapping = recorded(rp, sink)
+    assert (message.result_bytes, message.empty_result) == (len("SECRET RESULT"), False)
+    assert (empty.result_bytes, empty.empty_result) == (0, True)
+    assert (mapping.result_bytes, mapping.empty_result) == (len('{"found":"SECRET"}'), False)
+    assert "SECRET" not in repr(sink.batches)

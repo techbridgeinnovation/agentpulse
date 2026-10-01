@@ -46,7 +46,7 @@ _BLOCKED = {
 }  # fmt: skip
 
 # The reasons that mean a limit was reached. A call cut short did the work it was paid for, which is what TRUNCATED says.
-_TRUNCATED = {"MAX_TOKENS", "LENGTH", "MAX_OUTPUT_TOKENS"}
+_TRUNCATED = {"MAX_TOKENS", "LENGTH", "MAX_OUTPUT_TOKENS", "MODEL_CONTEXT_WINDOW_EXCEEDED"}
 
 
 @dataclass
