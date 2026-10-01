@@ -6,7 +6,8 @@ import { scope } from "../src/context.ts";
 import { RpcError } from "../src/gateway.ts";
 import { Recorder } from "../src/recorder.ts";
 import type { Sink } from "../src/sinks.ts";
-import type { Activity } from "../src/wire.ts";
+import { VERSION } from "../src/version.ts";
+import { type Activity, anyLosses, type RecorderLosses } from "../src/wire.ts";
 import { MemorySink } from "./fakes.ts";
 
 /** A sink that refuses with each code in turn, then accepts, remembering the request id of every attempt. */
@@ -166,4 +167,82 @@ test("closing removes the exit listeners, however many recorders there were", as
   await a.close();
   await b.close();
   assert.deepEqual([process.listenerCount("SIGTERM"), process.listenerCount("SIGINT"), process.listenerCount("beforeExit")], before);
+});
+
+/** Remembers the losses each delivered batch carried, and refuses while told to. */
+class LossCarrier implements Sink {
+  readonly name = "losses";
+  readonly carriesLosses = true;
+  readonly carried: (RecorderLosses | undefined)[] = [];
+  readonly attempts: (RecorderLosses | undefined)[] = [];
+  codes: number[] = [];
+  fail = false;
+  async send(_activities: Activity[], _workspace: string, _timeoutMs: number, _requestId?: string, losses?: RecorderLosses): Promise<void> {
+    this.attempts.push(losses);
+    const code = this.codes.shift();
+    if (code !== undefined) throw new RpcError(code);
+    if (this.fail) throw new Error("refused");
+    this.carried.push(anyLosses(losses) ? losses : undefined);
+  }
+}
+
+const counts = (l: RecorderLosses | undefined): unknown[] => [l?.dropped, l?.undelivered, l?.panicked];
+
+test("a dropped record is reported on the next batch delivered", async () => {
+  const sink = new LossCarrier();
+  const rec = new Recorder({ sinks: [sink], queueSize: 1, exitTimeoutMs: 0 });
+  rec.record({ model: "a" });
+  rec.record({ model: "dropped" });
+  assert.equal(await rec.flush(1000), true);
+  assert.deepEqual(counts(sink.carried[0]), [1, 0, 0]);
+  assert.equal(sink.carried[0]?.recorder, `typescript/${VERSION}`);
+  await rec.close();
+});
+
+test("losses survive a failed batch and are reported once", async () => {
+  const sink = new LossCarrier();
+  const rec = new Recorder({ sinks: [sink], queueSize: 1, exitTimeoutMs: 0 });
+  rec.record({ model: "a" });
+  rec.record({ model: "dropped" });
+  sink.fail = true;
+  await rec.flush(1000);
+  assert.deepEqual(sink.carried, []);
+
+  sink.fail = false;
+  rec.note("panicked");
+  rec.record({ model: "b" });
+  await rec.flush(1000);
+  // The failed batch's own record is undelivered, and the drop it carried comes forward.
+  assert.deepEqual(counts(sink.carried[0]), [1, 1, 1]);
+
+  rec.record({ model: "c" });
+  await rec.flush(1000);
+  assert.equal(sink.carried[1], undefined);
+  const stats = rec.stats();
+  assert.deepEqual([stats.dropped, stats.failed, stats.panicked], [1, 1, 1]);
+  await rec.close();
+});
+
+test("a recorder that lost nothing reports no losses", async () => {
+  const sink = new LossCarrier();
+  const rec = new Recorder({ sinks: [sink], exitTimeoutMs: 0 });
+  rec.record({ model: "a" });
+  await rec.flush(1000);
+  assert.deepEqual(sink.carried, [undefined]);
+  await rec.close();
+});
+
+test("a retried batch carries the same losses, and batches sent at once never report one twice", async () => {
+  const sink = new LossCarrier();
+  sink.codes = [14];
+  const rec = new Recorder({ sinks: [sink], exitTimeoutMs: 0 });
+  rec.note("dropped", 3);
+  scope({ workspace: "w1" }, () => rec.record({ model: "a" }));
+  scope({ workspace: "w2" }, () => rec.record({ model: "b" }));
+  await rec.flush(5000);
+  const reported = sink.carried.filter((l) => l !== undefined).map((l) => l.dropped);
+  assert.deepEqual(reported, [3]);
+  const withDrops = sink.attempts.filter((l) => anyLosses(l));
+  assert.ok(withDrops.length >= 1 && withDrops.every((l) => l?.dropped === 3));
+  await rec.close();
 });

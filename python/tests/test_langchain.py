@@ -300,3 +300,39 @@ def test_a_tool_result_is_measured_by_what_the_model_is_handed_and_never_kept():
     assert (empty.result_bytes, empty.empty_result) == (0, True)
     assert (mapping.result_bytes, mapping.empty_result) == (len('{"found":"SECRET"}'), False)
     assert "SECRET" not in repr(sink.batches)
+
+
+def test_a_component_and_skill_set_on_the_request_win_over_the_agent_and_a_tool_keeps_its_own(provider):
+    langchain_agents = pytest.importorskip("langchain.agents")
+    from langchain_core.tools import tool
+
+    rp, sink = reporter()
+
+    @tool
+    def lookup(q: str) -> str:
+        """Look something up."""
+        return "SECRET RESULT"
+
+    agent = langchain_agents.create_agent(openai_model(provider), tools=[lookup], name="researcher")
+    for reply in (chat(tool="lookup"), chat()):
+        provider.json(reply)
+    with agentpulse.scope(component="triage", skill="search"):
+        agent.invoke({"messages": [{"role": "user", "content": "SECRET PROMPT"}]}, config={"callbacks": [rp.langchain_handler()]})
+    activities = recorded(rp, sink)
+    assert [a.caller_component for a in activities if not a.tool] == ["triage", "triage"]
+    assert [a.caller_component for a in activities if a.tool] == ["tool:lookup"]
+    assert {a.skill for a in activities} == {"search"}
+
+
+def test_a_user_that_is_an_email_is_neither_recorded_nor_asked_about(provider):
+    answers = Answers(_wire.DECISION_ALLOW)
+    rp, sink = reporter(answers)
+    provider.json(chat())
+    with agentpulse.scope(user=agentpulse.User(id="ada@example.com", name="Ada")):
+        openai_model(provider).invoke("x", config={"callbacks": [rp.langchain_handler()]})
+    [asked] = answers.asked
+    [a] = recorded(rp, sink)
+    assert (asked.user, a.user) == ("", "")
+    assert sink.named == []
+    stats = rp.recorder.stats()
+    assert (stats.email_users_refused, stats.names_failed) == (1, 1)

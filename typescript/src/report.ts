@@ -2,7 +2,7 @@
 //
 // Neither a model call nor a tool call states a cost. A service says what happened and the server prices it, which is what stops an agent asserting what its own work was worth.
 
-import { currentScope, workspaceName } from "./context.ts";
+import { currentScope, looksLikeEmail, workspaceName } from "./context.ts";
 import { embeddingMiddleware, type EmbeddingMiddleware, middleware, type Middleware, type MiddlewareOptions, type Tools, tools } from "./aisdk.ts";
 import { blockedFinish, errorCode, truncatedFinish } from "./failure.ts";
 import { ConfigError, Gateway } from "./gateway.ts";
@@ -20,7 +20,7 @@ export interface Attribution {
   service: string;
   /** Who bills for the calls, e.g. "VERTEX_AI" or "OPENAI". Any string is sent as written. */
   billedBy?: string;
-  /** The area of the product the work belongs to, where the product wants cost sliced that way. */
+  /** The area of the product the work belongs to, where the product wants cost sliced that way. A skill set with `scope` wins over it. */
   skill?: string;
 }
 
@@ -128,12 +128,14 @@ export class Reporter {
         return verdict();
       }
       const s = currentScope();
+      // A record has an address removed where it is queued; a spend decision removes its own.
+      const user = s.user?.id || framework?.user || "";
       answer = await ask(
         this.decider,
         {
           parent: organisation,
           agent: this.attribution.agent,
-          user: s.user?.id || framework?.user || "",
+          user: looksLikeEmail(user) ? "" : user,
           workspace: workspaceName(organisation, s.workspace),
           project: s.project ?? "",
           requestedProvider: billedBy,
@@ -236,7 +238,7 @@ export class Reporter {
       observedAs: framework?.agent ? KIND_AGENT : KIND_SERVICE,
       framework: framework?.name ?? "",
       frameworkVersion: framework?.version ?? "",
-      skill: this.attribution.skill ?? "",
+      skill: s.skill || this.attribution.skill || "",
       billedBy: this.attribution.billedBy || PROVIDER_VERTEX_AI,
       durationMs: Math.max(0, Math.round(durationMs)),
       status: error === undefined ? STATUS_OK : STATUS_FAILED,

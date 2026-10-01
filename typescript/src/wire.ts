@@ -193,9 +193,33 @@ export function encodeActivity(a: Activity): number[] {
   ];
 }
 
-/** A BatchCreateActivitiesRequest, encoded. */
-export function batchCreateActivities(parent: string, activities: Activity[], requestId = ""): Uint8Array {
-  return Uint8Array.from([...string(1, parent), ...activities.flatMap((a) => message(2, encodeActivity(a))), ...string(3, requestId)]);
+/** What a recorder lost since the last batch it delivered. Counts only. */
+export interface RecorderLosses {
+  dropped?: number | bigint;
+  undelivered?: number | bigint;
+  panicked?: number | bigint;
+  unrecognisedCalls?: number | bigint;
+  /** The recorder's language and version, such as typescript/0.1.0. */
+  recorder?: string;
+}
+
+/** Whether any count is above zero. */
+export function anyLosses(l: RecorderLosses | undefined): boolean {
+  return !!l && !!(l.dropped || l.undelivered || l.panicked || l.unrecognisedCalls);
+}
+
+function encodeLosses(l: RecorderLosses): number[] {
+  return [...integer(1, l.dropped), ...integer(2, l.undelivered), ...integer(3, l.panicked), ...integer(4, l.unrecognisedCalls), ...string(5, l.recorder)];
+}
+
+/** A BatchCreateActivitiesRequest, encoded. Losses that are all zero are left out, so a recorder that lost nothing sends nothing about it. */
+export function batchCreateActivities(parent: string, activities: Activity[], requestId = "", losses?: RecorderLosses): Uint8Array {
+  return Uint8Array.from([
+    ...string(1, parent),
+    ...activities.flatMap((a) => message(2, encodeActivity(a))),
+    ...string(3, requestId),
+    ...(losses && anyLosses(losses) ? message(4, encodeLosses(losses)) : []),
+  ]);
 }
 
 /** A directory row: the person behind an identifier. */

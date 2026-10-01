@@ -373,3 +373,13 @@ test("a wrapped tool keeps its prototype, its getters and its own this", async (
   assert.equal(set.lookup.execute("x"), "p:x");
   assert.notEqual(set.lookup, original);
 });
+
+test("a component and skill set on the request win over the middleware's own", { skip }, async () => {
+  const [rp, sink] = reporter();
+  provider.json(CHAT);
+  const openai = openaiSdk!.createOpenAI({ apiKey: "k", baseURL: provider.url + "/v1" });
+  const model = sdk!.wrapLanguageModel({ model: openai.chat("gpt-5"), middleware: rp.aiSdkMiddleware({ component: "drafts" }) as any });
+  await scope({ component: "triage", skill: "search" }, () => sdk!.generateText({ model, prompt: "x" }));
+  const [a] = await recorded(rp, sink);
+  assert.deepEqual([a!.callerComponent, a!.skill], ["triage", "search"]);
+});

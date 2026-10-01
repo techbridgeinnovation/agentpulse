@@ -10,6 +10,7 @@
 
 import { createRequire } from "node:module";
 
+import { currentScope } from "./context.ts";
 import { blockedFinish, Cancelled, errorCode, SpendDenied, truncatedFinish } from "./failure.ts";
 import type { Framework, Reporter } from "./report.ts";
 import {
@@ -84,7 +85,7 @@ export type Tools = Record<string, object>;
 export interface MiddlewareOptions {
   /** The middleware version the installed SDK expects: `v4` for AI SDK 7, `v3` for 6, `v2` for 5. */
   specificationVersion?: string;
-  /** The part of the product the calls belong to, where the scope names none. */
+  /** The part of the product the calls belong to, where the scope names none. A component on the scope wins. */
   component?: string;
 }
 
@@ -362,7 +363,7 @@ function stoppedBy(reason: unknown): unknown {
 // Only a refusal leaves here as an error: anything else going wrong inside is counted and the call goes ahead as if the middleware were not there.
 function asker(reporter: Reporter, options: MiddlewareOptions): (model: Model) => Promise<Call> {
   return async (model) => {
-    const component = options.component || "ai-sdk";
+    const component = currentScope().component || options.component || "ai-sdk";
     let call: Call = { started: performance.now(), billedBy: "", format: FORMAT_AI_SDK, component };
     let refused = false;
     try {

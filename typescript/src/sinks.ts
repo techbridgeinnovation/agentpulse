@@ -5,7 +5,7 @@
 import type { User } from "./context.ts";
 import { workspaceName } from "./context.ts";
 import { ConfigError, type Gateway } from "./gateway.ts";
-import { type Activity, batchCreateActivities, batchUpsertUsers } from "./wire.ts";
+import { type Activity, batchCreateActivities, batchUpsertUsers, type RecorderLosses } from "./wire.ts";
 
 const BATCH_CREATE_ACTIVITIES = "/techbridge.ap.metering.v1.ActivitiesService/BatchCreateActivities";
 const BATCH_UPSERT_USERS = "/techbridge.ap.metering.v1.UsersService/BatchUpsertUsers";
@@ -15,7 +15,9 @@ export interface Sink {
   /** Identifies the sink, so a team can tell which destination is failing. */
   readonly name: string;
   /** Delivers one workspace's records. An empty workspace is the ordinary case for a product with one tenant. `requestId` is the same on every retry of one batch, so a destination can tell a retry from new records. A rejection with an RpcError whose code passes, such as Unavailable, is retried. */
-  send(activities: Activity[], workspace: string, timeoutMs: number, requestId?: string): Promise<void>;
+  send(activities: Activity[], workspace: string, timeoutMs: number, requestId?: string, losses?: RecorderLosses): Promise<void>;
+  /** Set on a sink that carries `losses`: what the recorder lost since this sink last delivered, the same on every retry of one batch and reported once the batch is accepted. */
+  readonly carriesLosses?: boolean;
   /** Delivers one workspace's people to name. A sink without it receives records and no names. */
   sendUsers?(users: User[], workspace: string, timeoutMs: number): Promise<void>;
 }
@@ -29,6 +31,7 @@ export class Discard implements Sink {
 /** Records, and the names behind them, to the metering service through the gateway. The organisation is fixed because one process bills one organisation; the workspace is not, because one process can serve many tenants. */
 export class MeteringSink implements Sink {
   readonly name = "metering";
+  readonly carriesLosses = true;
   private readonly gateway: Gateway;
   private readonly organisation: string;
 
@@ -44,9 +47,9 @@ export class MeteringSink implements Sink {
   }
 
   /** One call per batch, carrying the batch's request id, which is how the server keeps a retried batch from being written twice. */
-  async send(activities: Activity[], workspace: string, timeoutMs: number, requestId = ""): Promise<void> {
+  async send(activities: Activity[], workspace: string, timeoutMs: number, requestId = "", losses?: RecorderLosses): Promise<void> {
     if (activities.length === 0) return;
-    await this.gateway.call(BATCH_CREATE_ACTIVITIES, batchCreateActivities(this.parent(workspace), activities, requestId), timeoutMs);
+    await this.gateway.call(BATCH_CREATE_ACTIVITIES, batchCreateActivities(this.parent(workspace), activities, requestId, losses), timeoutMs);
   }
 
   async sendUsers(users: User[], workspace: string, timeoutMs: number): Promise<void> {

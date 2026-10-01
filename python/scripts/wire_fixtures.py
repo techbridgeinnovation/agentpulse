@@ -70,6 +70,8 @@ UNICODE_ACTIVITY = {"agent": "organisations/acme/agents/é", "request": "请求-
 CASES = [
     {"name": "full activity", "message": "BatchCreateActivitiesRequest", "fields": {"parent": "organisations/acme/workspaces/w1", "activities": [FULL_ACTIVITY], "request_id": ""}},
     {"name": "several activities and a request id", "message": "BatchCreateActivitiesRequest", "fields": {"parent": "organisations/acme", "activities": [UNICODE_ACTIVITY, {}], "request_id": "batch-1"}},
+    {"name": "recorder losses", "message": "BatchCreateActivitiesRequest", "fields": {"parent": "organisations/acme", "activities": [{"request": "r"}], "request_id": "batch-2", "recorder_losses": {"dropped": 3, "undelivered": 9007199254740993, "panicked": 1, "unrecognised_calls": 2, "recorder": "python/0.4.0"}}},
+    {"name": "recorder losses with some counts zero", "message": "BatchCreateActivitiesRequest", "fields": {"parent": "organisations/acme", "activities": [{}], "request_id": "", "recorder_losses": {"undelivered": 4, "recorder": "typescript/0.1.0"}}},
     {"name": "users", "message": "BatchUpsertUsersRequest", "fields": {"parent": "organisations/acme/workspaces/w1", "users": [{"name": "organisations/acme/workspaces/w1/users/u1", "display_name": "Ada", "email": "ada@example.com"}, {"name": "organisations/acme/workspaces/w1/users/u2"}]}},
     {"name": "decide request", "message": "DecideRequest", "fields": {"parent": "organisations/acme", "agent": "organisations/acme/agents/research", "user": "u1", "workspace": "organisations/acme/workspaces/w1", "project": "p", "requested_provider": "VERTEX_AI", "requested_model": "gemini-2.5-pro"}},
     {
@@ -107,7 +109,9 @@ def to_message(cls, fields: dict):
             getattr(message, name[: -len("_ns")]).FromNanoseconds(value)
             continue
         target = getattr(message, name)
-        if isinstance(value, list):
+        if isinstance(value, dict):
+            target.CopyFrom(to_message(type(target), value))
+        elif isinstance(value, list):
             for item in value:
                 element = target.add() if hasattr(target, "add") else None
                 if element is None:

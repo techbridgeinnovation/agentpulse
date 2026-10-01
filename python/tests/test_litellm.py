@@ -197,3 +197,12 @@ def test_a_call_to_an_endpoint_that_names_no_region_records_none(provider, recor
     litellm.completion(model="openai/gpt-5", api_base=provider.url + "/v1", api_key="k", messages=[{"role": "user", "content": "x"}])
     [a] = flush()
     assert a.region == ""
+
+
+def test_a_component_and_skill_set_on_the_scope_or_the_metadata_are_recorded(provider, recorded):
+    rp, sink, flush = recorded
+    provider.json(CHAT)
+    with agentpulse.scope(component="triage", skill="search"):
+        litellm.completion(model="openai/gpt-5", api_base=provider.url + "/v1", api_key="k", messages=[{"role": "user", "content": "x"}])
+    [a] = flush()
+    assert (a.caller_component, a.skill) == ("triage", "search")

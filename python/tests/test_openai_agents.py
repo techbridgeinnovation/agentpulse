@@ -266,3 +266,21 @@ def test_a_call_whose_start_was_not_seen_is_still_recorded():
     asyncio.run(hooks.on_llm_end(object(), Agent(), Response()))
     [a] = recorded(rp, sink)
     assert (a.model, a.sub_agent, a.duration_ms, a.usage_format) == ("gpt-5", "helper", 0, "OPENAI_RESPONSES")
+
+
+def test_a_component_and_skill_set_on_the_request_win_over_the_agent_and_a_tool_keeps_its_own(provider):
+    rp, sink = reporter()
+
+    @agents.function_tool
+    def lookup(input: str) -> str:
+        """Look something up."""
+        return "SECRET RESULT"
+
+    for reply in (response(1, tool="lookup"), response(2)):
+        provider.json(reply)
+    with agentpulse.scope(component="triage", skill="search"):
+        run(agents.Agent(name="helper", instructions="x", tools=[lookup], model=model(provider)), rp)
+    activities = recorded(rp, sink)
+    assert [a.caller_component for a in activities if not a.tool] == ["triage", "triage"]
+    assert [a.caller_component for a in activities if a.tool] == ["tool:lookup"]
+    assert {a.skill for a in activities} == {"search"}

@@ -10,10 +10,11 @@
 
 import { randomUUID } from "node:crypto";
 
-import { currentScope, type User } from "./context.ts";
+import { currentScope, looksLikeEmail, type User } from "./context.ts";
 import { RpcError } from "./gateway.ts";
 import { Discard, type Sink } from "./sinks.ts";
-import type { Activity } from "./wire.ts";
+import { VERSION } from "./version.ts";
+import type { Activity, RecorderLosses } from "./wire.ts";
 
 const DEFAULT_QUEUE_SIZE = 2048;
 const DEFAULT_BATCH_SIZE = 100;
@@ -24,6 +25,7 @@ const MAX_REMEMBERED_NAMES = 10_000;
 const MAX_ATTEMPTS = 3;
 const FIRST_RETRY_MS = 250;
 const MAX_RETRY_MS = 2000;
+const RECORDER = `typescript/${VERSION}`;
 
 // The gRPC codes that say the same call may succeed if sent again. The gateway reports an HTTP 429, 502, 503 or 504 and an unreachable host as unavailable.
 const TRANSIENT = new Set([4, 8, 10, 14]);
@@ -67,6 +69,8 @@ export interface Stats {
   named: number;
   namesDropped: number;
   namesFailed: number;
+  /** Records sent with no user because their user identifier looked like an email address. Above zero means the product is passing an address where its sign-in's identifier belongs. */
+  emailUsersRefused: number;
 }
 
 export type Counter = keyof Stats;
@@ -88,6 +92,7 @@ function emptyStats(): Stats {
     named: 0,
     namesDropped: 0,
     namesFailed: 0,
+    emailUsersRefused: 0,
   };
 }
 
@@ -103,6 +108,8 @@ export class Recorder {
   private readonly flushEveryMs: number;
   private readonly sendTimeoutMs: number;
   private readonly counters = emptyStats();
+  // One ledger for each sink that carries losses, since each reports to its own destination what that destination has not been told.
+  private readonly carried = new Map<Sink, Carried>();
   private records: [Activity, string][] = [];
   private people: [User, string][] = [];
   private seen = new Map<string, string>();
@@ -119,6 +126,7 @@ export class Recorder {
     this.batchSize = positive(config.batchSize, DEFAULT_BATCH_SIZE);
     this.flushEveryMs = positive(config.flushEveryMs, DEFAULT_FLUSH_EVERY_MS);
     this.sendTimeoutMs = positive(config.sendTimeoutMs, DEFAULT_SEND_TIMEOUT_MS);
+    for (const sink of this.sinks) if (sink.carriesLosses) this.carried.set(sink, new Carried());
     const exitTimeoutMs = config.exitTimeoutMs ?? DEFAULT_EXIT_TIMEOUT_MS;
     // Where there is no Node process, such as a browser or an edge runtime, there is no exit to flush at.
     if (exitTimeoutMs > 0 && typeof process !== "undefined" && typeof process.on === "function") {
@@ -132,6 +140,11 @@ export class Recorder {
   /** Hands over one record and returns immediately. Never blocks, never throws. Filed under the workspace in force on the current context unless the caller states one. */
   record(activity: Activity, workspace?: string): void {
     try {
+      // Every record passes here, so this is the one place an address is kept off them all.
+      if (looksLikeEmail(activity.user)) {
+        activity.user = "";
+        this.counters.emailUsersRefused++;
+      }
       if (this.closed || this.records.length >= this.queueSize) {
         this.counters.dropped++;
         return;
@@ -145,11 +158,11 @@ export class Recorder {
     }
   }
 
-  /** Hands over a person to name and returns immediately. Someone already named with the same name costs a map lookup. */
+  /** Hands over a person to name and returns immediately. Someone already named with the same name costs a map lookup. One whose identifier holds a slash or looks like an email address is never sent, and is counted as failed. */
   noteUser(user: User | undefined, workspace?: string): void {
     try {
       if (!user?.id || !(user.name || user.email)) return;
-      if (user.id.includes("/")) {
+      if (user.id.includes("/") || looksLikeEmail(user.id)) {
         this.note("namesFailed");
         return;
       }
@@ -256,10 +269,16 @@ export class Recorder {
     for (const [workspace, activities] of byWorkspace(batch)) {
       for (const sink of this.sinks) {
         const requestId = randomUUID();
+        const carried = this.carried.get(sink);
+        const losses = carried?.claim(this.counters);
         jobs.push(
-          this.attempt(() => sink.send(activities, workspace, this.sendTimeoutMs, requestId)).then((outcome) =>
-            this.note(outcome === "sent" ? "delivered" : outcome, activities.length),
-          ),
+          this.attempt(() => sink.send(activities, workspace, this.sendTimeoutMs, requestId, losses)).then((outcome) => {
+            this.note(outcome === "sent" ? "delivered" : outcome, activities.length);
+            if (!carried || !losses) return;
+            carried.settle(losses, outcome === "sent");
+            // A batch dropped at close is already counted as dropped.
+            if (outcome === "failed") carried.undelivered += activities.length;
+          }),
         );
       }
     }
@@ -315,6 +334,39 @@ export class Recorder {
       if (this.flushing === 0) w.timer.unref?.();
       this.waiting.add(w);
     });
+  }
+}
+
+type Loss = "dropped" | "undelivered" | "panicked";
+const LOSSES: Loss[] = ["dropped", "undelivered", "panicked"];
+
+/**
+ * What one sink has told its destination about the recorder's losses. The recorder's counters stay cumulative; a batch carries the difference between them and what was already reported.
+ *
+ * A batch's claim is held apart while it is in flight, so two batches sent at once to the same sink never report the same loss twice, and it is counted as reported only once the batch is accepted.
+ */
+class Carried {
+  undelivered = 0;
+  private readonly reported: Record<Loss, number> = { dropped: 0, undelivered: 0, panicked: 0 };
+  private readonly inFlight: Record<Loss, number> = { dropped: 0, undelivered: 0, panicked: 0 };
+
+  claim(counters: Stats): RecorderLosses {
+    const totals: Record<Loss, number> = { dropped: counters.dropped, undelivered: this.undelivered, panicked: counters.panicked };
+    const claimed: RecorderLosses = { recorder: RECORDER };
+    for (const name of LOSSES) {
+      const n = Math.max(0, totals[name] - this.reported[name] - this.inFlight[name]);
+      this.inFlight[name] += n;
+      claimed[name] = n;
+    }
+    return claimed;
+  }
+
+  settle(losses: RecorderLosses, accepted: boolean): void {
+    for (const name of LOSSES) {
+      const n = Number(losses[name] ?? 0);
+      this.inFlight[name] -= n;
+      if (accepted) this.reported[name] += n;
+    }
   }
 }
 

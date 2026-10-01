@@ -1037,3 +1037,57 @@ func TestAfterAgentReleasesTheRequestTheContextCarries(t *testing.T) {
 		t.Fatalf("SpentOn after the turn ended = %d, want 0", got)
 	}
 }
+
+// One agent process can serve several areas of a product, so the area is per request where the product sets one.
+func TestTheContextNamesTheSkillAndComponentWhenItHasThem(t *testing.T) {
+	named := newContext()
+	named.Context = recorder.WithSkill(recorder.WithComponent(context.Background(), "report_generation"), "drafting")
+
+	got := record(t, func(r *recorder.Recorder) {
+		AfterModel(r, options())(named, &adkmodel.LLMResponse{ModelVersion: "m"}, nil)
+		AfterModel(r, options())(newContext(), &adkmodel.LLMResponse{ModelVersion: "m"}, nil)
+	})
+
+	if len(got) != 2 {
+		t.Fatalf("recorded %d activities, want 2", len(got))
+	}
+	if a := got[0]; a.GetSkill() != "drafting" || a.GetCallerComponent() != "report_generation" || a.GetSubAgent() != "atlas" {
+		t.Errorf("skill = %q, component = %q, sub_agent = %q, want drafting, report_generation, atlas", a.GetSkill(), a.GetCallerComponent(), a.GetSubAgent())
+	}
+	if a := got[1]; a.GetSkill() != "canvas" || a.GetCallerComponent() != "atlas" {
+		t.Errorf("skill = %q, component = %q, want the configured skill and the agent name", a.GetSkill(), a.GetCallerComponent())
+	}
+}
+
+// The framework's user id is whatever the product handed the runner, and some products hand it an email address.
+func TestAnEmailShapedUserIsNeverRecordedLabelledOrAskedAbout(t *testing.T) {
+	ctx := newContext()
+	ctx.user = "ada@example.com"
+
+	var r *recorder.Recorder
+	got := record(t, func(rec *recorder.Recorder) {
+		r = rec
+		AfterModel(rec, options())(ctx, &adkmodel.LLMResponse{ModelVersion: "m"}, nil)
+	})
+	if len(got) != 1 || got[0].GetUser() != "" {
+		t.Fatalf("recorded %v, want one record with no user", got)
+	}
+	if s := r.Stats(); s.EmailUsersRefused != 1 {
+		t.Errorf("EmailUsersRefused = %d, want 1", s.EmailUsersRefused)
+	}
+
+	decider := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	opts := options()
+	opts.Backend = genai.BackendVertexAI
+	opts.Decider = decider
+	request := &adkmodel.LLMRequest{}
+	if _, err := BeforeModel(nil, opts)(ctx, request); err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+	if user, ok := request.Config.Labels["ap_user"]; ok {
+		t.Errorf("user label = %q, want none", user)
+	}
+	if decider.got.GetUser() != "" {
+		t.Errorf("decided for user %q, want none", decider.got.GetUser())
+	}
+}

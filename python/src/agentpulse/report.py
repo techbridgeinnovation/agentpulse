@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from . import _wire, governance
-from .context import current_component, current_project, current_request, current_session, current_user, current_workspace, workspace_name
+from .context import current_component, current_project, current_request, current_session, current_skill, current_user, current_workspace, looks_like_email, workspace_name
 from .failure import ReportedFailure, blocked_finish, error_code, reported_error_for, truncated_finish
 from .gateway import ConfigError, Gateway
 from .recorder import Recorder
@@ -33,7 +33,7 @@ class Attribution:
     service: str
     # Who bills for the calls, e.g. "VERTEX_AI" or "ANTHROPIC", which decides whether the spend can ever be checked against an invoice. Vertex unless the service calls a provider directly. Any string is sent as written, so a provider this library has not heard of needs no release of it.
     billed_by: str = PROVIDER_VERTEX_AI
-    # The area of the product the work belongs to, where the product wants cost sliced that way.
+    # The area of the product the work belongs to, where the product wants cost sliced that way. A skill set with `scope` wins over it.
     skill: str = ""
 
 
@@ -172,6 +172,12 @@ def _user_id(framework: _Framework | None) -> str:
     return framework.user if framework else ""
 
 
+def _asked_user(framework: _Framework | None) -> str:
+    """`_user_id` for the places that label or ask rather than record. A record has an address removed where it is queued; a label and a spend decision remove their own."""
+    user = _user_id(framework)
+    return "" if looks_like_email(user) else user
+
+
 class Reporter:
     """Records on behalf of one service. Cheap to hold and safe to share across threads."""
 
@@ -196,6 +202,8 @@ class Reporter:
 
         The decider defaults to governance through the gateway this reporter records to. A verdict is reused for `cache_ttl` seconds, which is how far past a ceiling spend can run before it is noticed, times the number of processes running; zero asks every time. `timeout` bounds how long a call waits for an answer before it goes ahead without one, and after governance fails to answer a question it is not asked again for `failure_backoff` seconds, so an outage slows no call past the first.
 
+        Governance through the gateway starts opening its connections here, in the background, so the first decision on a new instance does not spend its timeout on a handshake.
+
         With `follow_changes`, governance through the gateway also tells this process when a budget changes, and the verdicts it covers are dropped at once rather than when they expire.
         """
         through_gateway = decider is None
@@ -211,6 +219,8 @@ class Reporter:
 
             governed._subscriber = InvalidationSubscriber(self._gateway, governed._decider, organisation)
         governed._decide_timeout = timeout if timeout > 0 else governance.DEFAULT_DECIDE_TIMEOUT
+        if through_gateway:
+            governance.warm(decider, governed._decide_timeout)
         return governed
 
     def decide(self, model: str = "", *, provider: str = "", component: str = "") -> governance.Verdict:
@@ -240,7 +250,7 @@ class Reporter:
             request = _wire.DecideRequest(
                 parent=organisation,
                 agent=self.attribution.agent,
-                user=_user_id(framework),
+                user=_asked_user(framework),
                 workspace=workspace_name(organisation, current_workspace()),
                 project=current_project(),
                 requested_provider=billed_by,
@@ -403,7 +413,7 @@ class Reporter:
             observed_as=_wire.KIND_AGENT if framework and framework.agent else _wire.KIND_SERVICE,
             framework=framework.name if framework else "",
             framework_version=framework.version if framework else "",
-            skill=self.attribution.skill,
+            skill=current_skill() or self.attribution.skill,
             billed_by=self.attribution.billed_by or PROVIDER_VERTEX_AI,
             duration_ms=max(0, int(duration * 1000)),
             status=_wire.STATUS_OK,

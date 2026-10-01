@@ -28,8 +28,10 @@ type Recorder struct {
 	seen  *seenNames
 
 	counters Counters
-	totals   *runningTotals
-	rates    *rateCache
+	// carried is one ledger per sink, in the order of Config.Sinks, nil for a sink that does not carry losses.
+	carried []*carriedLosses
+	totals  *runningTotals
+	rates   *rateCache
 
 	closeOnce sync.Once
 	closed    atomic.Bool
@@ -107,6 +109,9 @@ type Counters struct {
 
 	// Unrecorded counts every request an instrumented client sent that no record was made for, such as an embedding, a count of tokens or a file upload. Above zero means some of what a client did is not in the cost data.
 	Unrecorded atomic.Int64
+
+	// EmailUsersRefused counts every record whose user identifier looked like an email address, and was sent with no user instead. Above zero means the product is passing an address where its sign-in's identifier belongs.
+	EmailUsersRefused atomic.Int64
 }
 
 // Stats is a snapshot of the counters.
@@ -154,6 +159,8 @@ type Stats struct {
 	NamesFailed int64
 	// Unrecorded is how many requests an instrumented client sent without a record. See Counters.Unrecorded.
 	Unrecorded int64
+	// EmailUsersRefused is how many records were sent with no user because their user identifier looked like an email address. See Counters.EmailUsersRefused.
+	EmailUsersRefused int64
 }
 
 // New starts a recorder. It never returns an error: a recorder that cannot be
@@ -165,6 +172,7 @@ func New(config Config) *Recorder {
 		queue:   make(chan record, config.QueueSize),
 		names:   make(chan person, config.QueueSize),
 		seen:    newSeenNames(),
+		carried: carriedFor(config.Sinks),
 		totals:  newRunningTotals(),
 		done:    make(chan struct{}),
 		stopped: make(chan struct{}),
@@ -201,6 +209,11 @@ func (r *Recorder) RecordIn(ctx context.Context, activity *pb.Activity) {
 func (r *Recorder) enqueue(entry record) {
 	if r == nil || entry.activity == nil {
 		return
+	}
+	// Every record passes here, so this is the one place an address is kept off them all.
+	if LooksLikeEmail(entry.activity.GetUser()) {
+		entry.activity.User = ""
+		r.counters.EmailUsersRefused.Add(1)
 	}
 	// The running total is kept whether or not the record survives the queue.
 	// A dropped record still cost money, and a spend decision that ignored it
@@ -243,6 +256,7 @@ func (r *Recorder) Stats() Stats {
 		NamesDropped:        r.counters.NamesDropped.Load(),
 		NamesFailed:         r.counters.NamesFailed.Load(),
 		Unrecorded:          r.counters.Unrecorded.Load(),
+		EmailUsersRefused:   r.counters.EmailUsersRefused.Load(),
 	}
 }
 
@@ -511,31 +525,45 @@ func groupByWorkspace(batch []record) []workspaceBatch {
 func (r *Recorder) deliver(batch []record) {
 	var wg sync.WaitGroup
 	for _, group := range groupByWorkspace(batch) {
-		for _, sink := range r.config.Sinks {
+		for i, sink := range r.config.Sinks {
 			wg.Add(1)
-			go func(s Sink, g workspaceBatch) {
+			go func(s Sink, carried *carriedLosses, g workspaceBatch) {
 				defer wg.Done()
-				r.sendTo(s, g)
-			}(sink, group)
+				r.sendTo(s, carried, g)
+			}(sink, r.carried[i], group)
 		}
 	}
 	wg.Wait()
 }
 
-func (r *Recorder) sendTo(sink Sink, group workspaceBatch) {
+func (r *Recorder) sendTo(sink Sink, carried *carriedLosses, group workspaceBatch) {
+	var claimed lossCounts
+	accepted := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			r.counters.Panicked.Add(1)
+		}
+		if accepted {
+			r.counters.Delivered.Add(int64(len(group.activities)))
+		} else {
 			r.counters.Failed.Add(int64(len(group.activities)))
+		}
+		if carried != nil {
+			carried.settle(claimed, accepted, len(group.activities))
 		}
 	}()
 
 	ctx, cancel := context.WithTimeout(WithWorkspace(context.Background(), group.workspace), r.config.SendTimeout)
 	defer cancel()
 
-	if err := sink.Send(ctx, group.activities); err != nil {
-		r.counters.Failed.Add(int64(len(group.activities)))
-		return
+	var err error
+	if carried != nil {
+		// Claimed once for the batch, so every retry of it carries the same counts.
+		var losses *pb.RecorderLosses
+		claimed, losses = carried.claim(&r.counters)
+		err = carried.sink.SendWithLosses(ctx, group.activities, losses)
+	} else {
+		err = sink.Send(ctx, group.activities)
 	}
-	r.counters.Delivered.Add(int64(len(group.activities)))
+	accepted = err == nil
 }

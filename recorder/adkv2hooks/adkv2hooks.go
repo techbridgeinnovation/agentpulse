@@ -72,7 +72,7 @@ type Options struct {
 	// A streamed answer arrives as pieces which the framework assembles into one summary, and that summary carries the token counts but not the name of the model that produced them. Both majors do this. Pricing looks a rate up by model, so a record with no model prices against nothing — accurate counts attached to a cost of zero.
 	Model string
 
-	// Skill is the area of the product the user is in, where the product wants cost sliced that way. Optional, and set once here rather than per call because the framework cannot infer a product concept.
+	// Skill is the area of the product the user is in, where the product wants cost sliced that way. Optional, because the framework cannot infer a product concept. A skill set on the context with recorder.WithSkill wins over it, for an agent that serves several.
 	Skill string
 
 	// Product is deprecated and ignored: DecideRequest.product no longer
@@ -196,10 +196,23 @@ func userOf(r *recorder.Recorder, ctx agent.ReadonlyContext) string {
 
 // userIDOf is userOf for the places that label or ask rather than record, where naming someone would be a side effect of the wrong call.
 func userIDOf(ctx agent.ReadonlyContext) string {
+	id := ctx.UserID()
 	if user := recorder.UserFrom(ctx); user.ID != "" {
-		return user.ID
+		id = user.ID
 	}
-	return ctx.UserID()
+	// A record has its address removed where it is queued; a label and a spend decision have to remove their own.
+	if recorder.LooksLikeEmail(id) {
+		return ""
+	}
+	return id
+}
+
+// skillOf returns the skill a context names, or the agent's own where it names none.
+func skillOf(ctx context.Context, opts Options) string {
+	if skill := recorder.SkillFrom(ctx); skill != "" {
+		return skill
+	}
+	return opts.Skill
 }
 
 // AfterModel records one activity per model call.
@@ -239,7 +252,7 @@ func AfterModel(r *recorder.Recorder, opts Options) llmagent.AfterModelCallback 
 			ObservedAs:       pb.Agent_AGENT,
 			SubAgent:         ctx.AgentName(),
 			CallerComponent:  componentOf(ctx),
-			Skill:            opts.Skill,
+			Skill:            skillOf(ctx, opts),
 			Project:          recorder.ProjectFrom(ctx),
 			Model:            modelOf(response, known, opts.Model),
 			BilledBy:         opts.billedBy(),
@@ -285,7 +298,7 @@ func OnModelError(r *recorder.Recorder, opts Options) llmagent.OnModelErrorCallb
 			ObservedAs:       pb.Agent_AGENT,
 			SubAgent:         ctx.AgentName(),
 			CallerComponent:  componentOf(ctx),
-			Skill:            opts.Skill,
+			Skill:            skillOf(ctx, opts),
 			Project:          recorder.ProjectFrom(ctx),
 			Model:            modelOf(&adkmodel.LLMResponse{}, known, opts.Model),
 			BilledBy:         opts.billedBy(),
@@ -495,7 +508,7 @@ func recordDenied(r *recorder.Recorder, ctx agent.Context, opts Options, model s
 		ObservedAs:       pb.Agent_AGENT,
 		SubAgent:         ctx.AgentName(),
 		CallerComponent:  componentOf(ctx),
-		Skill:            opts.Skill,
+		Skill:            skillOf(ctx, opts),
 		Project:          recorder.ProjectFrom(ctx),
 		Model:            model,
 		BilledBy:         opts.billedBy(),
@@ -509,8 +522,11 @@ func recordDenied(r *recorder.Recorder, ctx agent.Context, opts Options, model s
 
 // componentOf derives which part of the calling code spent the money.
 //
-// Taken from the framework's own agent name, so adopting teams set nothing. A delegating run reports the sub-agent that actually made the call rather than the one that started the turn.
+// A component named on the context with recorder.WithComponent wins, for a product that counts several agents as one part of it. Otherwise it is taken from the framework's own agent name, so adopting teams set nothing. A delegating run reports the sub-agent that actually made the call rather than the one that started the turn.
 func componentOf(ctx agent.ReadonlyContext) string {
+	if component := recorder.ComponentFrom(ctx); component != "" {
+		return component
+	}
 	if name := ctx.AgentName(); name != "" {
 		return name
 	}

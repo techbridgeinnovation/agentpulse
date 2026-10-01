@@ -410,3 +410,42 @@ func TestARecordAfterCloseIsCountedAsDropped(t *testing.T) {
 		t.Errorf("recorded %d, dropped %d, want it dropped", s.Recorded, s.Dropped)
 	}
 }
+
+func TestAnIdentifierShapedLikeAnEmailIsNeverRecorded(t *testing.T) {
+	sink := &captureSink{}
+	r := New(Config{Sinks: []Sink{sink}, FlushEvery: 10 * time.Millisecond})
+
+	r.Record(&pb.Activity{Request: "req-1", User: "ada@example.com"})
+	r.Record(&pb.Activity{Request: "req-1", User: "8c21e0b4"})
+	closeSoon(t, r)
+
+	if sink.count() != 2 {
+		t.Fatalf("%d records reached the sink, want 2: the record is kept, only its user is not", sink.count())
+	}
+	if got := sink.seen[0].GetUser(); got != "" {
+		t.Errorf("user = %q, want none", got)
+	}
+	if got := sink.seen[1].GetUser(); got != "8c21e0b4" {
+		t.Errorf("user = %q, want the identifier unchanged", got)
+	}
+	if s := r.Stats(); s.EmailUsersRefused != 1 {
+		t.Errorf("EmailUsersRefused = %d, want 1", s.EmailUsersRefused)
+	}
+}
+
+func TestOnlyAnAtWithADotAfterItLooksLikeAnEmail(t *testing.T) {
+	for id, want := range map[string]bool{
+		"ada@example.com":    true,
+		"ada.l@mail.example": true,
+		"@example.com":       true,
+		"8c21e0b4":           false,
+		"users/abc123":       false,
+		"ada@localhost":      false,
+		"first.last":         false,
+		"":                   false,
+	} {
+		if got := LooksLikeEmail(id); got != want {
+			t.Errorf("LooksLikeEmail(%q) = %v, want %v", id, got, want)
+		}
+	}
+}

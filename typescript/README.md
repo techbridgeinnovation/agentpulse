@@ -4,7 +4,7 @@
 
 **Purpose.** The TypeScript recorder is a library that runs inside an agent's own Node process, the counterpart of `recorder/v1` and `recorder/python`. It observes what a service spent on models and tools and hands it to Agent Pulse through the gateway. It observes rather than carries: model traffic goes straight from the agent to its provider and never passes through here.
 
-**The first rule.** It must never degrade its host. Recording never blocks, never throws and never waits on the network. A full queue drops records and counts them rather than waiting, and a destination that fails or hangs is isolated from the others and from the caller. That ranks above completeness of data. Dropped records are counted in `stats()`, and that counter cannot be turned off.
+**The first rule.** It must never degrade its host. Recording never blocks, never throws and never waits on the network. A full queue drops records and counts them rather than waiting, and a destination that fails or hangs is isolated from the others and from the caller. That ranks above completeness of data. Dropped records are counted in `stats()`, and that counter cannot be turned off. The metering sink also carries the losses on the next batch it delivers, as counts of records dropped, records not delivered after every retry and recorder faults, so a loss shows where spend is read and not only in this process. A count is taken as reported only once that batch is accepted, so a failed batch passes it to the next.
 
 **It has no dependencies.** It speaks gRPC-web to the gateway over the platform's own `fetch`, with the few protobuf messages it sends encoded by hand, so it never decides which version of a package somebody else's agent loads. Node 18.18 or newer.
 
@@ -39,6 +39,8 @@ Once per request, where the sign-in has been checked, say who the work is for. E
 ```ts
 await scope({ request: requestId, user: { id: claims.sub, name: claims.name }, workspace: "acme" }, () => handle(req));
 ```
+
+A `component` or `skill` on the scope wins over the middleware's `component` and the reporter's `skill`; a tool record keeps `tool:<name>` as its component. A user identifier shaped like an email address is recorded as no user, never sent to the directory, and counted in `stats().emailUsersRefused`.
 
 ## The Vercel AI SDK
 

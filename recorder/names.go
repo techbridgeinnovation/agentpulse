@@ -91,7 +91,8 @@ func keyOf(p person) seenKey {
 // It never blocks, never returns an error and never panics. A user with no
 // name and no email is nothing to say and is ignored; one whose identifier
 // holds a slash cannot be named, because the identifier becomes a path
-// segment, and is counted as failed so the mistake is visible. The reporter
+// segment, and is counted as failed so the mistake is visible. One shaped
+// like an email address is refused and counted the same way. The reporter
 // and the framework hooks call this on every record; the cost of that is one
 // map lookup once the person has been sent.
 func (r *Recorder) NoteUser(user User) {
@@ -109,7 +110,8 @@ func (r *Recorder) notePerson(p person) {
 	if r == nil || p.user.ID == "" || !p.user.named() {
 		return
 	}
-	if strings.Contains(p.user.ID, "/") {
+	// An identifier shaped like an address is never sent, here or on a record.
+	if strings.Contains(p.user.ID, "/") || LooksLikeEmail(p.user.ID) {
 		r.counters.NamesFailed.Add(1)
 		return
 	}

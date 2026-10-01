@@ -35,12 +35,15 @@ type fakeMetering struct {
 	// refusals are answered, one per call, before any call is accepted.
 	refusals   []error
 	requestIDs []string
+	// losses is what each attempt carried, refused or not.
+	losses []*pb.RecorderLosses
 }
 
 func (f *fakeMetering) BatchCreateActivities(_ context.Context, req *pb.BatchCreateActivitiesRequest) (*pb.BatchCreateActivitiesResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requestIDs = append(f.requestIDs, req.GetRequestId())
+	f.losses = append(f.losses, req.GetRecorderLosses())
 	if f.err != nil {
 		return nil, f.err
 	}

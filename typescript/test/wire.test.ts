@@ -36,7 +36,8 @@ for (const fixture of FIXTURES) {
   const f = fixture.fields;
   if (fixture.message === "BatchCreateActivitiesRequest") {
     test(`encodes ${fixture.name} exactly as the official runtime`, () => {
-      assert.equal(hex(batchCreateActivities(f.parent, f.activities.map(activity), f.request_id)), fixture.hex);
+      const losses = f.recorder_losses && Object.fromEntries(Object.entries(f.recorder_losses).map(([k, v]) => [camel(k), v]));
+      assert.equal(hex(batchCreateActivities(f.parent, f.activities.map(activity), f.request_id, losses)), fixture.hex);
     });
   } else if (fixture.message === "BatchUpsertUsersRequest") {
     test(`encodes ${fixture.name} exactly as the official runtime`, () => {
@@ -66,4 +67,8 @@ test("an unknown field in a reply is skipped", () => {
 
 test("a truncated reply is refused rather than misread", () => {
   assert.throws(() => decodeDecideResponse(Buffer.from([0x12, 0x05, 97, 98])), DecodeError);
+});
+
+test("losses that are all zero are left off the batch", () => {
+  assert.deepEqual(batchCreateActivities("organisations/acme", [], "", { recorder: "typescript/0.1.0" }), batchCreateActivities("organisations/acme", []));
 });

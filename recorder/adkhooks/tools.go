@@ -137,7 +137,7 @@ func recordTool(r *recorder.Recorder, ctx tool.Context, opts Options, name strin
 		SubAgent:         ctx.AgentName(),
 		CallerComponent:  "tool:" + name,
 		Tool:             name,
-		Skill:            opts.Skill,
+		Skill:            skillOf(ctx, opts),
 		Project:          recorder.ProjectFrom(ctx),
 		BilledBy:         opts.billedBy(),
 		Region:           opts.region(),

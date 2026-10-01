@@ -45,6 +45,15 @@ class UserSink(Protocol):
         ...
 
 
+@runtime_checkable
+class LossSink(Protocol):
+    """A sink that also carries what the recorder lost, on the batches it delivers, so a loss shows where spend is read and not only in this process."""
+
+    def send_with_losses(self, activities: list[_wire.Activity], workspace: str, timeout: float, losses: _wire.RecorderLosses | None) -> None:
+        """Delivers one workspace's records with the losses not yet reported, and raises on failure, which leaves those losses to the next batch."""
+        ...
+
+
 class Discard:
     """Accepts everything and keeps nothing: the default, so a recorder with nowhere to send is inert rather than broken."""
 
@@ -76,10 +85,13 @@ class MeteringSink:
         return workspace_name(self._organisation, workspace) or self._organisation
 
     def send(self, activities: list[_wire.Activity], workspace: str, timeout: float) -> None:
+        self.send_with_losses(activities, workspace, timeout, None)
+
+    def send_with_losses(self, activities: list[_wire.Activity], workspace: str, timeout: float, losses: _wire.RecorderLosses | None) -> None:
         """One call per batch, tried again after a transient failure. Every attempt carries the same request id, so metering stores a batch once however many attempts reached it."""
         if not activities:
             return
-        message = _wire.batch_create_activities(self._parent(workspace), activities, request_id=str(uuid.uuid4()))
+        message = _wire.batch_create_activities(self._parent(workspace), activities, request_id=str(uuid.uuid4()), losses=losses)
         self._call(_BATCH_CREATE_ACTIVITIES, message, timeout)
 
     def send_users(self, users: list[User], workspace: str, timeout: float) -> None:

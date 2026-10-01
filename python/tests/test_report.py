@@ -239,3 +239,41 @@ def test_a_tool_result_is_measured_as_the_json_it_is_sent_as_and_never_kept():
         assert result_size(nothing) == (0, True)
     # Unmeasurable is not empty: claiming a tool returned nothing when it may have returned plenty is the wrong error.
     assert result_size({"handle": object()}) == (0, False)
+
+
+def test_a_skill_set_on_the_request_wins_over_the_reporter_s_own():
+    rp, sink = reporter(skill="summaries")
+    with scope(skill="search"):
+        rp.model_call(ModelCall(model="m"))
+        rp.tool_call(ToolCall(tool="lookup"))
+    rp.model_call(ModelCall(model="m"))
+    assert [a.skill for a in recorded(rp, sink)] == ["search", "search", "summaries"]
+
+
+def test_a_component_set_on_the_request_is_used_where_the_call_names_none():
+    rp, sink = reporter()
+    with scope(component="triage"):
+        rp.model_call(ModelCall(model="m"))
+        rp.model_call(ModelCall(model="m", component="asset_summary"))
+        rp.tool_call(ToolCall(tool="lookup"))
+    assert [a.caller_component for a in recorded(rp, sink)] == ["triage", "asset_summary", "tool:lookup"]
+
+
+def test_a_user_that_looks_like_an_email_is_recorded_as_no_user_and_never_named():
+    rp, sink = reporter()
+    with scope(user=User("ada@example.com", "Ada", "ada@example.com")):
+        rp.model_call(ModelCall(model="m"))
+    with scope(user=User("ada@corp", "Ada")):
+        rp.model_call(ModelCall(model="m"))
+    first, second = recorded(rp, sink)
+    assert (first.user, second.user) == ("", "ada@corp")
+    assert [u.id for _, users in sink.named for u in users] == ["ada@corp"]
+    stats = rp.recorder.stats()
+    assert (stats.email_users_refused, stats.names_failed) == (1, 1)
+
+
+def test_an_identifier_is_taken_for_an_email_only_with_a_dot_after_the_at():
+    from agentpulse.context import looks_like_email
+
+    assert looks_like_email("ada@example.com") and looks_like_email("@.") and looks_like_email("a.b@c.d")
+    assert not looks_like_email("ada@corp") and not looks_like_email("ada.lovelace") and not looks_like_email("") and not looks_like_email("8c21e0b4")

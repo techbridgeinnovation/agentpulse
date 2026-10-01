@@ -362,3 +362,15 @@ func TestAnOrdinaryFinishIsStillASuccess(t *testing.T) {
 		}
 	}
 }
+
+func TestASkillOnTheContextWinsOverTheReportersOwn(t *testing.T) {
+	ctx := WithSkill(context.Background(), "drafting")
+
+	got := reported(t, ctx, func(rp *Reporter) {
+		rp.ModelCall(ctx, ModelCall{Model: "gemini-2.5-pro", Component: "asset_summary"})
+	})
+
+	if got.GetSkill() != "drafting" {
+		t.Errorf("skill = %q, want the one the context names", got.GetSkill())
+	}
+}

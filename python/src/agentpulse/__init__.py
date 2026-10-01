@@ -30,7 +30,7 @@ from __future__ import annotations
 import os
 
 from ._version import __version__
-from ._wire import Activity, Charge, ReportedField, ReportedQuantity
+from ._wire import Activity, Charge, RecorderLosses, ReportedField, ReportedQuantity
 from .clients import SpendDenied, denied
 from .context import User, carry, current_request, current_user, current_workspace, scope
 from .failure import (
@@ -50,7 +50,7 @@ from .governance import ALLOW, DENY, DOWNGRADE, NOTIFY, UNDECIDED, CachingDecide
 from .pricing import GatewayRates, PriceableUnit, RateSource
 from .recorder import Config, Recorder, Stats
 from .report import Attribution, ModelCall, Reporter, Tokens, ToolCall
-from .sinks import Discard, MeteringSink, Sink, UserSink
+from .sinks import Discard, LossSink, MeteringSink, Sink, UserSink
 from .usage import (
     FORMAT_ANTHROPIC,
     FORMAT_LANGCHAIN,
@@ -126,6 +126,7 @@ __all__ = [
     "Gateway",
     "GatewayDecider",
     "GatewayRates",
+    "LossSink",
     "MeteringSink",
     "ModelCall",
     "PriceableUnit",
@@ -136,6 +137,7 @@ __all__ = [
     "PROVIDER_VERTEX_AI",
     "RateSource",
     "Recorder",
+    "RecorderLosses",
     "ReportedFailure",
     "ReportedField",
     "ReportedQuantity",

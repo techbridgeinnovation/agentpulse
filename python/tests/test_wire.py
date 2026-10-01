@@ -24,7 +24,8 @@ def activity(fields):
 def encode(case):
     fields = case["fields"]
     if case["message"] == "BatchCreateActivitiesRequest":
-        return _wire.batch_create_activities(fields["parent"], [activity(a) for a in fields["activities"]], fields["request_id"])
+        losses = _wire.RecorderLosses(**fields["recorder_losses"]) if "recorder_losses" in fields else None
+        return _wire.batch_create_activities(fields["parent"], [activity(a) for a in fields["activities"]], fields["request_id"], losses)
     if case["message"] == "BatchUpsertUsersRequest":
         return _wire.batch_upsert_users(fields["parent"], [_wire.User(**u) for u in fields["users"]])
     if case["message"] == "DecideRequest":
@@ -69,3 +70,8 @@ def test_the_framework_and_its_version_are_fields_49_and_50():
     # Keys 49 << 3 | 2 = 394 and 50 << 3 | 2 = 402, written as the varints 8a 03 and 92 03.
     assert _wire.Activity(framework="f", framework_version="1").encode() == b"\x8a\x03\x01f\x92\x03\x011"
     assert _wire.Activity().encode() == b""
+
+
+def test_losses_that_are_all_zero_are_left_off_the_batch():
+    zero = _wire.RecorderLosses(recorder="python/0.4.0")
+    assert _wire.batch_create_activities("organisations/acme", [], losses=zero) == _wire.batch_create_activities("organisations/acme", [])

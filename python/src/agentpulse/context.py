@@ -38,6 +38,7 @@ _session: contextvars.ContextVar[str] = contextvars.ContextVar("agentpulse_sessi
 _workspace: contextvars.ContextVar[str] = contextvars.ContextVar("agentpulse_workspace", default="")
 _project: contextvars.ContextVar[str] = contextvars.ContextVar("agentpulse_project", default="")
 _component: contextvars.ContextVar[str] = contextvars.ContextVar("agentpulse_component", default="")
+_skill: contextvars.ContextVar[str] = contextvars.ContextVar("agentpulse_skill", default="")
 
 _UNSET: Any = object()
 
@@ -51,6 +52,7 @@ def scope(
     workspace: str = _UNSET,
     project: str = _UNSET,
     component: str = _UNSET,
+    skill: str = _UNSET,
 ) -> Iterator[None]:
     """Marks the work inside the block as belonging to a request, a person, a tenant and so on. What is not named keeps the value it already had.
 
@@ -60,7 +62,9 @@ def scope(
 
     `workspace` is the tenant of the organisation, bare, e.g. `acme`; the organisation is already known from the key. `project` is a unit of work inside it and a label only: nothing is authorised against it.
 
-    `component` names the part of the product a model call belongs to, where the function that makes the call is not a good enough name.
+    `component` names the part of the product a model call belongs to, where the function that makes the call is not a good enough name. It wins over the name an agent framework gives, such as the agent's.
+
+    `skill` names the area of the product the request is in, e.g. `search`, and wins over the one a reporter was built with, for a process that serves several.
 
     The tenant is set here and deliberately not at a model call site: a value a call site can choose is a value that can attribute one tenant's spend to another, and a figure wrong that way looks exactly like one that is right.
     """
@@ -72,6 +76,7 @@ def scope(
         (_workspace, workspace),
         (_project, project),
         (_component, component),
+        (_skill, skill),
     ):
         if value is not _UNSET:
             tokens.append((var, var.set(value)))
@@ -104,6 +109,21 @@ def current_project() -> str:
 
 def current_component() -> str:
     return _component.get()
+
+
+def current_skill() -> str:
+    return _skill.get()
+
+
+def looks_like_email(user_id: str) -> bool:
+    """Whether a user identifier is shaped like an email address: an `@` with a dot somewhere after it.
+
+    A record carries an identifier and never an address, so one shaped like an address is recorded as no user and counted in `Stats.email_users_refused`. Deliberately loose: refusing an identifier that only resembles an address costs one row its user, and letting an address through puts it on every row.
+    """
+    if not isinstance(user_id, str):
+        return False
+    at = user_id.find("@")
+    return at >= 0 and "." in user_id[at + 1 :]
 
 
 def carry(fn: Callable[..., T]) -> Callable[..., T]:

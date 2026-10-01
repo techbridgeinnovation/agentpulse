@@ -48,7 +48,8 @@ type Attribution struct {
 	Provider pb.Activity_Provider
 
 	// Skill is the area of the product the work belongs to, where the product
-	// wants cost sliced that way. Optional.
+	// wants cost sliced that way. Optional. A skill set on the context with
+	// WithSkill wins over it.
 	Skill string
 }
 
@@ -293,6 +294,14 @@ func (rp *Reporter) FinishRequest(request string) {
 	rp.recorder.FinishRequest(request)
 }
 
+// skill is the skill a context names, or the reporter's own where it names none.
+func (rp *Reporter) skill(ctx context.Context) string {
+	if skill := SkillFrom(ctx); skill != "" {
+		return skill
+	}
+	return rp.attribution.Skill
+}
+
 // activity fills in everything the two kinds of call have in common.
 func (rp *Reporter) activity(ctx context.Context, component string, duration time.Duration, err error, charges []Charge) *pb.Activity {
 	user := UserFrom(ctx)
@@ -306,7 +315,7 @@ func (rp *Reporter) activity(ctx context.Context, component string, duration tim
 		Project:         ProjectFrom(ctx),
 		CallerService:   rp.attribution.Service,
 		CallerComponent: component,
-		Skill:           rp.attribution.Skill,
+		Skill:           rp.skill(ctx),
 		BilledBy:        rp.attribution.billedBy(),
 		ObservedAs:      pb.Agent_SERVICE,
 		DurationMs:      duration.Milliseconds(),

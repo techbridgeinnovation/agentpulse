@@ -815,3 +815,63 @@ func TestAnUnmeasurableResultIsNotCalledEmpty(t *testing.T) {
 		t.Error("an unmarshalable result should not be reported as empty")
 	}
 }
+
+// One agent process can serve several areas of a product, so the area is per request where the product sets one. A tool call is still filed under the tool.
+func TestTheContextNamesTheSkillAndComponentWhenItHasThem(t *testing.T) {
+	named := contextFor(t.Name())
+	named.StrictContextMock = agent.NewStrictContextMock(recorder.WithSkill(recorder.WithComponent(context.Background(), "report_generation"), "drafting"))
+	opts := options()
+	opts.Skill = "canvas"
+
+	got := record(t, func(r *recorder.Recorder) {
+		AfterModel(r, opts)(named, &adkmodel.LLMResponse{ModelVersion: "m"}, nil)
+		AfterTool(r, opts)(named, functionTool{name: "lookup"}, nil, nil, nil)
+		AfterModel(r, opts)(newContext(), &adkmodel.LLMResponse{ModelVersion: "m"}, nil)
+	})
+
+	if len(got) != 3 {
+		t.Fatalf("recorded %d activities, want 3", len(got))
+	}
+	if a := got[0]; a.GetSkill() != "drafting" || a.GetCallerComponent() != "report_generation" || a.GetSubAgent() != "pulseagent-v1" {
+		t.Errorf("skill = %q, component = %q, sub_agent = %q, want drafting, report_generation, pulseagent-v1", a.GetSkill(), a.GetCallerComponent(), a.GetSubAgent())
+	}
+	if a := got[1]; a.GetSkill() != "drafting" || a.GetCallerComponent() != "tool:lookup" || a.GetSubAgent() != "pulseagent-v1" {
+		t.Errorf("skill = %q, component = %q, sub_agent = %q, want drafting, tool:lookup, pulseagent-v1", a.GetSkill(), a.GetCallerComponent(), a.GetSubAgent())
+	}
+	if a := got[2]; a.GetSkill() != "canvas" || a.GetCallerComponent() != "pulseagent-v1" {
+		t.Errorf("skill = %q, component = %q, want the configured skill and the agent name", a.GetSkill(), a.GetCallerComponent())
+	}
+}
+
+// The framework's user id is whatever the product handed the runner, and some products hand it an email address.
+func TestAnEmailShapedUserIsNeverRecordedLabelledOrAskedAbout(t *testing.T) {
+	ctx := newContext()
+	ctx.user = "ada@example.com"
+
+	var r *recorder.Recorder
+	got := record(t, func(rec *recorder.Recorder) {
+		r = rec
+		AfterModel(rec, options())(ctx, &adkmodel.LLMResponse{ModelVersion: "m"}, nil)
+	})
+	if len(got) != 1 || got[0].GetUser() != "" {
+		t.Fatalf("recorded %v, want one record with no user", got)
+	}
+	if s := r.Stats(); s.EmailUsersRefused != 1 {
+		t.Errorf("EmailUsersRefused = %d, want 1", s.EmailUsersRefused)
+	}
+
+	decider := &fakeDecider{resp: &governancepb.DecideResponse{Decision: governancepb.DecideResponse_ALLOW}}
+	opts := options()
+	opts.Backend = genai.BackendVertexAI
+	opts.Decider = decider
+	request := &adkmodel.LLMRequest{}
+	if _, err := BeforeModel(recorder.New(recorder.Config{FlushEvery: time.Hour}), opts)(ctx, request); err != nil {
+		t.Fatalf("BeforeModel: %v", err)
+	}
+	if user, ok := request.Config.Labels["ap_user"]; ok {
+		t.Errorf("user label = %q, want none", user)
+	}
+	if decider.got.GetUser() != "" {
+		t.Errorf("decided for user %q, want none", decider.got.GetUser())
+	}
+}
