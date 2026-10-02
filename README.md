@@ -17,7 +17,7 @@ go get github.com/techbridgeinnovation/agentpulse/recorder
 ```
 
 ```bash
-pip install "techbridge-agentpulse @ git+https://github.com/techbridgeinnovation/agentpulse@python/v0.3.0#subdirectory=python"
+pip install "techbridge-agentpulse @ git+https://github.com/techbridgeinnovation/agentpulse@python/v0.5.0#subdirectory=python"
 ```
 
 Each Python release is a `python/v<version>` tag, listed on the [releases page](https://github.com/techbridgeinnovation/agentpulse/releases). Pin to the newest one. A release is made by bumping `python/src/agentpulse/_version.py` in the pull request that carries the change: merging it tags and publishes the release.
