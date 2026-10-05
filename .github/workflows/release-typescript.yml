@@ -1,0 +1,61 @@
+# Releases the TypeScript recorder when its version changes on main.
+#
+# Bump `version` in `typescript/package.json` in the pull request that carries the change, and merging it is the release: this tags the merge `typescript/v<version>` and publishes a release with the package attached as `techbridge-agentpulse-<version>.tgz`, which `npm install <release asset URL>` installs. A version already tagged is left alone, so re-running or pushing again never moves a release.
+name: Release TypeScript recorder
+
+on:
+  push:
+    branches: [main]
+    paths: [typescript/package.json, .github/workflows/release-typescript.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Read the version
+        id: version
+        run: |
+          version=$(node -p "require('./typescript/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=typescript/v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Skip a version already released
+        id: exists
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.version.outputs.tag }} already exists; nothing to release"
+          fi
+
+      - name: Test and pack what is about to be released
+        if: steps.exists.outputs.released != 'true'
+        working-directory: typescript
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          npm test
+          npm pack
+
+      - name: Tag and publish the release
+        if: steps.exists.outputs.released != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # A 0.x version is published as a pre-release: not yet proven in production.
+          prerelease=""
+          case "$VERSION" in 0.*) prerelease="--prerelease" ;; esac
+          gh release create "$TAG" "typescript/techbridge-agentpulse-$VERSION.tgz" --target "$GITHUB_SHA" --title "TypeScript recorder v$VERSION" --generate-notes $prerelease
