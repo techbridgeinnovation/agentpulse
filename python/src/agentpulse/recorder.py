@@ -91,7 +91,7 @@ class Stats:
     recorded: int = 0
     # Records discarded because the queue was full or the recorder was closed. Above zero means cost data is incomplete.
     dropped: int = 0
-    # Records that reached a sink.
+    # Records that reached a sink, counted once per sink: a record sent to metering and to one sink of your own counts twice.
     delivered: int = 0
     # Records a sink refused or could not be reached with.
     failed: int = 0

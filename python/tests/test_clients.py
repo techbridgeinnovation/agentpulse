@@ -235,6 +235,38 @@ def test_an_anthropic_message_is_recorded_with_its_cache_counts(provider):
     assert usage(a) == {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 800, "cache_creation_input_tokens": 50, "cache_creation.ephemeral_5m_input_tokens": 50}
 
 
+def test_a_reporter_from_connect_files_each_client_under_the_provider_it_calls(provider, monkeypatch):
+    agentpulse = pytest.importorskip("agentpulse")
+    monkeypatch.setenv("AP_GATEWAY", "localhost:1")
+    monkeypatch.setenv("AP_API_KEY", "organisations/acme/apiKeys/k")
+    monkeypatch.setenv("AP_API_SECRET", "s")
+    monkeypatch.setenv("AP_AGENT", AGENT)
+    sink = MemorySink()
+    rp = agentpulse.connect("svc", config=Config(sinks=[sink], exit_timeout=0, flush_every=60))
+    provider.json(CHAT)
+    openai_client(rp, provider).chat.completions.create(model="gpt-5", messages=[])
+    provider.json(MESSAGE)
+    anthropic_client(rp, provider).messages.create(model="claude-sonnet-5", max_tokens=10, messages=[])
+    assert [a.billed_by for a in recorded(rp, sink)] == ["OPENAI", "ANTHROPIC"]
+    rp.recorder.close(timeout=0)
+
+
+def test_a_claude_call_vertex_refuses_is_coded_as_google_codes_it_plain_or_streamed(provider):
+    pytest.importorskip("anthropic")
+    rp, sink = reporter()
+    client = anthropic_client(rp, provider)
+    refused = {"error": {"code": 404, "message": "SECRET publisher model", "status": "NOT_FOUND"}}
+    provider.json(refused, status=404)
+    with pytest.raises(Exception):
+        client.messages.create(model="claude-sonnet-5", max_tokens=10, messages=[])
+    # The streaming endpoint wraps the same envelope in a list.
+    provider.json([refused], status=404)
+    with pytest.raises(Exception):
+        with client.messages.stream(model="claude-sonnet-5", max_tokens=10, messages=[]) as stream:
+            "".join(stream.text_stream)
+    assert [(a.status, a.error_code) for a in recorded(rp, sink)] == [(_wire.STATUS_FAILED, "NOT_FOUND")] * 2
+
+
 def test_a_streamed_anthropic_message_that_fails_part_way_is_a_failure(provider):
     anthropic = pytest.importorskip("anthropic")
     rp, sink = reporter()

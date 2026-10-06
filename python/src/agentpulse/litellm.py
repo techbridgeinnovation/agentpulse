@@ -27,7 +27,7 @@ from .clients import region_of
 from .context import User, current_component, scope
 from .failure import blocked_finish, truncated_finish
 from .report import Reporter, _Framework, _installed_version
-from .usage import FORMAT_LITELLM, reported_from, reported_quantities
+from .usage import FORMAT_LITELLM, PROVIDER_VERTEX_AI, reported_from, reported_quantities
 
 # LiteLLM's name for who serves a call, as the rate card names who bills for it. A provider not listed is billed under its own name upper-cased, so a provider nobody has priced yet is recorded and visible rather than filed under someone else.
 _BILLED_BY = {
@@ -147,7 +147,7 @@ def _build_callback_class() -> type:
                 activity.model = _str(getattr(response, "model", None)) or _str(payload.get("model")) or _str(kwargs.get("model"))
                 # Who served the call is LiteLLM's to say, since it routes each call; the reporter's own setting stands only where LiteLLM named nobody.
                 provider = billed_by_of(payload.get("custom_llm_provider") or (kwargs.get("litellm_params") or {}).get("custom_llm_provider"))
-                activity.billed_by = provider or rp.attribution.billed_by
+                activity.billed_by = provider or rp.attribution.billed_by or PROVIDER_VERTEX_AI
                 activity.region = _region(kwargs, payload)
                 usage = reported_from(getattr(response, "usage", None))
                 if usage:
@@ -193,7 +193,7 @@ def _build_callback_class() -> type:
             with scope(**_scope_from(metadata, user_id)):
                 verdict = self._reporter._decide(
                     model,
-                    provider=_provider_of(model) or self._reporter.attribution.billed_by,
+                    provider=_provider_of(model) or self._reporter.attribution.billed_by or PROVIDER_VERTEX_AI,
                     component=current_component() or "litellm",
                     framework=_Framework(request=_str(metadata.get("agentpulse_request")), user=user_id, name=FRAMEWORK, version=_installed_version("litellm")),
                 )

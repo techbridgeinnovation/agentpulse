@@ -73,13 +73,15 @@ from .usage import (
 def connect(
     service: str,
     *,
-    billed_by: str = PROVIDER_VERTEX_AI,
+    billed_by: str = "",
     skill: str = "",
     config: Config | None = None,
 ) -> Reporter:
     """A reporter that records to Agent Pulse through its gateway, set up from the environment.
 
     Four settings are read, and each is refused here if missing, so a wrong setting stops the process where a person is watching it start: `AP_GATEWAY`, the gateway's address; `AP_API_KEY`, the key's name, `organisations/<id>/apiKeys/<id>`, which carries the organisation the spend is filed under; `AP_API_SECRET`, shown once when the key was issued; and `AP_AGENT`, `organisations/<id>/agents/<name>`, a name of the team's choosing.
+
+    `billed_by` names who bills for the calls, such as `VERTEX_AI` or `ANTHROPIC`. Left empty, a wrapped OpenAI, Anthropic or Gemini client reads it from the address each call goes to, and every other call is filed under Vertex AI.
 
     Sinks in `config` receive every record too, beside metering.
     """

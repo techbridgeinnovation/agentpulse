@@ -24,7 +24,7 @@ from .clients import SpendDenied
 from .context import current_component, current_request
 from .failure import blocked_finish, reported_error_for, truncated_finish
 from .report import Reporter, _Framework, _installed_version, result_size
-from .usage import FORMAT_LANGCHAIN, FORMAT_OPENAI_CHAT, FORMAT_PERPLEXITY, PROVIDER_PERPLEXITY, reported_from, reported_quantities
+from .usage import FORMAT_LANGCHAIN, FORMAT_OPENAI_CHAT, FORMAT_PERPLEXITY, PROVIDER_PERPLEXITY, PROVIDER_VERTEX_AI, reported_from, reported_quantities
 
 LANGCHAIN = "langchain-ai/langchain"
 LANGGRAPH = "langchain-ai/langgraph"
@@ -147,7 +147,7 @@ def _build_handler_class() -> type:
             component = _component(metadata)
             model = _requested_model(metadata, invocation)
             provider = billed_by_of(metadata.get("ls_provider"))
-            verdict = rp._decide(model, provider=provider or rp.attribution.billed_by, component=component, framework=framework)
+            verdict = rp._decide(model, provider=provider or rp.attribution.billed_by or PROVIDER_VERTEX_AI, component=component, framework=framework)
             if not verdict.proceed:
                 # The refusal was recorded by the decision, and raising here is what stops the call before it is sent.
                 raise SpendDenied()
