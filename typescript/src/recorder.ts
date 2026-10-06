@@ -246,7 +246,7 @@ export class Recorder {
   /** Delivers everything queued, a batch at a time. One drain runs at once; a second call waits on the first. */
   private drain(): Promise<void> {
     if (!this.draining) {
-      this.draining = (async () => {
+      const run = (async () => {
         try {
           for (;;) {
             const records = this.records.splice(0, this.batchSize);
@@ -256,10 +256,13 @@ export class Recorder {
           }
         } catch {
           this.note("panicked");
-        } finally {
-          this.draining = undefined;
         }
       })();
+      // Cleared once the run has settled, never from inside it: a run that finds nothing queued ends before it is assigned, and clearing it there would leave a finished run standing as the one in progress, so nothing would be delivered again and a flush would wait on it forever.
+      this.draining = run;
+      void run.finally(() => {
+        if (this.draining === run) this.draining = undefined;
+      });
     }
     return this.draining;
   }
