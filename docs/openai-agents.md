@@ -26,6 +26,7 @@ If you set the model on a `RunConfig`, give the hooks the same config so they ca
 
 - Each call is filed under the agent that made it. The run's trace is the request, and the trace's `group_id` is the session.
 - A model routed through LiteLLM, `litellm/<provider>/<model>`, is billed under that provider.
+- LiteLLM reaches Vertex AI, `litellm/vertex_ai/<model>`, only with `google-auth` installed: `pip install google-auth`.
 - The SDK does not tell hooks when a model call fails. Such a call is recorded as `FAILED` with the code `Unknown` when the run's trace ends.
 - A tool's result size is recorded, never its content.
 

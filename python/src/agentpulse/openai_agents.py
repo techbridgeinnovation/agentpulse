@@ -33,7 +33,7 @@ from .clients import SpendDenied
 from .context import current_component
 from .litellm import billed_by_of
 from .report import Reporter, _Framework, _installed_version, result_size
-from .usage import FORMAT_OPENAI_RESPONSES, PROVIDER_OPENAI, reported_from, reported_quantities
+from .usage import FORMAT_OPENAI_RESPONSES, PROVIDER_OPENAI, PROVIDER_VERTEX_AI, reported_from, reported_quantities
 
 FRAMEWORK = "openai/openai-agents-python"
 
@@ -204,7 +204,7 @@ def _build_hooks_class() -> type:
             framework = _framework(agent)
             component = current_component() or framework.agent or "openai-agents"
             model, provider = _model_and_provider(agent, self._run_config)
-            verdict = rp._decide(model, provider=provider or rp.attribution.billed_by, component=component, framework=framework)
+            verdict = rp._decide(model, provider=provider or rp.attribution.billed_by or PROVIDER_VERTEX_AI, component=component, framework=framework)
             if not verdict.proceed:
                 # The refusal was recorded by the decision, and raising here stops the run before the call is sent.
                 raise SpendDenied()

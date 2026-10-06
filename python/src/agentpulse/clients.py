@@ -300,6 +300,12 @@ class _Anthropic(_Protocol):
             o.failure = collected.failure(ERROR_FORMAT_ANTHROPIC)
 
     def failure(self, body, status, headers, billed_by):
+        # Vertex answers a refused Claude call in Google's own envelope, `{"error": {"code", "status", ...}}`, wrapped in a list on the streaming endpoint, so it is read the way a Gemini refusal is.
+        if isinstance(body, list) and len(body) == 1:
+            body = body[0]
+        inner = body.get("error") if isinstance(body, dict) else None
+        if isinstance(inner, dict) and isinstance(inner.get("status"), str):
+            return reported_genai_body(status, "", body)
         return reported_body(body, status, headers, PROVIDER_ANTHROPIC)
 
     def model_in_path(self, path, model):
