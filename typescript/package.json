@@ -1,6 +1,6 @@
 {
   "name": "techbridge-agentpulse",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Records what an AI agent spent, from inside the agent's own process, for Agent Pulse.",
   "type": "module",
   "engines": {

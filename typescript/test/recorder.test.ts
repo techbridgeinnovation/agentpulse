@@ -35,6 +35,20 @@ test("a full queue drops the record and counts it, and never throws or waits", a
   await rec.close();
 });
 
+test("a background flush that finds the queue empty does not stop later records being delivered", async () => {
+  const sink = new MemorySink();
+  const rec = new Recorder({ sinks: [sink], flushEveryMs: 20, exitTimeoutMs: 0 });
+  rec.record({ model: "m0" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  rec.record({ model: "m1" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(sink.activities.map((a) => a.model), ["m0", "m1"]);
+  rec.record({ model: "m2" });
+  assert.equal(await rec.flush(1000), true);
+  assert.equal(rec.stats().delivered, 3);
+  await rec.close();
+});
+
 test("records are delivered per workspace, the one in force on the scope", async () => {
   const sink = new MemorySink();
   const rec = new Recorder({ sinks: [sink], exitTimeoutMs: 0 });
