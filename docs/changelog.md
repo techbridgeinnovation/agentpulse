@@ -11,6 +11,8 @@ Recorder releases, newest first. Each is a tag on [github.com/techbridgeinnovati
 
 | Date | Release |
 | --- | --- |
+| 6 Oct 2026 | TypeScript 0.1.1 |
+| 5 Oct 2026 | TypeScript 0.1.0 |
 | 2 Oct 2026 | Python 0.5.0 |
 | 2 Oct 2026 | Go ADK 2 hooks 0.2.0 |
 | 1 Oct 2026 | Go recorder 0.2.0 |
@@ -24,6 +26,10 @@ Install a version by its tag:
 
 ```bash [Python]
 pip install "techbridge-agentpulse @ git+https://github.com/techbridgeinnovation/agentpulse@python/v0.5.0#subdirectory=python"
+```
+
+```bash [TypeScript]
+npm install https://github.com/techbridgeinnovation/agentpulse/releases/download/typescript/v0.1.1/techbridge-agentpulse-0.1.1.tgz
 ```
 
 ```bash [Go]
