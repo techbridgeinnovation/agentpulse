@@ -18,6 +18,8 @@ const maxRememberedRefusals = 4096
 const reasonRememberedRefusal = "refused within the hour and governance did not answer in time"
 
 // RememberRefusals wraps a Decider so that a call governance refused in the last hour, for the same agent, person, tenant and model, is refused again when governance cannot answer in time. Any other failure still lets the call go ahead.
+//
+// A refusal repeated from memory carries no budget statuses. The figures behind the original refusal are up to an hour old by then, and a product shown them would warn its users with a balance nobody read, so it is handed nothing and no OnBudgetStatus is called.
 func RememberRefusals(inner Decider) Decider {
 	if inner == nil {
 		return nil

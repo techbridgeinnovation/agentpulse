@@ -33,6 +33,23 @@ DECISION_NOTIFY = 2
 DECISION_DOWNGRADE = 3
 DECISION_DENY = 4
 
+# BudgetStatus.Scope, as the contract numbers it.
+SCOPE_UNSPECIFIED = 0
+SCOPE_PERSONAL = 1
+SCOPE_SHARED_POOL = 2
+SCOPE_WORKSPACE = 3
+SCOPE_RESERVE = 4
+SCOPE_ORGANISATION = 5
+SCOPE_OTHER = 6
+
+# BudgetStatus.Level, as the contract numbers it.
+LEVEL_UNSPECIFIED = 0
+LEVEL_WITHIN = 1
+LEVEL_PASSED_75_PERCENT = 2
+LEVEL_PASSED_95_PERCENT = 3
+LEVEL_DRAWING_RESERVE = 4
+LEVEL_EXHAUSTED = 5
+
 
 def _varint(value: int) -> bytes:
     # A negative int32 or int64 is written as its 64-bit two's complement, ten bytes long, which is what the contract's signed types require.
@@ -306,6 +323,64 @@ class DecideRequest:
         )
 
 
+def _signed(value: int) -> int:
+    # A negative int64, int32 or enum arrives as its 64-bit two's complement, so it reads as a large unsigned number until it is folded back.
+    return value - (1 << 64) if value >= 1 << 63 else value
+
+
+def _read_timestamp(data: bytes) -> int:
+    """A google.protobuf.Timestamp, as nanoseconds since the Unix epoch."""
+    seconds = nanos = 0
+    for number, value in fields(data):
+        if number == 1 and isinstance(value, int):
+            seconds = _signed(value)
+        elif number == 2 and isinstance(value, int):
+            nanos = _signed(value)
+    return seconds * 1_000_000_000 + nanos
+
+
+@dataclass
+class BudgetStatus:
+    """How one budget that applies to a call stood when governance decided it. Scope and level are kept as the numbers governance sent, a number this version does not know included."""
+
+    budget: str = ""
+    display_name: str = ""
+    scope: int = SCOPE_UNSPECIFIED
+    workspace: str = ""
+    spent_micros: int = 0
+    # Zero for a reserve that has nothing in it, so never divided by.
+    limit_micros: int = 0
+    # When the current period ends, in nanoseconds since the Unix epoch. Zero when governance did not say.
+    period_end_time_ns: int = 0
+    warn_only: bool = False
+    level: int = LEVEL_UNSPECIFIED
+
+    @classmethod
+    def decode(cls, data: bytes) -> "BudgetStatus":
+        status = cls()
+        for number, value in fields(data):
+            if isinstance(value, bytes):
+                if number == 1:
+                    status.budget = value.decode("utf-8", "replace")
+                elif number == 2:
+                    status.display_name = value.decode("utf-8", "replace")
+                elif number == 4:
+                    status.workspace = value.decode("utf-8", "replace")
+                elif number == 7:
+                    status.period_end_time_ns = _read_timestamp(value)
+            elif number == 3:
+                status.scope = _signed(value)
+            elif number == 5:
+                status.spent_micros = _signed(value)
+            elif number == 6:
+                status.limit_micros = _signed(value)
+            elif number == 8:
+                status.warn_only = bool(value)
+            elif number == 9:
+                status.level = _signed(value)
+        return status
+
+
 @dataclass
 class DecideResponse:
     decision: int = DECISION_UNSPECIFIED
@@ -313,6 +388,10 @@ class DecideResponse:
     policy_version: str = ""
     replacement_provider: str = ""
     replacement_model: str = ""
+    # Every budget that applies to the call, most pressing first. Empty from a governance that predates them.
+    budget_statuses: list[BudgetStatus] = field(default_factory=list)
+    # When governance decided, in nanoseconds since the Unix epoch. Zero when governance did not say.
+    evaluate_time_ns: int = 0
 
     @classmethod
     def decode(cls, data: bytes) -> "DecideResponse":
@@ -328,6 +407,10 @@ class DecideResponse:
                 response.replacement_provider = value.decode("utf-8", "replace")
             elif number == 5 and isinstance(value, bytes):
                 response.replacement_model = value.decode("utf-8", "replace")
+            elif number == 6 and isinstance(value, bytes):
+                response.budget_statuses.append(BudgetStatus.decode(value))
+            elif number == 7 and isinstance(value, bytes):
+                response.evaluate_time_ns = _read_timestamp(value)
         return response
 
 

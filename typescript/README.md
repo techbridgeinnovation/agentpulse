@@ -86,6 +86,28 @@ reporter.toolCall({ tool: "search", durationMs, resultBytes: bytes, emptyResult:
 
 Only a genuine DENY refuses. Governance unreachable or slower than a second and a half lets the call go ahead and is counted, unless it refused the same question within the hour, which it then does again.
 
+## Budget statuses
+
+A verdict from governance carries how every budget that applies to the call stood, most pressing first and at every level including `WITHIN`, in `verdict.budgetStatuses`, with `verdict.evaluateTime` saying when governance worked them out. Each `BudgetStatus` names its `budget`, `displayName`, `scope`, `workspace`, `spentMicros`, `limitMicros`, `periodEndTime`, `warnOnly` and `level`. A scope or level this version does not know reads as `SCOPE_UNSPECIFIED` or `LEVEL_UNSPECIFIED`. A reserve can have a `limitMicros` of zero, so a share is never worked out by dividing without checking it. A governance that predates statuses sends none, and a call with no answer has none.
+
+A call made through the AI SDK middleware hands its statuses to a callback when one is set:
+
+```ts
+const reporter = connect("research-agent").governed(undefined, {
+  onBudgetStatus: (event) => {
+    for (const status of event.budgetStatuses) {
+      if (status.level === "PASSED_95_PERCENT" || status.level === "EXHAUSTED") notices.add(event.user, status.displayName, status.level);
+    }
+  },
+});
+```
+
+It is called for every instrumented call whose decision came with at least one status, with the statuses, `evaluateTime`, the decision, the model, provider and component, and the user, workspace, project and request the question named. It is not called for `decide`, whose verdict already holds the statuses, nor when no decision was reached, nor when a decision has no statuses.
+
+Delivery is asynchronous and the model call never waits for it. The event goes on a queue of 64 and is delivered from a later turn of the event loop, one event at a time, in the order the decisions were obtained, at most once: what is still queued when the process exits is lost, and a pending delivery never keeps the process alive. A full queue drops the event and counts it in `stats().budgetStatusDropped`. A throw, and a returned promise that rejects, is counted in `stats().budgetStatusFailed`; a returned promise is not awaited, so a slow one delays nothing behind it. A callback that runs long synchronously blocks the whole event loop, model calls included, and cannot be interrupted, so it must be quick or hand its work elsewhere. Unset, nothing is called.
+
+Statuses are a delayed snapshot, not a live reading. Spend reaches governance only after a call is recorded, and a verdict is reused for up to `cacheTtlMs`, so a status can trail the calls made since. They are not a hard cap and not an exact percentage. Agent Pulse shows them to no one: a product's users see a warning only where the product's own code reads the statuses and shows one, so wiring this in changes no product's interface by itself.
+
 ## Delivery and exit
 
 Records leave on a background flush. A batch the gateway refuses for a reason that passes, such as being unavailable or out of time, is sent again up to three times in all, with a growing wait, under the same request id. What is still queued or waiting when the recorder closes is counted in `stats().dropped`.

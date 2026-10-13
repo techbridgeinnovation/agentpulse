@@ -6,11 +6,14 @@ import { currentScope, looksLikeEmail, workspaceName } from "./context.ts";
 import { embeddingMiddleware, type EmbeddingMiddleware, middleware, type Middleware, type MiddlewareOptions, type Tools, tools } from "./aisdk.ts";
 import { blockedFinish, errorCode, truncatedFinish } from "./failure.ts";
 import { ConfigError, Gateway } from "./gateway.ts";
-import { ask, CachingDecider, type Decider, DEFAULT_DECIDE_TIMEOUT_MS, DEFAULT_FAILURE_BACKOFF_MS, GatewayDecider, type Verdict, verdict } from "./governance.ts";
+import { ask, type BudgetStatus, CachingDecider, type Decider, type Decision, DEFAULT_DECIDE_TIMEOUT_MS, DEFAULT_FAILURE_BACKOFF_MS, GatewayDecider, type Verdict, verdict } from "./governance.ts";
 import { type Config, Recorder } from "./recorder.ts";
 import { MeteringSink } from "./sinks.ts";
 import { PROVIDER_VERTEX_AI, reportedQuantities } from "./usage.ts";
-import { type Activity, type Charge, KIND_AGENT, KIND_SERVICE, STATUS_DENIED, STATUS_FAILED, STATUS_OK, STATUS_TRUNCATED } from "./wire.ts";
+import { type Activity, type Charge, type DecideRequest, KIND_AGENT, KIND_SERVICE, STATUS_DENIED, STATUS_FAILED, STATUS_OK, STATUS_TRUNCATED } from "./wire.ts";
+
+// How many events wait for the callback. A callback slower than decisions arrive loses the newest events rather than growing memory.
+const BUDGET_STATUS_QUEUE = 64;
 
 /** What every record from one service has in common. */
 export interface Attribution {
@@ -73,11 +76,38 @@ export interface Framework {
   version?: string;
 }
 
+/**
+ * What an `onBudgetStatus` callback is given: the budget statuses governance sent with its answer for one instrumented call, and what that call was.
+ *
+ * The statuses are a snapshot as of `evaluateTime`, from a verdict that may have been reused from the cache: they can trail the calls made since by the cache's lifetime plus the time spend takes to be recorded. They are for warning a person, never an exact live percentage or a hard cap.
+ */
+export interface BudgetStatusEvent {
+  readonly budgetStatuses: readonly BudgetStatus[];
+  readonly evaluateTime: Date | null;
+  /** The decision the statuses came with, such as ALLOW or NOTIFY. */
+  readonly decision: Decision;
+  /** The model and provider the call asked for, and the part of the service making it. */
+  readonly model: string;
+  readonly provider: string;
+  readonly component: string;
+  /** Who and what the call was for, as the question to governance named them. The user is empty where the identifier looked like an email address, which is never sent. */
+  readonly user: string;
+  readonly workspace: string;
+  readonly project: string;
+  readonly request: string;
+}
+
 export interface GovernOptions {
   /** How long a verdict is reused. Zero asks every time. */
   cacheTtlMs?: number;
   timeoutMs?: number;
   failureBackoffMs?: number;
+  /**
+   * Called for every instrumented call (the AI SDK middleware) whose decision came with at least one budget status, at any level including WITHIN, so the product can warn its own users; a call to `decide` returns the statuses on its verdict instead.
+   *
+   * Delivery is asynchronous and the model call never waits for it: the event goes on a queue of 64 and is delivered from a later turn of the event loop, one event at a time, in the order the decisions were obtained, at most once, so what is still queued at exit is lost. A full queue drops the event and counts it in `budgetStatusDropped`. A throw, and a returned promise that rejects, is counted in `budgetStatusFailed`; a returned promise is not awaited, so a slow one delays nothing behind it. A callback that runs long synchronously blocks the whole event loop, model calls included, and cannot be interrupted, so it must be quick or hand its work elsewhere. Not called when no decision was reached.
+   */
+  onBudgetStatus?: (event: BudgetStatusEvent) => unknown;
 }
 
 /** Records on behalf of one service. Cheap to hold and safe to share. */
@@ -87,6 +117,9 @@ export class Reporter {
   private readonly gateway: Gateway | undefined;
   private decider: Decider | undefined;
   private decideTimeoutMs = DEFAULT_DECIDE_TIMEOUT_MS;
+  private onBudgetStatus: GovernOptions["onBudgetStatus"];
+  private readonly budgetStatusQueue: BudgetStatusEvent[] = [];
+  private budgetStatusScheduled = false;
 
   constructor(recorder: Recorder, attribution: Attribution, gateway?: Gateway) {
     this.recorder = recorder;
@@ -105,21 +138,25 @@ export class Reporter {
     const governed = new Reporter(this.recorder, this.attribution, this.gateway);
     governed.decider = ttl > 0 || backoff > 0 ? new CachingDecider(decider, ttl, { failureBackoffMs: backoff }) : decider;
     governed.decideTimeoutMs = options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : DEFAULT_DECIDE_TIMEOUT_MS;
+    governed.onBudgetStatus = options.onBudgetStatus;
     return governed;
   }
 
   /**
    * Asks whether a call to `model` may proceed, before it is made, and never rejects. Skip the call when `proceed` is false: the refusal is recorded here, with nothing spent. Only a genuine DENY refuses; governance unreachable or slow lets the call go ahead, and is counted.
+   *
+   * The verdict carries how each budget that applies stood, in `budgetStatuses`, as of `evaluateTime`. The reporter's `onBudgetStatus` is not called for it: the caller already holds the statuses.
    */
   decide(model = "", options: { provider?: string; component?: string } = {}): Promise<Verdict> {
-    return this.decideFor(model, options.provider ?? "", options.component ?? "");
+    return this.decideFor(model, options.provider ?? "", options.component ?? "", undefined, false);
   }
 
   /** @internal */
-  async decideFor(model: string, provider: string, component: string, framework?: Framework): Promise<Verdict> {
+  async decideFor(model: string, provider: string, component: string, framework?: Framework, instrumented = true): Promise<Verdict> {
     if (!this.decider) return verdict();
     const billedBy = provider || this.attribution.billedBy || PROVIDER_VERTEX_AI;
     let answer: Verdict;
+    let asked: DecideRequest;
     try {
       const at = this.attribution.agent.indexOf("/agents/");
       const organisation = at > 0 ? this.attribution.agent.slice(0, at) : "";
@@ -130,22 +167,22 @@ export class Reporter {
       const s = currentScope();
       // A record has an address removed where it is queued; a spend decision removes its own.
       const user = s.user?.id || framework?.user || "";
-      answer = await ask(
-        this.decider,
-        {
-          parent: organisation,
-          agent: this.attribution.agent,
-          user: looksLikeEmail(user) ? "" : user,
-          workspace: workspaceName(organisation, s.workspace),
-          project: s.project ?? "",
-          requestedProvider: billedBy,
-          requestedModel: model,
-        },
-        this.decideTimeoutMs,
-      );
+      asked = {
+        parent: organisation,
+        agent: this.attribution.agent,
+        user: looksLikeEmail(user) ? "" : user,
+        workspace: workspaceName(organisation, s.workspace),
+        project: s.project ?? "",
+        requestedProvider: billedBy,
+        requestedModel: model,
+      };
+      answer = await ask(this.decider, asked, this.decideTimeoutMs);
     } catch {
       this.recorder.note("decisionErrors");
       return verdict();
+    }
+    if (instrumented && answer.budgetStatuses.length && this.onBudgetStatus) {
+      this.tellBudgetStatus(answer, asked, component || currentScope().component || "", framework);
     }
     if (answer.decision === "NOTIFY") this.recorder.note("notified");
     else if (answer.decision === "DOWNGRADE") this.recorder.note("downgraded");
@@ -162,6 +199,55 @@ export class Reporter {
       }
     }
     return answer;
+  }
+
+  /** Queues the statuses for the product's callback and returns at once. The event is built here because the scope is only this call's here. */
+  private tellBudgetStatus(answer: Verdict, asked: DecideRequest, component: string, framework?: Framework): void {
+    try {
+      if (this.budgetStatusQueue.length >= BUDGET_STATUS_QUEUE) {
+        this.recorder.note("budgetStatusDropped");
+        return;
+      }
+      this.budgetStatusQueue.push({
+        budgetStatuses: answer.budgetStatuses,
+        evaluateTime: answer.evaluateTime,
+        decision: answer.decision,
+        model: asked.requestedModel ?? "",
+        provider: asked.requestedProvider ?? "",
+        component,
+        user: asked.user ?? "",
+        workspace: asked.workspace ?? "",
+        project: asked.project ?? "",
+        request: currentScope().request || framework?.request || "",
+      });
+      this.scheduleBudgetStatus();
+    } catch {
+      this.recorder.note("panicked");
+    }
+  }
+
+  // One event a turn of the event loop, so a long queue never holds the loop for longer than one callback, and unreferenced so a pending delivery never keeps the process alive.
+  private scheduleBudgetStatus(): void {
+    if (this.budgetStatusScheduled) return;
+    this.budgetStatusScheduled = true;
+    setImmediate(() => {
+      this.budgetStatusScheduled = false;
+      const event = this.budgetStatusQueue.shift();
+      if (event) this.deliverBudgetStatus(event);
+      if (this.budgetStatusQueue.length) this.scheduleBudgetStatus();
+    }).unref();
+  }
+
+  private deliverBudgetStatus(event: BudgetStatusEvent): void {
+    const failed = () => this.recorder.note("budgetStatusFailed");
+    try {
+      const result = this.onBudgetStatus?.(event);
+      if (result !== null && typeof result === "object" && typeof (result as PromiseLike<unknown>).then === "function") {
+        (result as PromiseLike<unknown>).then(undefined, failed);
+      }
+    } catch {
+      failed();
+    }
   }
 
   /** Records a finished model call and returns immediately. Never throws: recording is not allowed to be the reason a request failed. */

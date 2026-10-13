@@ -739,7 +739,7 @@ class _Transport:
             if governed and not model and protocol.model_in_body:
                 model = _str(_dict(_loads(request.content)).get("model")) if _readable(request) else ""
             if governed:
-                verdict = rp.decide(model, provider=billed_by, component=component)
+                verdict = rp._decide(model, provider=billed_by, component=component)
                 if not verdict.proceed:
                     return request, None, self._refusal(protocol, request)
                 if verdict.replacement_model:

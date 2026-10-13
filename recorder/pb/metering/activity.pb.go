@@ -1805,7 +1805,7 @@ type AggregateActivitiesRequest struct {
 	// Dimensions to group by, e.g. `["agent", "model"]`.
 	//
 	// Valid dimensions are `workspace`, `project`, `agent`, `model`, `provider`, `user`,
-	// `caller_service`, `caller_component`, `sub_agent`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `environment`, `date` and `hour`. `environment` is the one the record was filed under, or where it carries none its agent's `environment`, and empty for a record with neither. `kind` is `model`, `tool` or `call`: a tool call is one recorded under a `tool:` component, a model call one that names a model or counted tokens, and a call is anything else. `agent_kind` is `agent` or `service`: the kind the activity's agent was registered with, or where it was registered with none, the activity's `observed_as`, and an agent with neither is an agent. `date` and `hour` are UTC. Grouping by `workspace` under an organisation is one row per tenant; under a single workspace it is one row. An empty list returns a single total for whatever `parent` named.
+	// `caller_service`, `caller_component`, `sub_agent`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `environment`, `date` and `hour`. `environment` is the one the record was filed under, or where it carries none its agent's `environment`, and empty for a record with neither. `kind` is `model`, `tool` or `call`: a tool call is one recorded under a `tool:` component, a model call one that names a model or counted tokens, and a call is anything else. `agent_kind` is `agent` or `service`: the kind the activity's agent was registered with, or where it was registered with none, the activity's `observed_as`, and an agent with neither is an agent. `date` and `hour` are in `time_zone`, UTC when it is empty. Grouping by `workspace` under an organisation is one row per tenant; under a single workspace it is one row. An empty list returns a single total for whatever `parent` named.
 	GroupBy []string `protobuf:"bytes,2,rep,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"`
 	// Optional filter, with the same terms as [ListActivitiesRequest.filter], so a panel asks for exactly the rows it draws: `user = "8c21e0b4"` grouped by `date` is one person's spend by day, without the rest of the organisation's rows being read and discarded. Cannot widen the organisation. `agent` below is the same as a filter term on `agent`, kept for callers that only ever confine to one.
 	Filter string `protobuf:"bytes,3,opt,name=filter,proto3" json:"filter,omitempty"`
@@ -1823,7 +1823,9 @@ type AggregateActivitiesRequest struct {
 	// Optional. Confines the aggregate to one agent's activities.
 	// Format: `organisations/{organisation}/agents/{agent}`; must sit under
 	// `parent`.
-	Agent         string `protobuf:"bytes,8,opt,name=agent,proto3" json:"agent,omitempty"`
+	Agent string `protobuf:"bytes,8,opt,name=agent,proto3" json:"agent,omitempty"`
+	// The IANA time zone `date` and `hour` groups are cut in, such as `Africa/Nairobi`, so a day is the reader's organisation's day. Empty means UTC.
+	TimeZone      string `protobuf:"bytes,9,opt,name=time_zone,json=timeZone,proto3" json:"time_zone,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1910,6 +1912,13 @@ func (x *AggregateActivitiesRequest) GetPageToken() string {
 func (x *AggregateActivitiesRequest) GetAgent() string {
 	if x != nil {
 		return x.Agent
+	}
+	return ""
+}
+
+func (x *AggregateActivitiesRequest) GetTimeZone() string {
+	if x != nil {
+		return x.TimeZone
 	}
 	return ""
 }
@@ -2771,7 +2780,7 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"S\n" +
 	"\x1bStreamListActivitiesRequest\x12\x1c\n" +
 	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\x12\x16\n" +
-	"\x06filter\x18\x02 \x01(\tR\x06filter\"\xbd\x02\n" +
+	"\x06filter\x18\x02 \x01(\tR\x06filter\"\xda\x02\n" +
 	"\x1aAggregateActivitiesRequest\x12\x1c\n" +
 	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\x12\x19\n" +
 	"\bgroup_by\x18\x02 \x03(\tR\agroupBy\x12\x16\n" +
@@ -2782,7 +2791,8 @@ const file_techbridge_ap_metering_v1_activity_proto_rawDesc = "" +
 	"\tpage_size\x18\x06 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\a \x01(\tR\tpageToken\x12\x14\n" +
-	"\x05agent\x18\b \x01(\tR\x05agent\"\x82\x01\n" +
+	"\x05agent\x18\b \x01(\tR\x05agent\x12\x1b\n" +
+	"\ttime_zone\x18\t \x01(\tR\btimeZone\"\x82\x01\n" +
 	"\x1bAggregateActivitiesResponse\x12;\n" +
 	"\x04rows\x18\x01 \x03(\v2'.techbridge.ap.metering.v1.AggregateRowR\x04rows\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x9c\x0e\n" +

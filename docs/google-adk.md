@@ -30,7 +30,7 @@ recording := adkv2hooks.Options{
     Agent:   agent,
     Service: "research-agent",
     Model:   "gemini-2.5-pro",
-    // Lets budgets stop and downgrade calls. Leave it out and budgets only count.
+    // Lets budgets stop calls. Leave it out and budgets only count.
     Decider: recorder.NewGRPCDecider(conn),
 }
 
@@ -62,4 +62,4 @@ In Python, an agent run as a tool with `include_plugins=False` runs without the 
 
 ## Budgets on ADK
 
-With a governed reporter in Python, or a `Decider` in Go, each model call checks your budgets first. A stopped call is never sent: in Python the user reads your `denied_message` as the reply. A downgrade switches the model the agent sends, when the replacement is from the same provider.
+With a governed reporter in Python, or a `Decider` in Go, each model call checks your budgets first. A stopped call is never sent: in Python the user reads your `denied_message` as the reply. A warn-only budget past its limit lets the call through and alerts you.

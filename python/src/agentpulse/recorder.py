@@ -107,6 +107,9 @@ class Stats:
     # Downgrades an instrumented client rewrote onto the outbound call, and ones it could not safely apply, which went ahead with the model first asked for.
     downgrade_applied: int = 0
     downgrade_not_applied: int = 0
+    # Budget status events the product's `on_budget_status` callback never saw because its queue was full, and times it raised or was an async function, which is never awaited. Above zero in either means the product's own warnings are missing some; no model call was affected.
+    budget_status_dropped: int = 0
+    budget_status_failed: int = 0
     # Rate card reads that failed. Above zero and climbing means the running total is priced against a card going stale, or against none.
     rate_fetch_errors: int = 0
     # Running totals dropped because more requests were in flight at once than are kept. Above zero means `spent_on` is an undercount for some request still running.

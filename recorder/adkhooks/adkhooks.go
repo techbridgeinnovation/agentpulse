@@ -132,6 +132,14 @@ type Options struct {
 	// say something about credits — not something this library should
 	// assume. Defaults to DefaultDeniedMessage when empty.
 	DeniedMessage string
+
+	// OnBudgetStatus, when set, is handed where each budget a call is held
+	// to stands, whenever BeforeModel's answer from governance carries any.
+	// It is how a product warns its own users before a budget runs out;
+	// Agent Pulse shows them nothing itself. Left nil, nothing changes.
+	// It is called asynchronously and never holds the call; see
+	// recorder.BudgetStatusFunc for what the figures are and are not.
+	OnBudgetStatus recorder.BudgetStatusFunc
 }
 
 func (o Options) deniedMessage() string {
@@ -500,6 +508,7 @@ func decide(ctx agent.CallbackContext, r *recorder.Recorder, opts Options, decid
 		r.NoteDecisionError()
 		return decideOutcome{}
 	}
+	r.ReportBudgetStatus(ctx, opts.OnBudgetStatus, resp)
 
 	switch resp.GetDecision() {
 	case governancepb.DecideResponse_NOTIFY:

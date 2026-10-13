@@ -200,6 +200,9 @@ type Reporter struct {
 	// decider, when set, is asked before every call an instrumented client makes. See Governed.
 	decider       Decider
 	decideTimeout time.Duration
+
+	// onBudgetStatus, when set, is handed the budget statuses a decision carries. See Governance.OnBudgetStatus.
+	onBudgetStatus BudgetStatusFunc
 }
 
 // For returns a reporter that stamps every record with the same attribution.

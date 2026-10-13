@@ -66,6 +66,10 @@ export interface Stats {
   decisionErrors: number;
   downgradeApplied: number;
   downgradeNotApplied: number;
+  /** Budget status events the product's `onBudgetStatus` callback never saw because its queue was full. Above zero means its warnings are missing some; no model call was affected. */
+  budgetStatusDropped: number;
+  /** Times the product's `onBudgetStatus` callback threw or its promise rejected. */
+  budgetStatusFailed: number;
   named: number;
   namesDropped: number;
   namesFailed: number;
@@ -89,6 +93,8 @@ function emptyStats(): Stats {
     decisionErrors: 0,
     downgradeApplied: 0,
     downgradeNotApplied: 0,
+    budgetStatusDropped: 0,
+    budgetStatusFailed: 0,
     named: 0,
     namesDropped: 0,
     namesFailed: 0,

@@ -4,7 +4,22 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { type Activity, batchCreateActivities, batchUpsertUsers, DECISION_DENY, DecodeError, decodeDecideResponse, encodeDecideRequest } from "../src/wire.ts";
+import {
+  type Activity,
+  batchCreateActivities,
+  batchUpsertUsers,
+  DECISION_DENY,
+  DecodeError,
+  decodeDecideResponse,
+  encodeDecideRequest,
+  LEVEL_EXHAUSTED,
+  LEVEL_PASSED_75_PERCENT,
+  LEVEL_PASSED_95_PERCENT,
+  LEVEL_WITHIN,
+  SCOPE_PERSONAL,
+  SCOPE_RESERVE,
+  SCOPE_WORKSPACE,
+} from "../src/wire.ts";
 
 interface Fixture {
   name: string;
@@ -51,7 +66,26 @@ for (const fixture of FIXTURES) {
   } else if (fixture.message === "DecideResponse") {
     test(`decodes ${fixture.name} the official runtime wrote`, () => {
       const got = decodeDecideResponse(Buffer.from(fixture.hex, "hex"));
-      assert.deepEqual(got, { decision: f.decision, reason: f.reason, policyVersion: f.policy_version, replacementProvider: f.replacement_provider, replacementModel: f.replacement_model });
+      const budgetStatuses = (f.budget_statuses ?? []).map((s: any) => ({
+        budget: s.budget ?? "",
+        displayName: s.display_name ?? "",
+        scope: s.scope ?? 0,
+        workspace: s.workspace ?? "",
+        spentMicros: s.spent_micros ?? 0,
+        limitMicros: s.limit_micros ?? 0,
+        periodEndTimeNs: BigInt(s.period_end_time_ns ?? 0),
+        warnOnly: s.warn_only ?? false,
+        level: s.level ?? 0,
+      }));
+      assert.deepEqual(got, {
+        decision: f.decision,
+        reason: f.reason,
+        policyVersion: f.policy_version,
+        replacementProvider: f.replacement_provider ?? "",
+        replacementModel: f.replacement_model ?? "",
+        budgetStatuses,
+        evaluateTimeNs: BigInt(f.evaluate_time_ns ?? 0),
+      });
     });
   }
 }
@@ -63,6 +97,27 @@ test("every fixture that is not a rate card page is exercised", () => {
 test("an unknown field in a reply is skipped", () => {
   const data = Buffer.concat([Buffer.from("0804", "hex"), Buffer.from([0x7a, 3, 97, 98, 99]), Buffer.from([0xa0, 0x06, 0x01])]);
   assert.equal(decodeDecideResponse(data).decision, DECISION_DENY);
+});
+
+test("budget statuses and the evaluate time are read from the official runtime's bytes", () => {
+  const fixture = FIXTURES.find((f) => f.name === "decide response with budget statuses")!;
+  const got = decodeDecideResponse(Buffer.from(fixture.hex, "hex"));
+  assert.deepEqual(got.budgetStatuses?.map((s) => [s.scope, s.level]), [[SCOPE_WORKSPACE, LEVEL_PASSED_95_PERCENT], [SCOPE_RESERVE, LEVEL_EXHAUSTED], [SCOPE_PERSONAL, LEVEL_WITHIN], [9, 7]]);
+  assert.equal(got.budgetStatuses?.[1]?.limitMicros, 0);
+  assert.equal(got.evaluateTimeNs, 1791892800_123456789n);
+});
+
+test("a reply from a governance without statuses has none", () => {
+  const fixture = FIXTURES.find((f) => f.name === "decide response")!;
+  const got = decodeDecideResponse(Buffer.from(fixture.hex, "hex"));
+  assert.deepEqual([got.budgetStatuses, got.evaluateTimeNs], [[], 0n]);
+});
+
+test("an unknown field inside a budget status is skipped and a negative int64 is read as signed", () => {
+  // Field 5, spent_micros, as -1 in ten bytes, then an unknown field 15, inside status field 6.
+  const status = Buffer.from([0x28, ...new Array(9).fill(0xff), 0x01, 0x7a, 0x01, 0x78, 0x48, 0x02]);
+  const [read] = decodeDecideResponse(Buffer.concat([Buffer.from([0x32, status.length]), status])).budgetStatuses ?? [];
+  assert.deepEqual([read?.spentMicros, read?.level], [-1, LEVEL_PASSED_75_PERCENT]);
 });
 
 test("a truncated reply is refused rather than misread", () => {

@@ -209,5 +209,54 @@
       "replacement_model": "gemini-2.5-flash"
     },
     "hex": "0803120b6f766572206275646765741a02763722095645525445585f41492a1067656d696e692d322e352d666c617368"
+  },
+  {
+    "name": "decide response with budget statuses",
+    "message": "DecideResponse",
+    "fields": {
+      "decision": 2,
+      "reason": "a budget is past 95%",
+      "policy_version": "v8",
+      "budget_statuses": [
+        {
+          "budget": "organisations/acme/budgets/eng",
+          "display_name": "Engineering",
+          "scope": 3,
+          "workspace": "organisations/acme/workspaces/w1",
+          "spent_micros": 9600000000,
+          "limit_micros": 10000000000,
+          "period_end_time_ns": 1793491200000000000,
+          "level": 3
+        },
+        {
+          "budget": "organisations/acme/budgets/org",
+          "display_name": "Organisation",
+          "scope": 4,
+          "spent_micros": 0,
+          "limit_micros": 0,
+          "period_end_time_ns": 1793491200000000000,
+          "level": 5
+        },
+        {
+          "budget": "organisations/acme/budgets/ada",
+          "display_name": "Ada",
+          "scope": 1,
+          "spent_micros": 1250000,
+          "limit_micros": 50000000,
+          "period_end_time_ns": 1793491200500000000,
+          "warn_only": true,
+          "level": 1
+        },
+        {
+          "budget": "organisations/acme/budgets/later",
+          "scope": 9,
+          "spent_micros": 1,
+          "limit_micros": 2,
+          "level": 7
+        }
+      ],
+      "evaluate_time_ns": 1791892800123456789
+    },
+    "hex": "0802121461206275646765742069732070617374203935251a02763832670a1e6f7267616e69736174696f6e732f61636d652f627564676574732f656e67120b456e67696e656572696e67180322206f7267616e69736174696f6e732f61636d652f776f726b7370616365732f77312880c0d1e1233080c8afa0253a060880829ad7064803323a0a1e6f7267616e69736174696f6e732f61636d652f627564676574732f6f7267120c4f7267616e69736174696f6e18043a060880829ad706480532420a1e6f7267616e69736174696f6e732f61636d652f627564676574732f6164611203416461180128d0a54c3080e1eb173a0c0880829ad7061080cab5ee0140014801322a0a206f7267616e69736174696f6e732f61636d652f627564676574732f6c6174657218092801300248073a0b08c0bab8d60610959aef3a"
   }
 ]

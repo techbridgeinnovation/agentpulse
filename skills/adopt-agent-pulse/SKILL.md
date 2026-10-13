@@ -78,7 +78,7 @@ Every other field on `recorder.Config` has a working default. Do not tune them.
 
 ## Step 4a: framework path (Google ADK v2)
 
-Register three callbacks on the agent. Which request, which user, which session, which model and how many tokens are all already on the framework's own callback context.
+Register the seven callbacks on the agent. Which request, which user, which session, which model and how many tokens are all already on the framework's own callback context.
 
 ```go
 recording := adkv2hooks.Options{
@@ -91,11 +91,17 @@ recording := adkv2hooks.Options{
 
 agentConfig := llmagent.Config{
 	// ...existing fields unchanged...
-	BeforeModelCallbacks: []llmagent.BeforeModelCallback{adkv2hooks.BeforeModel(rec, recording)},
-	AfterModelCallbacks:  []llmagent.AfterModelCallback{adkv2hooks.AfterModel(rec, recording)},
-	AfterToolCallbacks:   []llmagent.AfterToolCallback{adkv2hooks.AfterTool(rec, recording)},
+	BeforeModelCallbacks:  []llmagent.BeforeModelCallback{adkv2hooks.BeforeModel(rec, recording)},
+	AfterModelCallbacks:   []llmagent.AfterModelCallback{adkv2hooks.AfterModel(rec, recording)},
+	OnModelErrorCallbacks: []llmagent.OnModelErrorCallback{adkv2hooks.OnModelError(rec, recording)},
+	BeforeToolCallbacks:   []llmagent.BeforeToolCallback{adkv2hooks.BeforeTool(rec, recording)},
+	AfterToolCallbacks:    []llmagent.AfterToolCallback{adkv2hooks.AfterTool(rec, recording)},
+	OnToolErrorCallbacks:  []llmagent.OnToolErrorCallback{adkv2hooks.OnToolError(rec, recording)},
+	AfterAgentCallbacks:   []agent.AfterAgentCallback{adkv2hooks.AfterAgent(rec, recording)},
 }
 ```
+
+`BeforeModel` and `BeforeTool` note when a call began, so its record says how long it ran; without them every call reads as not timed. `OnModelError` and `OnToolError` record a call that failed, which otherwise leaves no record at all. `AfterAgent` goes on the agent that owns the turn.
 
 `Model` is named because a streamed answer arrives in pieces the framework assembles into one summary that carries token counts but not the model. Pricing looks a rate up by model.
 
@@ -113,11 +119,11 @@ ctx = recorder.WithUser(ctx, recorder.User{ID: claims.Subject, Name: claims.Name
 ctx = recorder.WithProject(recorder.WithWorkspace(ctx, tenantID), projectID)
 ```
 
-`tenantID` is the bare identifier of the customer, `acme`, not a resource name; the library builds the name under the organisation the key carries. Create the workspace once when the customer signs up, from the code that creates the customer's own record, with `WorkspacesService.CreateWorkspace` under the organisation. A product with one tenant sets neither: its records are filed under its default workspace and it never names it.
+`tenantID` is the bare identifier of the customer, `acme`, not a resource name; the library builds the name under the organisation the key carries. Records are filed under the customer the moment its id is used; give it a name in the portal, under Organisation, Workspaces, so reports show the name rather than the id. A product with one tenant sets neither: its records are filed under its default workspace and it never names it.
 
 Never pass the workspace or the project as an argument at a model call site. A value a call site can choose is a value that can attribute one customer's spend to another.
 
-On ADK v1 the same three functions live in `recorder/adkhooks` with `adkhooks.Options`, and there is a fourth: register `adkhooks.BeforeTool` beside `adkhooks.AfterTool` as a `BeforeToolCallback`. It records nothing on its own — it notes when a tool call began, so that the record of it says how long it ran. Without it a tool is still recorded, with no duration, and a timeout reads as an ordinary failure.
+On ADK v1 the same callbacks live in `recorder/adkhooks` with `adkhooks.Options`, registered the same way.
 
 ## Step 4b: client path (no framework)
 

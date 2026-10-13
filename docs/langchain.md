@@ -29,4 +29,4 @@ agent.invoke(inputs, config={
 
 ## Budgets
 
-A governed handler checks your budgets before each model call, and a stopped call raises `SpendDenied` before it is sent; `agentpulse.denied(err)` recognises it. A handler cannot change which model a call uses, so a downgrade lets the call through as asked.
+A governed handler checks your budgets before each model call, and a stopped call raises `SpendDenied` before it is sent; `agentpulse.denied(err)` recognises it. A warn-only budget past its limit lets the call through and alerts you.

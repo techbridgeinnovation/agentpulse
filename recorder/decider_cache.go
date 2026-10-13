@@ -73,6 +73,12 @@ type inflightCall struct {
 // existing fail-open handling in adk.BeforeModel — proceed, count a
 // DecisionError — sees the same errors it always has.
 //
+// A cached verdict is the whole response, budget statuses and the time
+// governance read them included, so a warm call hands a product the same
+// figures the cold one did, as old as the entry is. The response is shared
+// between every call that reads it and must not be changed;
+// Recorder.ReportBudgetStatus hands a product copies for that reason.
+//
 // Get, Store and Invalidate are exported deliberately: a later streaming
 // mechanism that lets governance push a changed or invalidated verdict into
 // a running agent has exactly the operations it needs here, without this

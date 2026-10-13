@@ -13,15 +13,24 @@ Agent Pulse raises an alert when a budget nears its limit, spend jumps, or an ag
 
 | Alert | When | Severity |
 | --- | --- | --- |
-| Budget near limit | Spend reaches 75% of a budget, then 95% | Notice at 75%, urgent at 95% |
-| Budget reached | Spend reaches the limit | Urgent |
+| Budget near limit | Spend reaches 75% of a budget, then 95% | Notice at 75%, urgent at 95%. Both are emailed |
+| Budget reached | Spend reaches the limit. An enforced budget says calls are now refused; a warn-only budget says they continue | Urgent |
 | Budget running out early | Spend is on pace to pass the limit before the period ends | Notice |
+| Allocation drawing on reserve | A workspace has used its allocation and starts drawing on its budget's reserve | Notice |
+| Reserve near used up | What has been drawn from a budget's reserve reaches 75% of it, then 95% | Notice at 75%, urgent at 95% |
+| Reserve used up | A budget's reserve is used up | Urgent |
 | Spend spike | The last 24 hours cost at least twice an ordinary day, and $5 more | Notice; urgent at four times |
 | Failure spike | An agent fails far more of its calls in an hour than it usually does | Notice; urgent at half its calls |
 
 An ordinary day is the middle day of the 14 before, once at least seven of them had spend. A spend spike names the agents and customers behind the increase and their share of it. A failure spike needs at least 20 calls and 5 failures in the hour, and a failure rate three times the agent's usual and at least 10 points above it. Calls stopped by a budget are not counted as failures.
 
-Each alert is raised once. A spike stays one alert for 12 hours, and a failure spike for 6.
+Each alert is raised once. A spike stays one alert for 12 hours, and a failure spike for 6. A budget's alerts are raised once a period, and once for the budget as a whole, however many users share it. A budget switched between enforce and warn only while past its limit raises "Budget reached" again, so the alert always says what is happening to calls.
+
+## Email
+
+Urgent alerts, and a budget's first warning at 75% of its limit, are also emailed. They go to the people in your organisation who can manage its budgets, those with the organisation administrator or governance administrator role, and only to people who have signed in to Agent Pulse. An invited person who has not signed in yet, and a service account, are not emailed. Each alert is emailed once for the period it belongs to.
+
+Email is switched on for the whole Agent Pulse service, not per organisation. Where it is off, alerts still appear on **Notifications** and go to your Slack and webhook channels. Every other notice stays on the Notifications page and your channels.
 
 ## Send alerts to Slack
 
@@ -48,7 +57,7 @@ Each alert is a `POST` with a JSON body:
 }
 ```
 
-`type` is one of `budget.threshold`, `budget.exhausted`, `budget.projected`, `spend.spike`, `failure.spike`, `model.retiring`, `model.price_changed`, or `test`. Ignore a type you do not know; more may be added. `data` is the alert as the Notifications page shows it.
+`type` is one of `budget.threshold`, `budget.exhausted`, `budget.projected`, `budget.drawing_reserve`, `reserve.threshold`, `reserve.exhausted`, `spend.spike`, `failure.spike`, `model.retiring`, `model.price_changed`, or `test`. Ignore a type you do not know; more may be added. `data` is the alert as the Notifications page shows it.
 
 ## Check a delivery is ours
 
