@@ -9,17 +9,36 @@ Metering, cost attribution and spend governance for AI agents. This repository h
 | `recorder/adkv2hooks/` | The same callbacks for Google ADK v2, as its own module because the two ADK majors are unrelated types. |
 | `recorder/pb/` | The generated Go for the metering and governance contracts the recorder speaks. |
 | `python/` | The same library for Python, `techbridge-agentpulse`, imported as `agentpulse`: a reporter, instrumented OpenAI, Anthropic and Gemini clients, a plugin for Google ADK and a callback for LiteLLM. No dependencies of its own. |
+| `typescript/` | The same library for TypeScript, `techbridge-agentpulse`: a reporter and a middleware for the Vercel AI SDK. No runtime dependencies. |
+| `skills/` | The adoption skill a coding agent follows to add Agent Pulse to a service. |
+| `.claude-plugin/` | The skill as a Claude Code plugin, with this repository as its marketplace. |
+| `cursor/` | The same skill as a Cursor rule, written from it by `scripts/sync-cursor-rule.sh`. |
 | `docs/` | Quickstart, guides, framework pages and concepts. The same pages the console serves, which also hosts the API reference. |
-| `scripts/` | Maintainer tooling: syncing the contracts, the documentation and the Python recorder from the private build. |
+| `scripts/` | Maintainer tooling: syncing the contracts, the documentation and the Python recorder from the private build, and writing the Cursor rule. |
 
 ```bash
 go get github.com/techbridgeinnovation/agentpulse/recorder
 ```
 
 ```bash
-pip install "techbridge-agentpulse @ git+https://github.com/techbridgeinnovation/agentpulse@python/v0.5.0#subdirectory=python"
+pip install techbridge-agentpulse
 ```
 
-Each Python release is a `python/v<version>` tag, listed on the [releases page](https://github.com/techbridgeinnovation/agentpulse/releases). Pin to the newest one. A release is made by bumping `python/src/agentpulse/_version.py` in the pull request that carries the change: merging it tags and publishes the release.
+```bash
+npm install techbridge-agentpulse
+```
 
-Start with the [quickstart](docs/quickstart.md), then [what is recorded](docs/what-is-recorded.md) and [reading your spend over the API](docs/reading-spend-api.md). The libraries' own notes are in [`recorder/README.md`](recorder/README.md) and [`python/README.md`](python/README.md).
+Each release is a `python/v<version>` or `typescript/v<version>` tag, listed on the [releases page](https://github.com/techbridgeinnovation/agentpulse/releases), and the same version on PyPI or npm. A release is made by bumping `python/src/agentpulse/_version.py` or the `version` in `typescript/package.json` in the pull request that carries the change: merging it publishes the package, tags the merge and publishes the release.
+
+To have a coding agent add Agent Pulse to a service, install the plugin in Claude Code:
+
+```
+/plugin marketplace add techbridgeinnovation/agentpulse
+/plugin install agentpulse@agentpulse
+```
+
+In Cursor, copy `cursor/adopt-agent-pulse.mdc` into the project's `.cursor/rules/`.
+
+Start with the [quickstart](docs/quickstart.md), then [what is recorded](docs/what-is-recorded.md) and [reading your spend over the API](docs/reading-spend-api.md). The libraries' own notes are in [`recorder/README.md`](recorder/README.md), [`python/README.md`](python/README.md) and [`typescript/README.md`](typescript/README.md).
+
+Released under the [MIT licence](LICENSE).

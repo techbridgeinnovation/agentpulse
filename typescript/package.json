@@ -1,6 +1,6 @@
 {
   "name": "techbridge-agentpulse",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Records what an AI agent spent, from inside the agent's own process, for Agent Pulse.",
   "license": "MIT",
   "repository": {
