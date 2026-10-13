@@ -10,10 +10,15 @@ from __future__ import annotations
 import dataclasses
 import functools
 import importlib.metadata
+import inspect
 import json
+import os
+import queue
+import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from datetime import datetime
+from typing import Any, Callable, Mapping, Sequence
 
 from . import _wire, governance
 from .context import current_component, current_project, current_request, current_session, current_skill, current_user, current_workspace, looks_like_email, workspace_name
@@ -122,6 +127,83 @@ class _Framework:
     version: str = ""
 
 
+@dataclass(frozen=True)
+class BudgetStatusEvent:
+    """What an `on_budget_status` callback is given: the budget statuses governance sent with its answer for one instrumented call, and what that call was.
+
+    The statuses are a snapshot as of `evaluate_time`, from a verdict that may have been reused from the cache: they can trail the calls made since by the cache's lifetime plus the time spend takes to be recorded. They are for warning a person, never an exact live percentage or a hard cap.
+    """
+
+    budget_statuses: tuple[governance.BudgetStatus, ...]
+    evaluate_time: datetime | None
+    # The decision the statuses came with, such as ALLOW or NOTIFY.
+    decision: str
+    # The model and provider the call asked for, and the part of the service making it.
+    model: str
+    provider: str
+    component: str
+    # Who and what the call was for, as the question to governance named them. The user is empty where the identifier looked like an email address, which is never sent.
+    user: str = ""
+    workspace: str = ""
+    project: str = ""
+    request: str = ""
+
+
+BudgetStatusCallback = Callable[[BudgetStatusEvent], Any]
+
+# How many events wait for the callback. A callback slower than decisions arrive loses the newest events rather than growing memory or holding up a model call.
+_BUDGET_STATUS_QUEUE = 64
+
+
+class _BudgetStatusWorker:
+    """Delivers budget status events to the product's callback one at a time, in the order they were queued, on a daemon thread of its own.
+
+    Nothing here ever waits on the callback: `offer` puts the event on a bounded queue and returns, and a full queue drops the event and counts it. A callback that is running is never interrupted, so a slow one only delays the deliveries behind it. Daemon, so neither it nor a callback stuck in it holds the interpreter open at exit; what is still queued then is lost, which is delivery at most once.
+    """
+
+    def __init__(self, recorder: Recorder, callback: BudgetStatusCallback):
+        self._recorder = recorder
+        self._callback = callback
+        self._lock = threading.Lock()
+        self._pid = os.getpid()
+        self._queue: queue.Queue = queue.Queue(maxsize=_BUDGET_STATUS_QUEUE)
+        self._started = False
+
+    def offer(self, event: BudgetStatusEvent) -> None:
+        try:
+            self._ensure_started()
+            self._queue.put_nowait(event)
+        except queue.Full:
+            self._recorder._note("budget_status_dropped")
+        except Exception:
+            self._recorder._note("panicked")
+
+    def _ensure_started(self) -> None:
+        with self._lock:
+            if self._pid != os.getpid():
+                # A forked child has none of the parent's threads, and what the parent had queued stays the parent's.
+                self._pid = os.getpid()
+                self._queue = queue.Queue(maxsize=_BUDGET_STATUS_QUEUE)
+                self._started = False
+            if not self._started:
+                threading.Thread(target=self._run, args=(self._queue,), name="agentpulse-budget-status", daemon=True).start()
+                self._started = True
+
+    def _run(self, events: queue.Queue) -> None:
+        while True:
+            event = events.get()
+            try:
+                result = self._callback(event)
+                if inspect.isawaitable(result):
+                    # Nothing here runs an event loop, so an async callback can never have run. Counted rather than left unnoticed.
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
+                    self._recorder._note("budget_status_failed")
+            except BaseException:
+                self._recorder._note("budget_status_failed")
+
+
 @functools.lru_cache(maxsize=None)
 def _installed_version(distribution: str) -> str:
     """The installed version of a package, read once, or empty when it cannot be read."""
@@ -188,6 +270,7 @@ class Reporter:
         self._decider: governance.Decider | None = None
         self._decide_timeout = governance.DEFAULT_DECIDE_TIMEOUT
         self._subscriber: Any = None
+        self._budget_status: _BudgetStatusWorker | None = None
 
     def governed(
         self,
@@ -197,6 +280,7 @@ class Reporter:
         timeout: float = governance.DEFAULT_DECIDE_TIMEOUT,
         failure_backoff: float = governance.DEFAULT_FAILURE_BACKOFF,
         follow_changes: bool = True,
+        on_budget_status: BudgetStatusCallback | None = None,
     ) -> "Reporter":
         """A reporter whose `decide` asks governance, so a budget that stops an agent stops this service spending against the same budget too.
 
@@ -205,6 +289,8 @@ class Reporter:
         Governance through the gateway starts opening its connections here, in the background, so the first decision on a new instance does not spend its timeout on a handshake.
 
         With `follow_changes`, governance through the gateway also tells this process when a budget changes, and the verdicts it covers are dropped at once rather than when they expire.
+
+        `on_budget_status` is called with a `BudgetStatusEvent` for every instrumented call (a wrapped client, a framework plugin, hook or callback) whose decision came with at least one budget status, at any level including WITHIN, so the product can warn its own users; a call to `decide` returns the statuses on its verdict instead. Delivery is asynchronous and the model call never waits for it: the event goes on a queue of 64 and one daemon thread per reporter calls the function, one event at a time and in the order the decisions were obtained, at most once, so what is still queued at exit is lost. The function therefore runs on that thread, not the caller's thread or event loop, and must be thread-safe. A full queue drops the event and counts it in `budget_status_dropped`. Whatever the function raises is counted in `budget_status_failed`, as is an async function, which is never awaited. A running function is never interrupted, so a slow one only delays the deliveries behind it. It is not called when no decision was reached.
         """
         through_gateway = decider is None
         if decider is None:
@@ -219,6 +305,8 @@ class Reporter:
 
             governed._subscriber = InvalidationSubscriber(self._gateway, governed._decider, organisation)
         governed._decide_timeout = timeout if timeout > 0 else governance.DEFAULT_DECIDE_TIMEOUT
+        if on_budget_status is not None:
+            governed._budget_status = _BudgetStatusWorker(self.recorder, on_budget_status)
         if through_gateway:
             governance.warm(decider, governed._decide_timeout)
         return governed
@@ -229,10 +317,12 @@ class Reporter:
         Call it where the service is about to call a model, and skip the call when `proceed` is false: the refusal is recorded here, with nothing spent, so refusals are countable. A DOWNGRADE names a replacement model for the caller to use instead. Who bills for the call is the reporter's unless `provider` says otherwise.
 
         Only a genuine DENY refuses. Governance unreachable, slow or saying something this version does not know lets the call go ahead, and is counted. A reporter that is not governed answers UNDECIDED to everything and asks nobody.
-        """
-        return self._decide(model, provider=provider, component=component)
 
-    def _decide(self, model: str, *, provider: str = "", component: str = "", framework: "_Framework | None" = None) -> governance.Verdict:
+        The verdict carries how each budget that applies stood, in `budget_statuses`, as of `evaluate_time`. The reporter's `on_budget_status` is not called for it: the caller already holds the statuses.
+        """
+        return self._decide(model, provider=provider, component=component, instrumented=False)
+
+    def _decide(self, model: str, *, provider: str = "", component: str = "", framework: "_Framework | None" = None, instrumented: bool = True) -> governance.Verdict:
         verdict = governance.Verdict()
         if self._decider is None:
             return verdict
@@ -261,6 +351,8 @@ class Reporter:
             self.recorder._note("decision_errors")
             return governance.Verdict()
 
+        if instrumented and verdict.budget_statuses and self._budget_status is not None:
+            self._tell_budget_status(verdict, request, component or current_component(), framework)
         if verdict.decision == governance.NOTIFY:
             self.recorder._note("notified")
         elif verdict.decision == governance.DOWNGRADE:
@@ -269,6 +361,26 @@ class Reporter:
             self.recorder._note("denied")
             self._record_denied(component or current_component(), model, billed_by, framework)
         return verdict
+
+    def _tell_budget_status(self, verdict: governance.Verdict, asked: _wire.DecideRequest, component: str, framework: "_Framework | None") -> None:
+        """Queues the statuses for the product's callback and returns at once. The event is built here, on the calling thread, because the request on the context is only this call's here."""
+        try:
+            self._budget_status.offer(  # type: ignore[union-attr]
+                BudgetStatusEvent(
+                    budget_statuses=verdict.budget_statuses,
+                    evaluate_time=verdict.evaluate_time,
+                    decision=verdict.decision,
+                    model=asked.requested_model,
+                    provider=asked.requested_provider,
+                    component=component,
+                    user=asked.user,
+                    workspace=asked.workspace,
+                    project=asked.project,
+                    request=current_request() or (framework.request if framework else ""),
+                )
+            )
+        except Exception:
+            self.recorder._note("panicked")
 
     def spent_on(self, request: str) -> int:
         """What a request has cost so far in this process, in millionths of a dollar. See `Recorder.spent_on`."""

@@ -12,6 +12,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol
 
 from . import _wire
@@ -46,6 +47,91 @@ _NAMES = {
 }
 
 
+# What a budget is a limit on, as BudgetStatus.scope names it.
+SCOPE_UNSPECIFIED = "SCOPE_UNSPECIFIED"
+PERSONAL = "PERSONAL"
+SHARED_POOL = "SHARED_POOL"
+WORKSPACE = "WORKSPACE"
+RESERVE = "RESERVE"
+ORGANISATION = "ORGANISATION"
+OTHER = "OTHER"
+
+_SCOPES = {
+    _wire.SCOPE_PERSONAL: PERSONAL,
+    _wire.SCOPE_SHARED_POOL: SHARED_POOL,
+    _wire.SCOPE_WORKSPACE: WORKSPACE,
+    _wire.SCOPE_RESERVE: RESERVE,
+    _wire.SCOPE_ORGANISATION: ORGANISATION,
+    _wire.SCOPE_OTHER: OTHER,
+}
+
+# How close a budget is to its limit, as BudgetStatus.level names it, least pressing first.
+LEVEL_UNSPECIFIED = "LEVEL_UNSPECIFIED"
+WITHIN = "WITHIN"
+PASSED_75_PERCENT = "PASSED_75_PERCENT"
+PASSED_95_PERCENT = "PASSED_95_PERCENT"
+DRAWING_RESERVE = "DRAWING_RESERVE"
+EXHAUSTED = "EXHAUSTED"
+
+_LEVELS = {
+    _wire.LEVEL_WITHIN: WITHIN,
+    _wire.LEVEL_PASSED_75_PERCENT: PASSED_75_PERCENT,
+    _wire.LEVEL_PASSED_95_PERCENT: PASSED_95_PERCENT,
+    _wire.LEVEL_DRAWING_RESERVE: DRAWING_RESERVE,
+    _wire.LEVEL_EXHAUSTED: EXHAUSTED,
+}
+
+
+def _time(nanoseconds: int) -> datetime | None:
+    """A timestamp governance sent, in UTC, or None where it sent none or one no datetime can hold."""
+    if not nanoseconds:
+        return None
+    try:
+        seconds, nanos = divmod(nanoseconds, 1_000_000_000)
+        return datetime.fromtimestamp(seconds, timezone.utc) + timedelta(microseconds=nanos // 1000)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+@dataclass(frozen=True)
+class BudgetStatus:
+    """How one budget that applies to a call stood when governance decided it.
+
+    A snapshot, never a live reading: spend reaches governance only after a call is recorded, and a cached verdict is reused, so this can trail the calls made since by the cache's lifetime and the recording delay. It is something to warn a person with, not a limit to enforce or a percentage to show as exact.
+    """
+
+    # Format: organisations/{organisation}/budgets/{budget}. For a RESERVE, the budget whose reserve it is.
+    budget: str = ""
+    display_name: str = ""
+    # One of PERSONAL, SHARED_POOL, WORKSPACE, RESERVE, ORGANISATION and OTHER, or SCOPE_UNSPECIFIED for one this version does not know.
+    scope: str = SCOPE_UNSPECIFIED
+    # For a WORKSPACE status, the workspace. Format: organisations/{organisation}/workspaces/{workspace}
+    workspace: str = ""
+    # In millionths of a US dollar, this period. The limit is zero for a reserve with nothing in it, so a share of it is never worked out by dividing.
+    spent_micros: int = 0
+    limit_micros: int = 0
+    # When the current period ends, in UTC.
+    period_end_time: datetime | None = None
+    # True when the budget only warns and lets a call continue once it is exhausted.
+    warn_only: bool = False
+    # One of WITHIN, PASSED_75_PERCENT, PASSED_95_PERCENT, DRAWING_RESERVE and EXHAUSTED, or LEVEL_UNSPECIFIED for one this version does not know.
+    level: str = LEVEL_UNSPECIFIED
+
+    @classmethod
+    def of(cls, status: _wire.BudgetStatus) -> "BudgetStatus":
+        return cls(
+            budget=status.budget,
+            display_name=status.display_name,
+            scope=_SCOPES.get(status.scope, SCOPE_UNSPECIFIED),
+            workspace=status.workspace,
+            spent_micros=status.spent_micros,
+            limit_micros=status.limit_micros,
+            period_end_time=_time(status.period_end_time_ns),
+            warn_only=status.warn_only,
+            level=_LEVELS.get(status.level, LEVEL_UNSPECIFIED),
+        )
+
+
 @dataclass(frozen=True)
 class Verdict:
     """What governance decided about one call."""
@@ -56,6 +142,10 @@ class Verdict:
     # For a DOWNGRADE, the provider and model to call instead. Applying them is the caller's to do, and a replacement served by a different provider than the one the caller talks to cannot be applied by changing the model name alone.
     replacement_provider: str = ""
     replacement_model: str = ""
+    # How every budget that applies to the call stood, most pressing first, at every level including WITHIN. Empty from a governance that predates them, for a call no budget applies to, and when no answer was reached. A verdict reused from the cache carries the statuses of the answer it reuses.
+    budget_statuses: tuple[BudgetStatus, ...] = ()
+    # When governance worked the answer out, in UTC, which is how old the statuses are. None when no answer was reached or governance did not say.
+    evaluate_time: datetime | None = None
 
     @property
     def proceed(self) -> bool:
@@ -372,4 +462,6 @@ def ask(decider: Decider, request: _wire.DecideRequest, timeout: float) -> Verdi
         reason=response.reason,
         replacement_provider=response.replacement_provider,
         replacement_model=response.replacement_model,
+        budget_statuses=tuple(BudgetStatus.of(status) for status in response.budget_statuses),
+        evaluate_time=_time(response.evaluate_time_ns),
     )

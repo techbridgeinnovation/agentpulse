@@ -46,10 +46,10 @@ from .failure import (
     reported_error_of,
 )
 from .gateway import ConfigError, Gateway, organisation_of_key
-from .governance import ALLOW, DENY, DOWNGRADE, NOTIFY, UNDECIDED, CachingDecider, Decider, GatewayDecider, Verdict
+from .governance import ALLOW, DENY, DOWNGRADE, NOTIFY, UNDECIDED, BudgetStatus, CachingDecider, Decider, GatewayDecider, Verdict
 from .pricing import GatewayRates, PriceableUnit, RateSource
 from .recorder import Config, Recorder, Stats
-from .report import Attribution, ModelCall, Reporter, Tokens, ToolCall
+from .report import Attribution, BudgetStatusCallback, BudgetStatusEvent, ModelCall, Reporter, Tokens, ToolCall
 from .sinks import Discard, LossSink, MeteringSink, Sink, UserSink
 from .usage import (
     FORMAT_ANTHROPIC,
@@ -105,6 +105,9 @@ __all__ = [
     "ALLOW",
     "Activity",
     "Attribution",
+    "BudgetStatus",
+    "BudgetStatusCallback",
+    "BudgetStatusEvent",
     "CachingDecider",
     "Charge",
     "Config",

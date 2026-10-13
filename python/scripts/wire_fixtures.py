@@ -86,6 +86,23 @@ CASES = [
         },
     },
     {"name": "decide response", "message": "DecideResponse", "fields": {"decision": 3, "reason": "over budget", "policy_version": "v7", "replacement_provider": "VERTEX_AI", "replacement_model": "gemini-2.5-flash"}},
+    # A reserve with nothing in it has a zero limit, and a scope and level numbered past what the contract names today stand for ones a newer governance may send.
+    {
+        "name": "decide response with budget statuses",
+        "message": "DecideResponse",
+        "fields": {
+            "decision": 2,
+            "reason": "a budget is past 95%",
+            "policy_version": "v8",
+            "budget_statuses": [
+                {"budget": "organisations/acme/budgets/eng", "display_name": "Engineering", "scope": 3, "workspace": "organisations/acme/workspaces/w1", "spent_micros": 9600000000, "limit_micros": 10000000000, "period_end_time_ns": 1793491200000000000, "level": 3},
+                {"budget": "organisations/acme/budgets/org", "display_name": "Organisation", "scope": 4, "spent_micros": 0, "limit_micros": 0, "period_end_time_ns": 1793491200000000000, "level": 5},
+                {"budget": "organisations/acme/budgets/ada", "display_name": "Ada", "scope": 1, "spent_micros": 1250000, "limit_micros": 50000000, "period_end_time_ns": 1793491200500000000, "warn_only": True, "level": 1},
+                {"budget": "organisations/acme/budgets/later", "scope": 9, "spent_micros": 1, "limit_micros": 2, "level": 7},
+            ],
+            "evaluate_time_ns": 1791892800123456789,
+        },
+    },
 ]
 
 

@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -9,12 +10,14 @@ from agentpulse import (
     NOTIFY,
     UNDECIDED,
     Attribution,
+    BudgetStatus,
     CachingDecider,
     Config,
     Gateway,
     Recorder,
     Reporter,
     User,
+    Verdict,
     _wire,
     scope,
 )
@@ -44,11 +47,11 @@ class Answers:
         return self.response
 
 
-def governed(decider, *, agent=AGENT, cache_ttl=0.0, timeout=0.5, billed_by="VERTEX_AI"):
+def governed(decider, *, agent=AGENT, cache_ttl=0.0, timeout=0.5, billed_by="VERTEX_AI", on_budget_status=None):
     sink = MemorySink()
     rec = Recorder(Config(sinks=[sink], exit_timeout=0, flush_every=60))
     base = Reporter(rec, Attribution(agent=agent, service="sources-service", billed_by=billed_by))
-    return base.governed(decider, cache_ttl=cache_ttl, timeout=timeout), sink
+    return base.governed(decider, cache_ttl=cache_ttl, timeout=timeout, on_budget_status=on_budget_status), sink
 
 
 def recorded(rp, sink):
@@ -393,3 +396,204 @@ def test_governed_through_a_gateway_that_cannot_be_reached_still_starts_and_lets
     rp = Reporter(Recorder(Config(exit_timeout=0)), Attribution(agent=AGENT, service="s"), gateway=gateway).governed(follow_changes=False, timeout=0.5)
     assert time.monotonic() - started < 0.1
     assert rp.decide(model="m").proceed
+
+
+STATUSES = [
+    _wire.BudgetStatus(
+        budget="organisations/acme/budgets/eng",
+        display_name="Engineering",
+        scope=_wire.SCOPE_WORKSPACE,
+        workspace="organisations/acme/workspaces/w1",
+        spent_micros=9_600_000,
+        limit_micros=10_000_000,
+        period_end_time_ns=1793491200_000000000,
+        level=_wire.LEVEL_PASSED_95_PERCENT,
+    ),
+    _wire.BudgetStatus(budget="organisations/acme/budgets/org", scope=_wire.SCOPE_RESERVE, level=_wire.LEVEL_EXHAUSTED),
+    _wire.BudgetStatus(budget="organisations/acme/budgets/later", scope=9, level=7, warn_only=True),
+]
+
+
+def with_statuses(decision=_wire.DECISION_ALLOW):
+    return Answers(decision, budget_statuses=list(STATUSES), evaluate_time_ns=1791892800_123456789)
+
+
+def test_a_verdict_carries_every_budget_status_and_when_governance_worked_them_out():
+    rp, _ = governed(with_statuses(_wire.DECISION_NOTIFY))
+    verdict = rp.decide(model="m")
+    assert verdict.decision == NOTIFY
+    assert verdict.evaluate_time == datetime(2026, 10, 13, 12, 0, 0, 123456, tzinfo=timezone.utc)
+    workspace, reserve, later = verdict.budget_statuses
+    assert workspace == BudgetStatus(
+        budget="organisations/acme/budgets/eng",
+        display_name="Engineering",
+        scope="WORKSPACE",
+        workspace="organisations/acme/workspaces/w1",
+        spent_micros=9_600_000,
+        limit_micros=10_000_000,
+        period_end_time=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        level="PASSED_95_PERCENT",
+    )
+    # A reserve with nothing in it is exhausted at a limit of zero, and nothing here divides by it.
+    assert (reserve.scope, reserve.level, reserve.spent_micros, reserve.limit_micros, reserve.period_end_time) == ("RESERVE", "EXHAUSTED", 0, 0, None)
+    # A scope or level this version does not know is read as unspecified rather than refused.
+    assert (later.scope, later.level, later.warn_only) == ("SCOPE_UNSPECIFIED", "LEVEL_UNSPECIFIED", True)
+
+
+def test_a_governance_that_sends_no_statuses_leaves_the_verdict_without_any():
+    verdict = governed(Answers(_wire.DECISION_ALLOW))[0].decide(model="m")
+    assert verdict.budget_statuses == () and verdict.evaluate_time is None
+    assert Verdict().budget_statuses == () and Verdict(decision=DENY, reason="r").evaluate_time is None
+
+
+def test_a_cached_verdict_keeps_the_statuses_of_the_answer_it_reuses():
+    answers = with_statuses()
+    rp, _ = governed(answers, cache_ttl=30)
+    first, second = rp.decide(model="m"), rp.decide(model="m")
+    assert len(answers.asked) == 1
+    assert second.budget_statuses == first.budget_statuses and second.evaluate_time == first.evaluate_time
+
+
+def until(condition, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    return condition()
+
+
+def test_an_instrumented_call_hands_its_statuses_to_the_callback():
+    told = []
+    rp, _ = governed(with_statuses(), on_budget_status=told.append)
+    with scope(user=User("u1", "Ada"), workspace="w1", project="p1", request="req-1"):
+        # What every wrapped client and framework hook calls before the model call.
+        assert rp._decide("gemini-2.5-pro", component="asset_summary").proceed
+    assert until(lambda: told)
+    [event] = told
+    assert len(event.budget_statuses) == 3 and event.budget_statuses[0].level == "PASSED_95_PERCENT"
+    assert event.evaluate_time == datetime(2026, 10, 13, 12, 0, 0, 123456, tzinfo=timezone.utc)
+    assert (event.decision, event.model, event.provider, event.component) == ("ALLOW", "gemini-2.5-pro", "VERTEX_AI", "asset_summary")
+    assert (event.user, event.workspace, event.project, event.request) == ("u1", "organisations/acme/workspaces/w1", "p1", "req-1")
+
+
+def test_a_call_never_waits_for_a_callback_that_is_blocked():
+    release, entered = threading.Event(), threading.Event()
+
+    def blocked(event):
+        entered.set()
+        release.wait(10)
+
+    rp, _ = governed(with_statuses(), on_budget_status=blocked)
+    try:
+        started = time.monotonic()
+        assert rp._decide("m").proceed
+        assert entered.wait(2)
+        # The callback is still running, and further calls still return at once.
+        assert rp._decide("m").proceed
+        assert time.monotonic() - started < 1.0
+        assert not release.is_set()
+    finally:
+        release.set()
+
+
+def test_events_are_delivered_one_at_a_time_in_the_order_the_decisions_were_obtained():
+    seen, running, overlapped = [], [0], []
+
+    def callback(event):
+        running[0] += 1
+        overlapped.append(running[0] > 1)
+        seen.append(event.model)
+        time.sleep(0.002)
+        running[0] -= 1
+
+    rp, _ = governed(with_statuses(), on_budget_status=callback)
+    models = [f"m{i}" for i in range(20)]
+    for model in models:
+        rp._decide(model)
+    assert until(lambda: len(seen) == 20)
+    assert seen == models and not any(overlapped)
+
+
+def test_a_cached_verdict_s_statuses_are_delivered_for_every_call():
+    told = []
+    answers = with_statuses()
+    rp, _ = governed(answers, cache_ttl=30, on_budget_status=told.append)
+    rp._decide("m")
+    rp._decide("m")
+    assert until(lambda: len(told) == 2)
+    assert len(answers.asked) == 1 and told[0].budget_statuses == told[1].budget_statuses
+
+
+def test_a_callback_that_raises_or_is_async_does_not_stop_the_call_and_is_counted_failed():
+    def broken(event):
+        raise RuntimeError("the product's own bug")
+
+    async def asynchronous(event):
+        raise AssertionError("never run")
+
+    for callback in (broken, asynchronous):
+        rp, _ = governed(with_statuses(_wire.DECISION_NOTIFY), on_budget_status=callback)
+        verdict = rp._decide("m")
+        assert verdict.proceed and verdict.decision == NOTIFY and len(verdict.budget_statuses) == 3
+        assert until(lambda: rp.recorder.stats().budget_status_failed == 1)
+        stats = rp.recorder.stats()
+        assert (stats.budget_status_dropped, stats.notified, stats.panicked, stats.decision_errors) == (0, 1, 0, 0)
+    # One failure does not stop the deliveries after it.
+    told = []
+
+    def sometimes(event):
+        told.append(event.model)
+        if event.model == "first":
+            raise RuntimeError("first only")
+
+    rp, _ = governed(with_statuses(), on_budget_status=sometimes)
+    rp._decide("first")
+    rp._decide("second")
+    assert until(lambda: told == ["first", "second"])
+
+
+def test_a_full_queue_drops_events_and_counts_them_without_ever_blocking_a_call():
+    release, entered = threading.Event(), threading.Event()
+    told = []
+
+    def blocked(event):
+        entered.set()
+        release.wait(10)
+        told.append(event.model)
+
+    rp, _ = governed(with_statuses(), on_budget_status=blocked)
+    try:
+        rp._decide("held")
+        assert entered.wait(2)
+        started = time.monotonic()
+        for i in range(70):
+            assert rp._decide(f"m{i}").proceed
+        assert time.monotonic() - started < 2.0
+        # The worker holds one event, the queue holds 64, and the other 6 were dropped.
+        assert rp.recorder.stats().budget_status_dropped == 6
+    finally:
+        release.set()
+    assert until(lambda: len(told) == 65)
+    assert told[0] == "held" and told[1:] == [f"m{i}" for i in range(64)]
+
+
+def test_the_callback_is_not_called_without_statuses_without_a_decision_or_for_decide():
+    told = []
+    rp, _ = governed(Answers(_wire.DECISION_ALLOW), on_budget_status=told.append)
+    rp._decide("m")
+    rp, _ = governed(Answers(error=RuntimeError("unreachable")), on_budget_status=told.append)
+    assert rp._decide("m").proceed
+    rp, _ = governed(with_statuses(), on_budget_status=told.append)
+    assert len(rp.decide(model="m").budget_statuses) == 3
+    ungoverned = Reporter(Recorder(Config(exit_timeout=0)), Attribution(agent=AGENT, service="s"))
+    assert ungoverned._decide("m").budget_statuses == ()
+    time.sleep(0.1)
+    assert told == []
+
+
+def test_statuses_reach_no_callback_when_none_is_set_and_no_thread_is_started():
+    before = {t.name for t in threading.enumerate()}
+    rp, _ = governed(with_statuses())
+    assert len(rp._decide("m").budget_statuses) == 3
+    assert not {t.name for t in threading.enumerate() if "budget-status" in t.name} - before
+    stats = rp.recorder.stats()
+    assert (stats.budget_status_dropped, stats.budget_status_failed) == (0, 0)

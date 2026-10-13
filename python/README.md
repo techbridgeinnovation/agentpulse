@@ -188,6 +188,27 @@ A governed reporter asking governance through the gateway also follows its strea
 
 A call waits at most `timeout` seconds, a second and a half by default, for an answer, and a call governance refused within the hour is refused again when no answer comes in time. That wait is enforced by no longer waiting rather than by socket timeouts, which bound each read and write on their own and not the whole exchange. Governance through the gateway opens its connections in the background when the reporter is governed, so the first decision on a new instance is not spent on a handshake; nothing waits on them, and one that fails is opened again by the next call.
 
+## Budget statuses
+
+A verdict from governance carries how every budget that applies to the call stood, most pressing first and at every level including `WITHIN`, in `verdict.budget_statuses`, with `verdict.evaluate_time` saying when governance worked them out. Each `BudgetStatus` names its `budget`, `display_name`, `scope`, `workspace`, `spent_micros`, `limit_micros`, `period_end_time`, `warn_only` and `level`. A scope or level this version does not know reads as `SCOPE_UNSPECIFIED` or `LEVEL_UNSPECIFIED`. A reserve can have a `limit_micros` of zero, so a share is never worked out by dividing without checking it. A governance that predates statuses sends none, and a call with no answer has none.
+
+A call made through a wrapped client, or through a framework plugin, hook or proxy callback that asks governance, hands its statuses to a callback when one is set:
+
+```python
+def warn(event: agentpulse.BudgetStatusEvent) -> None:
+    for status in event.budget_statuses:
+        if status.level in ("PASSED_95_PERCENT", "EXHAUSTED"):
+            notices.add(event.user, status.display_name, status.level)
+
+reporter = agentpulse.connect(service="sources-service").governed(on_budget_status=warn)
+```
+
+It is called for every instrumented call whose decision came with at least one status, with the statuses, `evaluate_time`, the decision, the model, provider and component, and the user, workspace, project and request the question named. It is not called for `decide`, whose verdict already holds the statuses, nor when no decision was reached, nor when a decision has no statuses.
+
+Delivery is asynchronous and the model call never waits for it. The event goes on a queue of 64 and one daemon thread per governed reporter calls the function, one event at a time, in the order the decisions were obtained, at most once: what is still queued when the process exits is lost, and neither the thread nor a callback stuck in it holds the interpreter open. The function runs on that thread, not on the caller's thread or event loop, so it must be thread-safe. A full queue drops the event and counts it in `stats().budget_status_dropped`. Whatever the function raises is counted in `stats().budget_status_failed`, as is an async function, which is never awaited. A running function is never interrupted, so a slow one only delays the deliveries behind it, and once the queue is full those are dropped. Unset, nothing is called and no thread starts.
+
+Statuses are a delayed snapshot, not a live reading. Spend reaches governance only after a call is recorded, and a verdict is reused for up to `cache_ttl`, so a status can trail the calls made since. They are not a hard cap and not an exact percentage. Agent Pulse shows them to no one: a product's users see a warning only where the product's own code reads the statuses and shows one, so wiring this in changes no product's interface by itself.
+
 ## The running total
 
 A spend ceiling has to be readable before a model call, and a network call per model call to read it is not affordable. So the recorder keeps what each in-flight request has spent, priced here against the rate card, which is read through the gateway in the background every 15 minutes and never on the path of a model call:

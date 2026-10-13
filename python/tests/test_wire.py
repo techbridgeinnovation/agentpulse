@@ -41,9 +41,38 @@ def test_encodes_exactly_as_the_official_runtime(case):
     assert encode(case).hex() == case["hex"]
 
 
+def decide_response(fields):
+    fields = dict(fields)
+    fields["budget_statuses"] = [_wire.BudgetStatus(**s) for s in fields.get("budget_statuses", [])]
+    return _wire.DecideResponse(**fields)
+
+
 @pytest.mark.parametrize("case", [c for c in FIXTURES if c["message"] == "DecideResponse"], ids=lambda c: c["name"])
 def test_decodes_what_the_official_runtime_wrote(case):
-    assert _wire.DecideResponse.decode(bytes.fromhex(case["hex"])) == _wire.DecideResponse(**case["fields"])
+    assert _wire.DecideResponse.decode(bytes.fromhex(case["hex"])) == decide_response(case["fields"])
+
+
+def test_budget_statuses_and_the_evaluate_time_are_read_from_the_official_runtime_s_bytes():
+    [case] = [c for c in FIXTURES if c["name"] == "decide response with budget statuses"]
+    response = _wire.DecideResponse.decode(bytes.fromhex(case["hex"]))
+    assert [s.scope for s in response.budget_statuses] == [_wire.SCOPE_WORKSPACE, _wire.SCOPE_RESERVE, _wire.SCOPE_PERSONAL, 9]
+    assert [s.level for s in response.budget_statuses] == [_wire.LEVEL_PASSED_95_PERCENT, _wire.LEVEL_EXHAUSTED, _wire.LEVEL_WITHIN, 7]
+    assert response.budget_statuses[1].limit_micros == 0
+    assert response.evaluate_time_ns == 1791892800_123456789
+
+
+def test_a_reply_from_a_governance_without_statuses_has_none():
+    [case] = [c for c in FIXTURES if c["name"] == "decide response"]
+    response = _wire.DecideResponse.decode(bytes.fromhex(case["hex"]))
+    assert response.budget_statuses == [] and response.evaluate_time_ns == 0
+
+
+def test_an_unknown_field_inside_a_budget_status_is_skipped_and_a_negative_int64_is_read_as_signed():
+    # Field 5, spent_micros, as -1 in ten bytes, then an unknown field 15, inside status field 6.
+    status = b"\x28" + b"\xff" * 9 + b"\x01" + b"\x7a\x01x" + b"\x48\x02"
+    response = _wire.DecideResponse.decode(b"\x32" + bytes([len(status)]) + status)
+    [read] = response.budget_statuses
+    assert (read.spent_micros, read.level) == (-1, _wire.LEVEL_PASSED_75_PERCENT)
 
 
 def test_an_unknown_field_in_a_reply_is_skipped():

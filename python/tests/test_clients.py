@@ -5,6 +5,7 @@ Each test builds a client the way an adopter would and makes an ordinary call. W
 
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -187,6 +188,27 @@ def test_a_denied_openai_call_is_never_sent_and_the_sdk_does_not_retry_it(provid
     [a] = recorded(rp, sink)
     assert (a.status, a.model) == (_wire.STATUS_DENIED, "gpt-5")
     assert rp.recorder.stats().denied == 1
+
+
+def test_a_wrapped_client_hands_budget_statuses_to_the_callback_and_survives_it_raising(provider):
+    told = []
+
+    def callback(event):
+        told.append(event)
+        raise RuntimeError("the product's own bug")
+
+    status = _wire.BudgetStatus(budget="organisations/acme/budgets/b", scope=_wire.SCOPE_PERSONAL, spent_micros=8, limit_micros=10, level=_wire.LEVEL_PASSED_75_PERCENT)
+    rp, sink = reporter()
+    rp = rp.governed(Answers(_wire.DECISION_ALLOW, budget_statuses=[status]), cache_ttl=0, on_budget_status=callback)
+    client = openai_client(rp, provider)
+    provider.json(CHAT)
+    assert client.chat.completions.create(model="gpt-5", messages=[]).choices[0].message.content == "SECRET ANSWER"
+    deadline = time.monotonic() + 2
+    while not rp.recorder.stats().budget_status_failed and time.monotonic() < deadline:
+        time.sleep(0.005)
+    [event] = told
+    assert (event.model, event.provider, event.budget_statuses[0].level) == ("gpt-5", "OPENAI", "PASSED_75_PERCENT")
+    assert rp.recorder.stats().budget_status_failed == 1 and len(recorded(rp, sink)) == 1
 
 
 def test_a_downgrade_rewrites_only_the_model_in_the_body(provider):
