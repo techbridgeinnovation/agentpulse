@@ -3,7 +3,7 @@
 // Source: techbridge/ap/metering/v1/user.proto
 // Plugin version: v0.0.1
 //
-// Generated on: 2026-10-01 14:31:51 UTC
+// Generated on: 2026-10-01 20:56:42 UTC
 
 package metering
 

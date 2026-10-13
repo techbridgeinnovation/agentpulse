@@ -3,7 +3,7 @@
 // Source: techbridge/ap/governance/v1/decision.proto
 // Plugin version: v0.0.1
 //
-// Generated on: 2026-09-23 19:15:36 UTC
+// Generated on: 2026-10-08 10:15:12 UTC
 
 package governance
 
@@ -11,5 +11,5 @@ const (
 	// DecisionsService_Decide_FullMethodDescription returns the description of the techbridge.ap.governance.v1.DecisionsService.Decide method.
 	DecisionsService_Decide_FullMethodDescription = "Decides whether a call may proceed."
 	// DecisionsService_StreamDecisionInvalidations_FullMethodDescription returns the description of the techbridge.ap.governance.v1.DecisionsService.StreamDecisionInvalidations method.
-	DecisionsService_StreamDecisionInvalidations_FullMethodDescription = "Streams a notification whenever a budget mutation may have made a\n previously cached Decide verdict stale. Carries no decision data — governance remains the sole authority for\n decision semantics, exactly as with Decide itself. A recorder that\n receives one drops whatever it has cached matching the given scope and\n asks Decide again the next time it is needed.\n\n Delivery is best effort. A recorder's existing cache TTL is what\n actually bounds staleness: a missed or delayed notification, or the\n stream being unavailable altogether, only means a cached verdict is\n reused for up to that TTL — exactly as if this stream did not exist.\n Spend recorded via RecordSpend does not trigger a notification here;\n only budget configuration changes (CreateBudget, UpdateBudget) do."
+	DecisionsService_StreamDecisionInvalidations_FullMethodDescription = "Streams a notification whenever a budget mutation may have made a\n previously cached Decide verdict stale. Carries no decision data — governance remains the sole authority for\n decision semantics, exactly as with Decide itself. A recorder that\n receives one drops whatever it has cached matching the given scope and\n asks Decide again the next time it is needed.\n\n Delivery is best effort. A recorder's existing cache TTL is what\n actually bounds staleness: a missed or delayed notification, or the\n stream being unavailable altogether, only means a cached verdict is\n reused for up to that TTL — exactly as if this stream did not exist.\n Spend recorded via RecordSpend does not trigger a notification here;\n only budget configuration changes (CreateBudget, UpdateBudget) do. An\n update announces both the scope the budget had and the scope it has\n now, so a user or agent it stopped covering is told too. A change to an\n allocation or to its parent changes the reserve every workspace draws\n on, so it is announced for the whole organisation."
 )

@@ -51,7 +51,11 @@ type DecisionsServiceClient interface {
 	// stream being unavailable altogether, only means a cached verdict is
 	// reused for up to that TTL — exactly as if this stream did not exist.
 	// Spend recorded via RecordSpend does not trigger a notification here;
-	// only budget configuration changes (CreateBudget, UpdateBudget) do.
+	// only budget configuration changes (CreateBudget, UpdateBudget) do. An
+	// update announces both the scope the budget had and the scope it has
+	// now, so a user or agent it stopped covering is told too. A change to an
+	// allocation or to its parent changes the reserve every workspace draws
+	// on, so it is announced for the whole organisation.
 	StreamDecisionInvalidations(ctx context.Context, in *StreamDecisionInvalidationsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DecisionInvalidation], error)
 }
 
@@ -120,7 +124,11 @@ type DecisionsServiceServer interface {
 	// stream being unavailable altogether, only means a cached verdict is
 	// reused for up to that TTL — exactly as if this stream did not exist.
 	// Spend recorded via RecordSpend does not trigger a notification here;
-	// only budget configuration changes (CreateBudget, UpdateBudget) do.
+	// only budget configuration changes (CreateBudget, UpdateBudget) do. An
+	// update announces both the scope the budget had and the scope it has
+	// now, so a user or agent it stopped covering is told too. A change to an
+	// allocation or to its parent changes the reserve every workspace draws
+	// on, so it is announced for the whole organisation.
 	StreamDecisionInvalidations(*StreamDecisionInvalidationsRequest, grpc.ServerStreamingServer[DecisionInvalidation]) error
 	mustEmbedUnimplementedDecisionsServiceServer()
 }

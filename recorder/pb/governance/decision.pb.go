@@ -10,6 +10,7 @@ import (
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -24,14 +25,14 @@ const (
 
 // How a call may proceed.
 //
-// The architecture defines all four values. The current implementation
-// produces only ALLOW and DENY. NOTIFY is declared but not yet produced.
-// DOWNGRADE is declared, and this contract now carries the fields it
-// needs — DecideRequest.requested_provider/requested_model,
-// DecideResponse.replacement_provider/replacement_model, and
-// Budget.downgrade_threshold_micros with
-// Budget.replacement_provider/replacement_model — but governance itself
-// does not produce it yet; that is a separate, later change.
+// Every applicable budget is evaluated on its own, and the strictest
+// answer wins: DENY, when an enforced budget is exhausted; then
+// DOWNGRADE, when an enforced budget has crossed its downgrade threshold;
+// then NOTIFY, when a WARN_ONLY budget is exhausted; then ALLOW. A
+// WARN_ONLY budget never produces DENY or DOWNGRADE. An allocation counts
+// as exhausted only once its parent's reserve is exhausted too, and a
+// parent counts as exhausted for a call from a workspace with no
+// allocation once its reserve is (see Budget.parent_budget).
 type DecideResponse_Decision int32
 
 const (
@@ -39,13 +40,14 @@ const (
 	DecideResponse_DECISION_UNSPECIFIED DecideResponse_Decision = 0
 	// The call may proceed.
 	DecideResponse_ALLOW DecideResponse_Decision = 1
-	// The call may proceed, and is flagged for someone to see.
+	// The call may proceed, and is flagged for someone to see: a WARN_ONLY
+	// budget that applies to it is exhausted.
 	DecideResponse_NOTIFY DecideResponse_Decision = 2
 	// The call should proceed against the replacement named in
 	// replacement_provider/replacement_model instead of what was
-	// requested. Not produced by any implementation yet.
+	// requested.
 	DecideResponse_DOWNGRADE DecideResponse_Decision = 3
-	// The call must not proceed. Not produced by any implementation yet.
+	// The call must not proceed.
 	DecideResponse_DENY DecideResponse_Decision = 4
 )
 
@@ -94,6 +96,148 @@ func (DecideResponse_Decision) EnumDescriptor() ([]byte, []int) {
 	return file_techbridge_ap_governance_v1_decision_proto_rawDescGZIP(), []int{1, 0}
 }
 
+// What a budget can be a limit on.
+type BudgetStatus_Scope int32
+
+const (
+	// Not stated.
+	BudgetStatus_SCOPE_UNSPECIFIED BudgetStatus_Scope = 0
+	// One person's own budget: it names exactly one user, the one the call
+	// is attributed to.
+	BudgetStatus_PERSONAL BudgetStatus_Scope = 1
+	// A pool several people share. spent_micros is what they have spent
+	// together, and limit_micros the whole pool's limit, not a share of it.
+	BudgetStatus_SHARED_POOL BudgetStatus_Scope = 2
+	// A workspace's allocation of an organisation budget, or a budget
+	// narrowed to the workspace on its own.
+	BudgetStatus_WORKSPACE BudgetStatus_Scope = 3
+	// The reserve of an organisation budget with allocations, drawn on by
+	// every workspace once its own allocation is used.
+	BudgetStatus_RESERVE BudgetStatus_Scope = 4
+	// The whole organisation's budget.
+	BudgetStatus_ORGANISATION BudgetStatus_Scope = 5
+	// A budget narrowed to the agent or project of the call.
+	BudgetStatus_OTHER BudgetStatus_Scope = 6
+)
+
+// Enum value maps for BudgetStatus_Scope.
+var (
+	BudgetStatus_Scope_name = map[int32]string{
+		0: "SCOPE_UNSPECIFIED",
+		1: "PERSONAL",
+		2: "SHARED_POOL",
+		3: "WORKSPACE",
+		4: "RESERVE",
+		5: "ORGANISATION",
+		6: "OTHER",
+	}
+	BudgetStatus_Scope_value = map[string]int32{
+		"SCOPE_UNSPECIFIED": 0,
+		"PERSONAL":          1,
+		"SHARED_POOL":       2,
+		"WORKSPACE":         3,
+		"RESERVE":           4,
+		"ORGANISATION":      5,
+		"OTHER":             6,
+	}
+)
+
+func (x BudgetStatus_Scope) Enum() *BudgetStatus_Scope {
+	p := new(BudgetStatus_Scope)
+	*p = x
+	return p
+}
+
+func (x BudgetStatus_Scope) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BudgetStatus_Scope) Descriptor() protoreflect.EnumDescriptor {
+	return file_techbridge_ap_governance_v1_decision_proto_enumTypes[1].Descriptor()
+}
+
+func (BudgetStatus_Scope) Type() protoreflect.EnumType {
+	return &file_techbridge_ap_governance_v1_decision_proto_enumTypes[1]
+}
+
+func (x BudgetStatus_Scope) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BudgetStatus_Scope.Descriptor instead.
+func (BudgetStatus_Scope) EnumDescriptor() ([]byte, []int) {
+	return file_techbridge_ap_governance_v1_decision_proto_rawDescGZIP(), []int{2, 0}
+}
+
+// How close a budget is to its limit, in the order a product should
+// care about.
+type BudgetStatus_Level int32
+
+const (
+	// Not stated.
+	BudgetStatus_LEVEL_UNSPECIFIED BudgetStatus_Level = 0
+	// Under 75% of its limit.
+	BudgetStatus_WITHIN BudgetStatus_Level = 1
+	// At or past 75% of its limit.
+	BudgetStatus_PASSED_75_PERCENT BudgetStatus_Level = 2
+	// At or past 95% of its limit.
+	BudgetStatus_PASSED_95_PERCENT BudgetStatus_Level = 3
+	// A WORKSPACE allocation that has used its own limit and is drawing on
+	// its parent's reserve, which still has some left.
+	BudgetStatus_DRAWING_RESERVE BudgetStatus_Level = 4
+	// At or past its limit, and for a WORKSPACE allocation its parent's
+	// reserve is used up too. A budget that is not warn_only refuses the
+	// call at this level; a warn_only one lets it continue.
+	BudgetStatus_EXHAUSTED BudgetStatus_Level = 5
+)
+
+// Enum value maps for BudgetStatus_Level.
+var (
+	BudgetStatus_Level_name = map[int32]string{
+		0: "LEVEL_UNSPECIFIED",
+		1: "WITHIN",
+		2: "PASSED_75_PERCENT",
+		3: "PASSED_95_PERCENT",
+		4: "DRAWING_RESERVE",
+		5: "EXHAUSTED",
+	}
+	BudgetStatus_Level_value = map[string]int32{
+		"LEVEL_UNSPECIFIED": 0,
+		"WITHIN":            1,
+		"PASSED_75_PERCENT": 2,
+		"PASSED_95_PERCENT": 3,
+		"DRAWING_RESERVE":   4,
+		"EXHAUSTED":         5,
+	}
+)
+
+func (x BudgetStatus_Level) Enum() *BudgetStatus_Level {
+	p := new(BudgetStatus_Level)
+	*p = x
+	return p
+}
+
+func (x BudgetStatus_Level) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BudgetStatus_Level) Descriptor() protoreflect.EnumDescriptor {
+	return file_techbridge_ap_governance_v1_decision_proto_enumTypes[2].Descriptor()
+}
+
+func (BudgetStatus_Level) Type() protoreflect.EnumType {
+	return &file_techbridge_ap_governance_v1_decision_proto_enumTypes[2]
+}
+
+func (x BudgetStatus_Level) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BudgetStatus_Level.Descriptor instead.
+func (BudgetStatus_Level) EnumDescriptor() ([]byte, []int) {
+	return file_techbridge_ap_governance_v1_decision_proto_rawDescGZIP(), []int{2, 1}
+}
+
 // Request for [DecisionsService.Decide].
 type DecideRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -113,7 +257,8 @@ type DecideRequest struct {
 	// Deprecated: Marked as deprecated in techbridge/ap/governance/v1/decision.proto.
 	Product string `protobuf:"bytes,3,opt,name=product,proto3" json:"product,omitempty"`
 	// The user the call would be attributed to, matching `Activity.user`.
-	// Checked against that user's own cap, where one exists.
+	// Checked against every budget naming that user, including one the user
+	// shares with others.
 	User string `protobuf:"bytes,4,opt,name=user,proto3" json:"user,omitempty"`
 	// The workspace the call would be billed to, the tenant it is for.
 	// Format: `organisations/{organisation}/workspaces/{workspace}`
@@ -254,8 +399,22 @@ type DecideResponse struct {
 	// is DOWNGRADE, empty otherwise. Same vocabulary as
 	// DecideRequest.requested_model and Budget.replacement_model.
 	ReplacementModel string `protobuf:"bytes,5,opt,name=replacement_model,json=replacementModel,proto3" json:"replacement_model,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// How each budget that applies to the call stood when it was decided,
+	// most pressing first, at every level including WITHIN, so the product
+	// making the call can warn its own users. Agent Pulse shows these to no
+	// one and emails no one because of them. A product's users see a warning
+	// only where that product's own code reads these and shows one.
+	//
+	// A snapshot, not a live reading. Spend reaches governance only after it
+	// is recorded, and a recorder may reuse a response for a while, so a
+	// status can trail the calls made since. Read evaluate_time for its age.
+	// Empty from a governance that predates this field, and for a call no
+	// budget applies to.
+	BudgetStatuses []*BudgetStatus `protobuf:"bytes,6,rep,name=budget_statuses,json=budgetStatuses,proto3" json:"budget_statuses,omitempty"`
+	// When governance worked out this decision and its budget_statuses.
+	EvaluateTime  *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=evaluate_time,json=evaluateTime,proto3" json:"evaluate_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DecideResponse) Reset() {
@@ -323,6 +482,145 @@ func (x *DecideResponse) GetReplacementModel() string {
 	return ""
 }
 
+func (x *DecideResponse) GetBudgetStatuses() []*BudgetStatus {
+	if x != nil {
+		return x.BudgetStatuses
+	}
+	return nil
+}
+
+func (x *DecideResponse) GetEvaluateTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EvaluateTime
+	}
+	return nil
+}
+
+// How one budget that applies to a call stands in its current period.
+type BudgetStatus struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The budget. For a RESERVE status, the parent whose reserve it is.
+	// Format: `organisations/{organisation}/budgets/{budget}`
+	Budget string `protobuf:"bytes,1,opt,name=budget,proto3" json:"budget,omitempty"`
+	// The budget's display name, as the organisation set it.
+	DisplayName string `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// What kind of limit this is, so a product can word a warning for it.
+	Scope BudgetStatus_Scope `protobuf:"varint,3,opt,name=scope,proto3,enum=techbridge.ap.governance.v1.BudgetStatus_Scope" json:"scope,omitempty"`
+	// The workspace, for a WORKSPACE status.
+	// Format: `organisations/{organisation}/workspaces/{workspace}`
+	Workspace string `protobuf:"bytes,4,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	// What has been spent against the budget this period, and its limit, in
+	// millionths of a US dollar. For a RESERVE status, what has been drawn
+	// from the reserve and the reserve itself, which can be zero: a zero
+	// reserve is EXHAUSTED, and has no percentage to show.
+	SpentMicros int64 `protobuf:"varint,5,opt,name=spent_micros,json=spentMicros,proto3" json:"spent_micros,omitempty"`
+	LimitMicros int64 `protobuf:"varint,6,opt,name=limit_micros,json=limitMicros,proto3" json:"limit_micros,omitempty"`
+	// When the current period ends, exclusive.
+	PeriodEndTime *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=period_end_time,json=periodEndTime,proto3" json:"period_end_time,omitempty"`
+	// Whether this budget only warns: true lets a call it covers continue
+	// once it is exhausted, false refuses one. Stated here rather than as
+	// Budget.Enforcement so that reading a decision never needs the budget
+	// contract.
+	WarnOnly bool `protobuf:"varint,8,opt,name=warn_only,json=warnOnly,proto3" json:"warn_only,omitempty"`
+	// How close the budget is to its limit.
+	Level         BudgetStatus_Level `protobuf:"varint,9,opt,name=level,proto3,enum=techbridge.ap.governance.v1.BudgetStatus_Level" json:"level,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BudgetStatus) Reset() {
+	*x = BudgetStatus{}
+	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BudgetStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BudgetStatus) ProtoMessage() {}
+
+func (x *BudgetStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BudgetStatus.ProtoReflect.Descriptor instead.
+func (*BudgetStatus) Descriptor() ([]byte, []int) {
+	return file_techbridge_ap_governance_v1_decision_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *BudgetStatus) GetBudget() string {
+	if x != nil {
+		return x.Budget
+	}
+	return ""
+}
+
+func (x *BudgetStatus) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *BudgetStatus) GetScope() BudgetStatus_Scope {
+	if x != nil {
+		return x.Scope
+	}
+	return BudgetStatus_SCOPE_UNSPECIFIED
+}
+
+func (x *BudgetStatus) GetWorkspace() string {
+	if x != nil {
+		return x.Workspace
+	}
+	return ""
+}
+
+func (x *BudgetStatus) GetSpentMicros() int64 {
+	if x != nil {
+		return x.SpentMicros
+	}
+	return 0
+}
+
+func (x *BudgetStatus) GetLimitMicros() int64 {
+	if x != nil {
+		return x.LimitMicros
+	}
+	return 0
+}
+
+func (x *BudgetStatus) GetPeriodEndTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.PeriodEndTime
+	}
+	return nil
+}
+
+func (x *BudgetStatus) GetWarnOnly() bool {
+	if x != nil {
+		return x.WarnOnly
+	}
+	return false
+}
+
+func (x *BudgetStatus) GetLevel() BudgetStatus_Level {
+	if x != nil {
+		return x.Level
+	}
+	return BudgetStatus_LEVEL_UNSPECIFIED
+}
+
 // Request for [DecisionsService.StreamDecisionInvalidations].
 type StreamDecisionInvalidationsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -335,7 +633,7 @@ type StreamDecisionInvalidationsRequest struct {
 
 func (x *StreamDecisionInvalidationsRequest) Reset() {
 	*x = StreamDecisionInvalidationsRequest{}
-	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[2]
+	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -347,7 +645,7 @@ func (x *StreamDecisionInvalidationsRequest) String() string {
 func (*StreamDecisionInvalidationsRequest) ProtoMessage() {}
 
 func (x *StreamDecisionInvalidationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[2]
+	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -360,7 +658,7 @@ func (x *StreamDecisionInvalidationsRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use StreamDecisionInvalidationsRequest.ProtoReflect.Descriptor instead.
 func (*StreamDecisionInvalidationsRequest) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_governance_v1_decision_proto_rawDescGZIP(), []int{2}
+	return file_techbridge_ap_governance_v1_decision_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *StreamDecisionInvalidationsRequest) GetParent() string {
@@ -383,7 +681,9 @@ type DecisionInvalidation struct {
 	Parent string `protobuf:"bytes,1,opt,name=parent,proto3" json:"parent,omitempty"`
 	// The product whose budget changed, if the change was scoped to one.
 	Product string `protobuf:"bytes,2,opt,name=product,proto3" json:"product,omitempty"`
-	// The user whose budget changed, if the change was scoped to one.
+	// The user whose budget changed, if the change was scoped to one. A
+	// budget shared by several users is announced with this empty, the
+	// wider scope, so a recorder drops every verdict the change could touch.
 	User string `protobuf:"bytes,3,opt,name=user,proto3" json:"user,omitempty"`
 	// The agent whose budget changed, if the change was scoped to one.
 	// Format: `organisations/{organisation}/agents/{agent}`
@@ -399,7 +699,7 @@ type DecisionInvalidation struct {
 
 func (x *DecisionInvalidation) Reset() {
 	*x = DecisionInvalidation{}
-	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[3]
+	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -411,7 +711,7 @@ func (x *DecisionInvalidation) String() string {
 func (*DecisionInvalidation) ProtoMessage() {}
 
 func (x *DecisionInvalidation) ProtoReflect() protoreflect.Message {
-	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[3]
+	mi := &file_techbridge_ap_governance_v1_decision_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -424,7 +724,7 @@ func (x *DecisionInvalidation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecisionInvalidation.ProtoReflect.Descriptor instead.
 func (*DecisionInvalidation) Descriptor() ([]byte, []int) {
-	return file_techbridge_ap_governance_v1_decision_proto_rawDescGZIP(), []int{3}
+	return file_techbridge_ap_governance_v1_decision_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DecisionInvalidation) GetParent() string {
@@ -473,7 +773,7 @@ var File_techbridge_ap_governance_v1_decision_proto protoreflect.FileDescriptor
 
 const file_techbridge_ap_governance_v1_decision_proto_rawDesc = "" +
 	"\n" +
-	"*techbridge/ap/governance/v1/decision.proto\x12\x1btechbridge.ap.governance.v1\x1a\x1fgoogle/api/field_behavior.proto\"\x8b\x02\n" +
+	"*techbridge/ap/governance/v1/decision.proto\x12\x1btechbridge.ap.governance.v1\x1a\x1fgoogle/api/field_behavior.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8b\x02\n" +
 	"\rDecideRequest\x12\x1c\n" +
 	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\x12\x1a\n" +
 	"\x05agent\x18\x02 \x01(\tB\x04\xe2A\x01\x02R\x05agent\x12\x1c\n" +
@@ -482,20 +782,48 @@ const file_techbridge_ap_governance_v1_decision_proto_rawDesc = "" +
 	"\tworkspace\x18\x05 \x01(\tR\tworkspace\x12\x18\n" +
 	"\aproject\x18\x06 \x01(\tR\aproject\x12-\n" +
 	"\x12requested_provider\x18\a \x01(\tR\x11requestedProvider\x12'\n" +
-	"\x0frequested_model\x18\b \x01(\tR\x0erequestedModel\"\xd7\x02\n" +
+	"\x0frequested_model\x18\b \x01(\tR\x0erequestedModel\"\xec\x03\n" +
 	"\x0eDecideResponse\x12P\n" +
 	"\bdecision\x18\x01 \x01(\x0e24.techbridge.ap.governance.v1.DecideResponse.DecisionR\bdecision\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12%\n" +
 	"\x0epolicy_version\x18\x03 \x01(\tR\rpolicyVersion\x121\n" +
 	"\x14replacement_provider\x18\x04 \x01(\tR\x13replacementProvider\x12+\n" +
-	"\x11replacement_model\x18\x05 \x01(\tR\x10replacementModel\"T\n" +
+	"\x11replacement_model\x18\x05 \x01(\tR\x10replacementModel\x12R\n" +
+	"\x0fbudget_statuses\x18\x06 \x03(\v2).techbridge.ap.governance.v1.BudgetStatusR\x0ebudgetStatuses\x12?\n" +
+	"\revaluate_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\fevaluateTime\"T\n" +
 	"\bDecision\x12\x18\n" +
 	"\x14DECISION_UNSPECIFIED\x10\x00\x12\t\n" +
 	"\x05ALLOW\x10\x01\x12\n" +
 	"\n" +
 	"\x06NOTIFY\x10\x02\x12\r\n" +
 	"\tDOWNGRADE\x10\x03\x12\b\n" +
-	"\x04DENY\x10\x04\"B\n" +
+	"\x04DENY\x10\x04\"\x92\x05\n" +
+	"\fBudgetStatus\x12\x16\n" +
+	"\x06budget\x18\x01 \x01(\tR\x06budget\x12!\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12E\n" +
+	"\x05scope\x18\x03 \x01(\x0e2/.techbridge.ap.governance.v1.BudgetStatus.ScopeR\x05scope\x12\x1c\n" +
+	"\tworkspace\x18\x04 \x01(\tR\tworkspace\x12!\n" +
+	"\fspent_micros\x18\x05 \x01(\x03R\vspentMicros\x12!\n" +
+	"\flimit_micros\x18\x06 \x01(\x03R\vlimitMicros\x12B\n" +
+	"\x0fperiod_end_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\rperiodEndTime\x12\x1b\n" +
+	"\twarn_only\x18\b \x01(\bR\bwarnOnly\x12E\n" +
+	"\x05level\x18\t \x01(\x0e2/.techbridge.ap.governance.v1.BudgetStatus.LevelR\x05level\"v\n" +
+	"\x05Scope\x12\x15\n" +
+	"\x11SCOPE_UNSPECIFIED\x10\x00\x12\f\n" +
+	"\bPERSONAL\x10\x01\x12\x0f\n" +
+	"\vSHARED_POOL\x10\x02\x12\r\n" +
+	"\tWORKSPACE\x10\x03\x12\v\n" +
+	"\aRESERVE\x10\x04\x12\x10\n" +
+	"\fORGANISATION\x10\x05\x12\t\n" +
+	"\x05OTHER\x10\x06\"|\n" +
+	"\x05Level\x12\x15\n" +
+	"\x11LEVEL_UNSPECIFIED\x10\x00\x12\n" +
+	"\n" +
+	"\x06WITHIN\x10\x01\x12\x15\n" +
+	"\x11PASSED_75_PERCENT\x10\x02\x12\x15\n" +
+	"\x11PASSED_95_PERCENT\x10\x03\x12\x13\n" +
+	"\x0fDRAWING_RESERVE\x10\x04\x12\r\n" +
+	"\tEXHAUSTED\x10\x05\"B\n" +
 	"\"StreamDecisionInvalidationsRequest\x12\x1c\n" +
 	"\x06parent\x18\x01 \x01(\tB\x04\xe2A\x01\x02R\x06parent\"\xb0\x01\n" +
 	"\x14DecisionInvalidation\x12\x1c\n" +
@@ -521,26 +849,35 @@ func file_techbridge_ap_governance_v1_decision_proto_rawDescGZIP() []byte {
 	return file_techbridge_ap_governance_v1_decision_proto_rawDescData
 }
 
-var file_techbridge_ap_governance_v1_decision_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_techbridge_ap_governance_v1_decision_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_techbridge_ap_governance_v1_decision_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_techbridge_ap_governance_v1_decision_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_techbridge_ap_governance_v1_decision_proto_goTypes = []any{
 	(DecideResponse_Decision)(0),               // 0: techbridge.ap.governance.v1.DecideResponse.Decision
-	(*DecideRequest)(nil),                      // 1: techbridge.ap.governance.v1.DecideRequest
-	(*DecideResponse)(nil),                     // 2: techbridge.ap.governance.v1.DecideResponse
-	(*StreamDecisionInvalidationsRequest)(nil), // 3: techbridge.ap.governance.v1.StreamDecisionInvalidationsRequest
-	(*DecisionInvalidation)(nil),               // 4: techbridge.ap.governance.v1.DecisionInvalidation
+	(BudgetStatus_Scope)(0),                    // 1: techbridge.ap.governance.v1.BudgetStatus.Scope
+	(BudgetStatus_Level)(0),                    // 2: techbridge.ap.governance.v1.BudgetStatus.Level
+	(*DecideRequest)(nil),                      // 3: techbridge.ap.governance.v1.DecideRequest
+	(*DecideResponse)(nil),                     // 4: techbridge.ap.governance.v1.DecideResponse
+	(*BudgetStatus)(nil),                       // 5: techbridge.ap.governance.v1.BudgetStatus
+	(*StreamDecisionInvalidationsRequest)(nil), // 6: techbridge.ap.governance.v1.StreamDecisionInvalidationsRequest
+	(*DecisionInvalidation)(nil),               // 7: techbridge.ap.governance.v1.DecisionInvalidation
+	(*timestamppb.Timestamp)(nil),              // 8: google.protobuf.Timestamp
 }
 var file_techbridge_ap_governance_v1_decision_proto_depIdxs = []int32{
 	0, // 0: techbridge.ap.governance.v1.DecideResponse.decision:type_name -> techbridge.ap.governance.v1.DecideResponse.Decision
-	1, // 1: techbridge.ap.governance.v1.DecisionsService.Decide:input_type -> techbridge.ap.governance.v1.DecideRequest
-	3, // 2: techbridge.ap.governance.v1.DecisionsService.StreamDecisionInvalidations:input_type -> techbridge.ap.governance.v1.StreamDecisionInvalidationsRequest
-	2, // 3: techbridge.ap.governance.v1.DecisionsService.Decide:output_type -> techbridge.ap.governance.v1.DecideResponse
-	4, // 4: techbridge.ap.governance.v1.DecisionsService.StreamDecisionInvalidations:output_type -> techbridge.ap.governance.v1.DecisionInvalidation
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	5, // 1: techbridge.ap.governance.v1.DecideResponse.budget_statuses:type_name -> techbridge.ap.governance.v1.BudgetStatus
+	8, // 2: techbridge.ap.governance.v1.DecideResponse.evaluate_time:type_name -> google.protobuf.Timestamp
+	1, // 3: techbridge.ap.governance.v1.BudgetStatus.scope:type_name -> techbridge.ap.governance.v1.BudgetStatus.Scope
+	8, // 4: techbridge.ap.governance.v1.BudgetStatus.period_end_time:type_name -> google.protobuf.Timestamp
+	2, // 5: techbridge.ap.governance.v1.BudgetStatus.level:type_name -> techbridge.ap.governance.v1.BudgetStatus.Level
+	3, // 6: techbridge.ap.governance.v1.DecisionsService.Decide:input_type -> techbridge.ap.governance.v1.DecideRequest
+	6, // 7: techbridge.ap.governance.v1.DecisionsService.StreamDecisionInvalidations:input_type -> techbridge.ap.governance.v1.StreamDecisionInvalidationsRequest
+	4, // 8: techbridge.ap.governance.v1.DecisionsService.Decide:output_type -> techbridge.ap.governance.v1.DecideResponse
+	7, // 9: techbridge.ap.governance.v1.DecisionsService.StreamDecisionInvalidations:output_type -> techbridge.ap.governance.v1.DecisionInvalidation
+	8, // [8:10] is the sub-list for method output_type
+	6, // [6:8] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_techbridge_ap_governance_v1_decision_proto_init() }
@@ -553,8 +890,8 @@ func file_techbridge_ap_governance_v1_decision_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_techbridge_ap_governance_v1_decision_proto_rawDesc), len(file_techbridge_ap_governance_v1_decision_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   4,
+			NumEnums:      3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
