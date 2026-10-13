@@ -1,0 +1,9 @@
+{
+  "name": "agentpulse",
+  "description": "Adds Agent Pulse to a service: records what its AI agents spend and checks their budgets.",
+  "author": { "name": "TechBridge Innovation" },
+  "homepage": "https://github.com/techbridgeinnovation/agentpulse",
+  "repository": "https://github.com/techbridgeinnovation/agentpulse",
+  "license": "MIT",
+  "keywords": ["agent-pulse", "ai-agents", "cost", "budgets", "observability"]
+}

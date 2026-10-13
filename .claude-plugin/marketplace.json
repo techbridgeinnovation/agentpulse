@@ -1,0 +1,12 @@
+{
+  "name": "agentpulse",
+  "owner": { "name": "TechBridge Innovation", "url": "https://github.com/techbridgeinnovation" },
+  "description": "The Agent Pulse plugin for Claude Code.",
+  "plugins": [
+    {
+      "name": "agentpulse",
+      "source": "./",
+      "description": "Adds Agent Pulse to a service: records what its AI agents spend and checks their budgets."
+    }
+  ]
+}
