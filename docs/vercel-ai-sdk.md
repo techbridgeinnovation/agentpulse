@@ -41,7 +41,7 @@ The middleware is for AI SDK 7. For an earlier major, set `specificationVersion`
 
 ## Budgets
 
-A governed reporter's middleware checks your budgets before each call, and a stopped call throws `SpendDenied` before it is sent; `denied(err)` recognises it. A middleware cannot change which model a call uses, so a downgrade lets the call through as asked.
+A governed reporter's middleware checks your budgets before each call, and a stopped call throws `SpendDenied` before it is sent; `denied(err)` recognises it. A warn-only budget past its limit lets the call through and alerts you.
 
 ## Recording by hand
 

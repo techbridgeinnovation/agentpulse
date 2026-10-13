@@ -27,4 +27,4 @@ To file the spend under one of your customers, add `X-Agentpulse-Workspace=<cust
 
 ## Budgets
 
-Spans arrive after the call has happened, so spend is counted against your budgets and alerts are raised, but a budget cannot stop or downgrade a call recorded this way.
+Spans arrive after the call has happened, so spend is counted against your budgets and alerts are raised, but a budget cannot stop a call recorded this way.

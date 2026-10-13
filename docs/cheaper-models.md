@@ -23,6 +23,6 @@ Choose **Price exactly** on a model to price the same dates again at that model'
 
 ## What it does not tell you
 
-The estimate is about price, not quality. A cheaper model may answer worse for your use. Try it on real traffic first. A [budget with a downgrade](budgets.md) moves an agent to a cheaper model only once its spend passes a threshold you set.
+The estimate is about price, not quality. A cheaper model may answer worse for your use. Try it on real traffic first. Changing models is your decision: a [budget](budgets.md) stops calls or warns while they continue, and never switches an agent's model.
 
 Every model's prices and limits are on the **Models** page.

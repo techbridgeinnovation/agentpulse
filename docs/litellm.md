@@ -35,7 +35,7 @@ The proxy cannot see your services' context, so pass it on each request: LiteLLM
 
 ## Budgets
 
-The proxy checks your budgets before forwarding each call. A stopped call is answered with a `403`, marked not to be retried. A downgrade forwards the replacement model when it is from the same provider. If Agent Pulse cannot answer, the proxy forwards the call.
+The proxy checks your budgets before forwarding each call. A stopped call is answered with a `403`, marked not to be retried. A warn-only budget past its limit lets the call through and alerts you. If Agent Pulse cannot answer, the proxy forwards the call.
 
 ## The LiteLLM SDK
 
