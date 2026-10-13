@@ -4,12 +4,12 @@ import { after, before, beforeEach, test } from "node:test";
 import { looksLikeEmail, scope } from "../src/context.ts";
 import { blockedFinish, errorCode, truncatedFinish } from "../src/failure.ts";
 import { ConfigError } from "../src/gateway.ts";
-import { forgetRefusals } from "../src/governance.ts";
+import { type Decider, forgetRefusals } from "../src/governance.ts";
 import { connect } from "../src/report.ts";
 import { Recorder } from "../src/recorder.ts";
-import { Reporter } from "../src/report.ts";
+import { type BudgetStatusEvent, Reporter } from "../src/report.ts";
 import { resultSize } from "../src/usage.ts";
-import { DECISION_DENY, fields, STATUS_DENIED, STATUS_TRUNCATED } from "../src/wire.ts";
+import { DECISION_ALLOW, DECISION_DENY, DECISION_NOTIFY, fields, LEVEL_PASSED_75_PERCENT, SCOPE_PERSONAL, STATUS_DENIED, STATUS_TRUNCATED } from "../src/wire.ts";
 import { MemorySink } from "./fakes.ts";
 import { FakeGateway } from "./fakes.ts";
 
@@ -166,4 +166,120 @@ test("a user that looks like an email is recorded as no user, never named and ne
 test("an identifier is taken for an email only with a dot after the at", () => {
   assert.ok(looksLikeEmail("ada@example.com") && looksLikeEmail("@.") && looksLikeEmail("a.b@c.d"));
   assert.ok(!looksLikeEmail("ada@corp") && !looksLikeEmail("ada.lovelace") && !looksLikeEmail("") && !looksLikeEmail(undefined));
+});
+
+function withStatuses(decision = DECISION_ALLOW): Decider {
+  const budgetStatuses = [{ budget: "organisations/acme/budgets/b", displayName: "Ada", scope: SCOPE_PERSONAL, workspace: "", spentMicros: 8, limitMicros: 10, periodEndTimeNs: 0n, warnOnly: false, level: LEVEL_PASSED_75_PERCENT }];
+  return { decide: async () => ({ decision, reason: "", policyVersion: "v1", replacementProvider: "", replacementModel: "", budgetStatuses, evaluateTimeNs: 1791892800_000000000n }) };
+}
+
+function statusReporter(decider: Decider, onBudgetStatus?: (event: BudgetStatusEvent) => unknown): Reporter {
+  return new Reporter(new Recorder({ exitTimeoutMs: 0 }), { agent: "organisations/acme/agents/assistant", service: "svc", billedBy: "OPENAI" }).governed(decider, { cacheTtlMs: 0, failureBackoffMs: 0, onBudgetStatus });
+}
+
+// The AI SDK's own call, as the middleware is handed it.
+const generate = (rp: Reporter) => rp.aiSdkMiddleware().wrapGenerate({ model: { provider: "openai.chat", modelId: "gpt-5" }, doGenerate: async () => ({ usage: {} }) });
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+async function until(condition: () => boolean): Promise<boolean> {
+  for (let i = 0; i < 200 && !condition(); i++) await tick();
+  return condition();
+}
+
+test("an instrumented call hands its budget statuses to the callback, later, with who it was for", async () => {
+  const told: BudgetStatusEvent[] = [];
+  const rp = statusReporter(withStatuses(), (event) => told.push(event));
+  await scope({ request: "req-1", workspace: "w1", project: "p1", user: { id: "u1" }, component: "chat" }, () => generate(rp));
+  // Delivery is a later turn of the event loop: the call has returned and nothing has been told yet.
+  assert.equal(told.length, 0);
+  assert.ok(await until(() => told.length === 1));
+  const [event] = told;
+  assert.deepEqual([event?.decision, event?.model, event?.provider, event?.component], ["ALLOW", "gpt-5", "OPENAI", "chat"]);
+  assert.deepEqual([event?.user, event?.workspace, event?.project, event?.request], ["u1", "organisations/acme/workspaces/w1", "p1", "req-1"]);
+  assert.deepEqual([event?.budgetStatuses[0]?.level, event?.evaluateTime?.toISOString()], ["PASSED_75_PERCENT", "2026-10-13T12:00:00.000Z"]);
+});
+
+test("a call never waits for a callback whose promise never settles, and deliveries behind it go on", async () => {
+  const told: string[] = [];
+  const rp = statusReporter(withStatuses(), (event) => {
+    told.push(event.model);
+    if (told.length === 1) return new Promise(() => {});
+  });
+  assert.deepEqual(await generate(rp), { usage: {} });
+  await generate(rp);
+  assert.ok(await until(() => told.length === 2));
+});
+
+test("events are delivered one at a time in the order the decisions were obtained", async () => {
+  const told: string[] = [];
+  let running = 0;
+  let overlapped = false;
+  const rp = statusReporter(withStatuses(), (event) => {
+    overlapped ||= ++running > 1;
+    told.push(event.model);
+    running--;
+  });
+  const models = Array.from({ length: 20 }, (_, i) => `m${i}`);
+  for (const model of models) await rp.decideFor(model, "OPENAI", "chat");
+  assert.ok(await until(() => told.length === 20));
+  assert.deepEqual(told, models);
+  assert.equal(overlapped, false);
+});
+
+test("a cached verdict's statuses are delivered for every call", async () => {
+  const told: BudgetStatusEvent[] = [];
+  let asked = 0;
+  const inner = withStatuses();
+  const counting: Decider = { decide: (...args) => (asked++, inner.decide(...args)) };
+  const rp = new Reporter(new Recorder({ exitTimeoutMs: 0 }), { agent: "organisations/acme/agents/assistant", service: "svc" }).governed(counting, { cacheTtlMs: 60_000, onBudgetStatus: (event) => told.push(event) });
+  await rp.decideFor("gpt-5", "OPENAI", "chat");
+  await rp.decideFor("gpt-5", "OPENAI", "chat");
+  assert.ok(await until(() => told.length === 2));
+  assert.equal(asked, 1);
+  assert.deepEqual(told[1]?.budgetStatuses, told[0]?.budgetStatuses);
+});
+
+test("a callback that throws or rejects does not stop the call and is counted failed", async () => {
+  for (const callback of [
+    () => {
+      throw new Error("the product's own bug");
+    },
+    () => Promise.reject(new Error("the product's own bug, later")),
+  ]) {
+    const rp = statusReporter(withStatuses(DECISION_NOTIFY), callback);
+    assert.deepEqual(await generate(rp), { usage: {} });
+    assert.ok(await until(() => rp.recorder.stats().budgetStatusFailed === 1));
+    const stats = rp.recorder.stats();
+    assert.deepEqual([stats.budgetStatusDropped, stats.notified, stats.panicked, stats.decisionErrors], [0, 1, 0, 0]);
+  }
+});
+
+test("a full queue drops events and counts them without ever holding a call", async () => {
+  const told: string[] = [];
+  const rp = statusReporter(withStatuses(), (event) => void told.push(event.model));
+  // Every decision settles on microtasks, so no delivery turn comes between these and the queue fills.
+  const started = performance.now();
+  for (let i = 0; i < 70; i++) assert.ok((await rp.decideFor(`m${i}`, "OPENAI", "chat")).proceed);
+  assert.ok(performance.now() - started < 2000);
+  assert.equal(rp.recorder.stats().budgetStatusDropped, 6);
+  assert.ok(await until(() => told.length === 64));
+  assert.deepEqual(told, Array.from({ length: 64 }, (_, i) => `m${i}`));
+});
+
+test("the callback is not called without statuses, without a decision, for decide, or when none is set", async () => {
+  let told = 0;
+  const count = () => told++;
+  const none: Decider = { decide: async () => ({ decision: DECISION_ALLOW, reason: "", policyVersion: "", replacementProvider: "", replacementModel: "" }) };
+  await generate(statusReporter(none, count));
+  const down = statusReporter({ decide: () => Promise.reject(new Error("down")) }, count);
+  await generate(down);
+  assert.equal(down.recorder.stats().decisionErrors, 1);
+  const direct = statusReporter(withStatuses(), count);
+  assert.equal((await direct.decide("gpt-5")).budgetStatuses.length, 1);
+  const unset = statusReporter(withStatuses());
+  await generate(unset);
+  await until(() => false);
+  assert.equal(told, 0);
+  assert.deepEqual([unset.recorder.stats().budgetStatusDropped, unset.recorder.stats().budgetStatusFailed], [0, 0]);
 });

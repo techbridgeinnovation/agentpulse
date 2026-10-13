@@ -4,9 +4,9 @@ export { FRAMEWORK as AI_SDK_FRAMEWORK, type EmbeddingMiddleware, type Middlewar
 export { currentScope, looksLikeEmail, scope, type Scope, type User, workspaceName } from "./context.ts";
 export { blockedFinish, Cancelled, denied, errorCode, SpendDenied, truncatedFinish } from "./failure.ts";
 export { API_KEY_HEADER, API_SECRET_HEADER, ConfigError, Gateway, organisationOfKey, RpcError } from "./gateway.ts";
-export { ask, CachingDecider, type Decider, type Decision, GatewayDecider, GovernanceUnavailable, type Verdict } from "./governance.ts";
+export { ask, type BudgetLevel, type BudgetScope, type BudgetStatus, CachingDecider, type Decider, type Decision, GatewayDecider, GovernanceUnavailable, type Verdict } from "./governance.ts";
 export { type Config, Recorder, type Stats } from "./recorder.ts";
-export { type Attribution, connect, type Framework, type GovernOptions, type ModelCall, Reporter, type ToolCall } from "./report.ts";
+export { type Attribution, type BudgetStatusEvent, connect, type Framework, type GovernOptions, type ModelCall, Reporter, type ToolCall } from "./report.ts";
 export { Discard, MeteringSink, type Sink } from "./sinks.ts";
 export {
   FORMAT_AI_SDK,

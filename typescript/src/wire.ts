@@ -26,6 +26,23 @@ export const DECISION_NOTIFY = 2;
 export const DECISION_DOWNGRADE = 3;
 export const DECISION_DENY = 4;
 
+// BudgetStatus.Scope, as the contract numbers it.
+export const SCOPE_UNSPECIFIED = 0;
+export const SCOPE_PERSONAL = 1;
+export const SCOPE_SHARED_POOL = 2;
+export const SCOPE_WORKSPACE = 3;
+export const SCOPE_RESERVE = 4;
+export const SCOPE_ORGANISATION = 5;
+export const SCOPE_OTHER = 6;
+
+// BudgetStatus.Level, as the contract numbers it.
+export const LEVEL_UNSPECIFIED = 0;
+export const LEVEL_WITHIN = 1;
+export const LEVEL_PASSED_75_PERCENT = 2;
+export const LEVEL_PASSED_95_PERCENT = 3;
+export const LEVEL_DRAWING_RESERVE = 4;
+export const LEVEL_EXHAUSTED = 5;
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -260,24 +277,81 @@ export function encodeDecideRequest(r: DecideRequest): Uint8Array {
   ]);
 }
 
+/** How one budget that applies to a call stood when governance decided it. Scope and level are kept as the numbers governance sent, a number this version does not know included. */
+export interface BudgetStatus {
+  budget: string;
+  displayName: string;
+  scope: number;
+  workspace: string;
+  /** In millionths of a US dollar. Read as a number, exact to well past any real budget. */
+  spentMicros: number;
+  /** Zero for a reserve that has nothing in it, so never divided by. */
+  limitMicros: number;
+  /** When the current period ends, in nanoseconds since the Unix epoch. Zero when governance did not say. */
+  periodEndTimeNs: bigint;
+  warnOnly: boolean;
+  level: number;
+}
+
 export interface DecideResponse {
   decision: number;
   reason: string;
   policyVersion: string;
   replacementProvider: string;
   replacementModel: string;
+  /** Every budget that applies to the call, most pressing first. Empty from a governance that predates them. Optional so a decider written before them still satisfies this; the decoder always sets it. */
+  budgetStatuses?: BudgetStatus[];
+  /** When governance decided, in nanoseconds since the Unix epoch. Zero when governance did not say. */
+  evaluateTimeNs?: bigint;
+}
+
+// A negative int64, int32 or enum arrives as its 64-bit two's complement, so it reads as a large unsigned number until it is folded back.
+const signed = (value: bigint): bigint => BigInt.asIntN(64, value);
+
+/** A google.protobuf.Timestamp, as nanoseconds since the Unix epoch. */
+function readTimestamp(data: Uint8Array): bigint {
+  let seconds = 0n;
+  let nanos = 0n;
+  for (const [field, value] of fields(data)) {
+    if (typeof value !== "bigint") continue;
+    if (field === 1) seconds = signed(value);
+    else if (field === 2) nanos = signed(value);
+  }
+  return seconds * 1_000_000_000n + nanos;
+}
+
+function decodeBudgetStatus(data: Uint8Array): BudgetStatus {
+  const out: BudgetStatus = { budget: "", displayName: "", scope: SCOPE_UNSPECIFIED, workspace: "", spentMicros: 0, limitMicros: 0, periodEndTimeNs: 0n, warnOnly: false, level: LEVEL_UNSPECIFIED };
+  for (const [field, value] of fields(data)) {
+    if (typeof value === "bigint") {
+      if (field === 3) out.scope = Number(signed(value));
+      else if (field === 5) out.spentMicros = Number(signed(value));
+      else if (field === 6) out.limitMicros = Number(signed(value));
+      else if (field === 8) out.warnOnly = value !== 0n;
+      else if (field === 9) out.level = Number(signed(value));
+    } else if (field === 1) out.budget = decoder.decode(value);
+    else if (field === 2) out.displayName = decoder.decode(value);
+    else if (field === 4) out.workspace = decoder.decode(value);
+    else if (field === 7) out.periodEndTimeNs = readTimestamp(value);
+  }
+  return out;
 }
 
 export function decodeDecideResponse(data: Uint8Array): DecideResponse {
-  const out: DecideResponse = { decision: DECISION_UNSPECIFIED, reason: "", policyVersion: "", replacementProvider: "", replacementModel: "" };
+  const statuses: BudgetStatus[] = [];
+  const out: DecideResponse = { decision: DECISION_UNSPECIFIED, reason: "", policyVersion: "", replacementProvider: "", replacementModel: "", budgetStatuses: statuses, evaluateTimeNs: 0n };
   for (const [field, value] of fields(data)) {
     if (field === 1 && typeof value === "bigint") out.decision = Number(value);
     else if (typeof value !== "bigint") {
-      const text = decoder.decode(value);
-      if (field === 2) out.reason = text;
-      else if (field === 3) out.policyVersion = text;
-      else if (field === 4) out.replacementProvider = text;
-      else if (field === 5) out.replacementModel = text;
+      if (field === 6) statuses.push(decodeBudgetStatus(value));
+      else if (field === 7) out.evaluateTimeNs = readTimestamp(value);
+      else {
+        const text = decoder.decode(value);
+        if (field === 2) out.reason = text;
+        else if (field === 3) out.policyVersion = text;
+        else if (field === 4) out.replacementProvider = text;
+        else if (field === 5) out.replacementModel = text;
+      }
     }
   }
   return out;
