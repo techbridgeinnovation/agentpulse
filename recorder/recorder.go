@@ -33,6 +33,10 @@ type Recorder struct {
 	totals  *runningTotals
 	rates   *rateCache
 
+	// budgetOnce starts the one worker that delivers budget statuses to the product, on first use. See ReportBudgetStatus.
+	budgetOnce  sync.Once
+	budgetQueue chan budgetStatusEvent
+
 	closeOnce sync.Once
 	closed    atomic.Bool
 	done      chan struct{}
@@ -112,6 +116,12 @@ type Counters struct {
 
 	// EmailUsersRefused counts every record whose user identifier looked like an email address, and was sent with no user instead. Above zero means the product is passing an address where its sign-in's identifier belongs.
 	EmailUsersRefused atomic.Int64
+
+	// BudgetStatusFailed counts every time the product's OnBudgetStatus panicked. The call went ahead on its verdict regardless. Above zero means the product's own warnings are not always shown.
+	BudgetStatusFailed atomic.Int64
+
+	// BudgetStatusDropped counts every delivery to OnBudgetStatus that was discarded: because the queue was full behind a slow callback, or because it was still queued when the recorder closed. Above zero means the product's own warnings are being missed.
+	BudgetStatusDropped atomic.Int64
 }
 
 // Stats is a snapshot of the counters.
@@ -161,6 +171,10 @@ type Stats struct {
 	Unrecorded int64
 	// EmailUsersRefused is how many records were sent with no user because their user identifier looked like an email address. See Counters.EmailUsersRefused.
 	EmailUsersRefused int64
+	// BudgetStatusFailed is how many times the product's OnBudgetStatus panicked. See Counters.BudgetStatusFailed.
+	BudgetStatusFailed int64
+	// BudgetStatusDropped is how many deliveries to OnBudgetStatus were discarded. See Counters.BudgetStatusDropped.
+	BudgetStatusDropped int64
 }
 
 // New starts a recorder. It never returns an error: a recorder that cannot be
@@ -257,6 +271,8 @@ func (r *Recorder) Stats() Stats {
 		NamesFailed:         r.counters.NamesFailed.Load(),
 		Unrecorded:          r.counters.Unrecorded.Load(),
 		EmailUsersRefused:   r.counters.EmailUsersRefused.Load(),
+		BudgetStatusFailed:  r.counters.BudgetStatusFailed.Load(),
+		BudgetStatusDropped: r.counters.BudgetStatusDropped.Load(),
 	}
 }
 
@@ -372,6 +388,7 @@ func (r *Recorder) Close(ctx context.Context) {
 	case <-r.stopped:
 	case <-ctx.Done():
 	}
+	r.discardBudgetStatuses()
 	// Taken from the same queue the worker drains, so each record is either delivered by it or counted here, never both.
 	for {
 		select {

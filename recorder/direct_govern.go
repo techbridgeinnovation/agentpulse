@@ -33,6 +33,9 @@ type Governance struct {
 
 	// Timeout bounds how long a call waits for an answer. Zero is a second and a half. A call whose answer does not arrive in time goes ahead, unless the same call was refused within the hour.
 	Timeout time.Duration
+
+	// OnBudgetStatus, when set, is handed where each budget a call is held to stands, whenever the call's answer carries any. It is how a product warns its own users before a budget runs out; Agent Pulse shows them nothing itself. It is called asynchronously and never holds the call; see BudgetStatusFunc for what the figures are and are not, and Recorder.ReportBudgetStatus for how delivery works and when it is dropped.
+	OnBudgetStatus BudgetStatusFunc
 }
 
 // Governed returns a reporter whose instrumented clients ask governance before every call, the way an agent's callbacks do, so a budget that stops an agent stops a service spending against the same budget too.
@@ -52,6 +55,7 @@ func (rp *Reporter) Governed(g Governance) *Reporter {
 		governed.decider = NewCachingDecider(governed.decider, g.CacheTTL)
 	}
 	governed.decideTimeout = g.Timeout
+	governed.onBudgetStatus = g.OnBudgetStatus
 	if governed.decideTimeout <= 0 {
 		governed.decideTimeout = defaultDirectDecideTimeout
 	}
@@ -118,6 +122,7 @@ func (rp *Reporter) decide(ctx context.Context, requestedProvider, requestedMode
 		rp.recorder.NoteDecisionError()
 		return out
 	}
+	rp.recorder.ReportBudgetStatus(ctx, rp.onBudgetStatus, resp)
 	switch resp.GetDecision() {
 	case governancepb.DecideResponse_NOTIFY:
 		rp.recorder.NoteNotified()

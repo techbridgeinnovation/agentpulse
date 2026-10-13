@@ -102,26 +102,33 @@ reporter.ModelCall(ctx, recorder.ModelCall{
 
 Neither path states a cost. A service says what happened and the server prices it, which is what stops an agent asserting what its own work was worth.
 
-## The running total
+## Budget statuses
 
-A spend ceiling has to be readable before a model call, and a network call per model call to read it is not affordable. So the recorder keeps what each in-flight request has spent, priced here, against a rate card it fetches in the background.
+Governance answers a spend decision with where every budget the call is held to stands, most pressing first: its scope, what is spent and the limit in millionths of a dollar, when the period ends, and a level — within, past 75%, past 95%, drawing on a reserve, or exhausted. A product that wants them sets one function, on either path:
 
 ```go
-rec := recorder.New(recorder.Config{
-    Sinks: []recorder.Sink{recorder.NewGRPCSink(conn, organisation)},
-    Rates: recorder.NewGRPCRateSource(conn),
-})
+onStatus := func(ctx context.Context, statuses []*governancepb.BudgetStatus, evaluated time.Time) {
+    // the product decides what its own user sees
+}
+// adkhooks and adkv2hooks
+opts.OnBudgetStatus = onStatus
 
-spent := rec.SpentOn(requestID) // millionths of a dollar
+// instrumented clients
+reporter = reporter.Governed(recorder.Governance{Decider: decider, OnBudgetStatus: onStatus})
 ```
 
-`Rates` is optional. Without it every record contributes nothing and `SpentOn` answers zero.
+It is queued whenever a call obtains a decision that carries statuses, cached ones included, whatever the verdict. Nothing is queued when it is unset, when no decision was obtained, when governance sent none, or for a refusal repeated from memory during an outage, whose figures would be up to an hour old.
 
-The figure is exact for what this process did and blind to what another replica spent on the same request, so it is a per-request ceiling and never an organisation's budget. That is the other half of the enforcement story, and it is the budget envelope governance hands out.
+**Agent Pulse shows the product's users nothing.** A warning a user sees is one the product's own code shows from what it is handed here. Setting the function changes no screen of any product by itself.
 
-**What the reporter does that a hand-built record does not.** It keeps each kind of token apart, including the reasoning and cache-write counts that are easy to miss and expensive to miss. It reduces an error to its code and never carries the message, because a provider error routinely quotes the prompt back. It separates a call that was truncated from one that failed, since the first was charged for partial work and the second may have been charged for nothing.
+**The figures are a delayed snapshot, not a live balance and not a hard cap.** A cached decision is as old as the cache's lifetime, `evaluated` says when governance read them, and a call's spend is recorded after it finishes, so the call that crosses a threshold is not in the figures that let it through. A reserve may have a limit of zero; never divide by it.
 
-`component` is asked for on this path rather than derived. Nothing can infer which part of a service made a call, and one bucket per service answers no question worth asking.
+**Delivery is asynchronous and never holds a model call.** The call goes ahead as soon as the event is queued, so by the time the function runs the call may already be under way or finished. One worker per recorder, started on first use, calls it one event at a time in the order the decisions were obtained, with copies of the statuses and a context that keeps the call's values but is not cancelled when the call ends.
+
+- Delivery is at most once. The queue holds 64 events and is not configurable. When it is full, behind a slow function, the new event is dropped and counted in `BudgetStatusDropped`; nothing waits and nothing grows.
+- The recorder never interrupts a running function. A slow one only delays later deliveries.
+- A function that panics is recovered, and counted in `BudgetStatusFailed` and `Panicked`. The verdict is unaffected.
+- `Close` stops the worker without waiting for a running function. Events still queued, and any reported after, are discarded and counted in `BudgetStatusDropped`, and so are events lost when the process exits.
 
 ## Who the work was for
 
@@ -165,6 +172,7 @@ recorder/v1/
 ├── decider.go                  asking governance whether a call may proceed
 ├── decider_cache.go            verdicts reused from memory
 ├── decider_grpc.go             the governance destination
+├── budget_status.go            budget statuses handed to the product, guarded
 ├── invalidation_subscriber.go  governance pushing a changed verdict in
 ├── rates.go                    where prices come from
 ├── rates_cache.go              the card in force, swapped wholesale
