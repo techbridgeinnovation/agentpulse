@@ -1,13 +1,13 @@
 ---
 name: adopt-agent-pulse
-description: Wire the Agent Pulse recorder into a Go or Python agent or service so what it spends on models is recorded and attributed. Use when asked to add Agent Pulse, add spend recording, meter an agent, or connect an agent to Agent Pulse.
+description: Wire the Agent Pulse recorder into a Go, Python or TypeScript agent or service so what it spends on models is recorded and attributed. Use when asked to add Agent Pulse, add spend recording, meter an agent, or connect an agent to Agent Pulse.
 ---
 
 # Adopt Agent Pulse
 
-Agent Pulse records what an agent spends on models and tools, attributed to the organisation, the agent, the request and the person it ran for. The recorder is a library, in Go and in Python, that runs inside the agent's own process. It observes and reports; model traffic never passes through it.
+Agent Pulse records what an agent spends on models and tools, attributed to the organisation, the agent, the request and the person it ran for. The recorder is a library, in Go, Python and TypeScript, that runs inside the agent's own process. It observes and reports; model traffic never passes through it.
 
-Steps 1 to 5 are the Go library. For a Python agent or service, the settings in "Before you start" are the same and the steps are in "Python" below.
+Steps 1 to 5 are the Go library. For a Python or TypeScript agent or service, the settings in "Before you start" are the same and the steps are in "Python" and "TypeScript" below.
 
 The whole adoption is one dependency and a few lines. Do not build anything around it.
 
@@ -231,7 +231,7 @@ The same four settings, from the same environment variables, and the same rules:
 ### The dependency
 
 ```bash
-pip install "techbridge-agentpulse @ git+https://github.com/techbridgeinnovation/agentpulse@python/v0.1.0#subdirectory=python"
+pip install techbridge-agentpulse
 ```
 
 It has no dependencies of its own and needs Python 3.10 or later.
@@ -317,11 +317,78 @@ print(reporter.recorder.stats())
 
 `delivered` rising after a deploy is the proof. `failed` rising with `delivered` at zero means the gateway refused the records, and the cause is one of the four settings. Tests can build `agentpulse.Recorder(agentpulse.Config())`, which records to nothing.
 
+## TypeScript
+
+The same four settings, from the same environment variables, and the same rules.
+
+### The dependency
+
+```bash
+npm install https://github.com/techbridgeinnovation/agentpulse/releases/download/typescript/v0.2.0/techbridge-agentpulse-0.2.0.tgz
+```
+
+It has no dependencies of its own and needs Node 18.18 or later. Install the newest `typescript/v*` release listed on the repository's releases page.
+
+### The reporter, once, where the service starts
+
+```ts
+import { connect, scope } from "techbridge-agentpulse";
+
+const reporter = connect("<service-name>");
+```
+
+`connect` reads `AP_GATEWAY`, `AP_API_KEY`, `AP_API_SECRET` and `AP_AGENT` and throws `ConfigError` at startup if any is missing or the agent is outside the key's organisation. Let that stop the service; do not catch it.
+
+To have budgets stop calls as well as count them, govern it: `const reporter = connect("<service-name>").governed();`.
+
+### Who the work was for, once per request
+
+Where the request arrives and the sign-in has been checked:
+
+```ts
+await scope({ request: requestId, user: { id: claims.sub, name: claims.name }, workspace: tenantId }, () => handle(req));
+```
+
+The same rules as Go: `id` is bare, the workspace is the bare tenant identifier and only for a product with customers of its own, and neither is ever passed at a model call site. Everything awaited inside the scope is filed under it.
+
+### Then one of these
+
+**The Vercel AI SDK.** Wrap each model once, where it is created, and its tools where they are declared:
+
+```ts
+import { wrapLanguageModel } from "ai";
+
+const model = wrapLanguageModel({ model: openai("<model>"), middleware: reporter.aiSdkMiddleware() });
+const tools = reporter.aiSdkTools({ search, lookup });
+```
+
+With a governed reporter, a call a budget refuses throws before the provider is called; `denied(err)` recognises it, and the agent answers its user in its own words.
+
+**Anything else.** Report the call yourself, with the provider's own counts untouched:
+
+```ts
+reporter.modelCall({ model: "<model called>", reported: reportedFrom(response.usage), format: FORMAT_OPENAI_RESPONSES, durationMs });
+```
+
+With a governed reporter, ask before a call you make yourself: `if (!(await reporter.decide("<model>")).proceed)` skip it.
+
+### Serverless
+
+On a platform that freezes the process once it answers, `await reporter.recorder.flush()` before answering. Everywhere else the recorder flushes on its own and at exit.
+
+### Verify
+
+```ts
+console.log(reporter.recorder.stats());
+```
+
+`delivered` rising after a deploy is the proof. `failed` rising with `delivered` at zero means the gateway refused the records, and the cause is one of the four settings.
+
 ## Reading it back
 
 Recording and reading are separate keys. The `AP_API_KEY` this skill wires in records and cannot read; a dashboard of the team's own needs a second key, issued on the console's API keys page as **Reads**, and asks the gateway directly over HTTPS. Nothing in the agent changes for it.
 
-Point the team at [`docs/reading-spend-api.md`](../../docs/reading-spend-api.md) and stop there — building their dashboard is not part of adopting the recorder.
+Point the team at [`docs/reading-spend-api.md`](https://github.com/techbridgeinnovation/agentpulse/blob/main/docs/reading-spend-api.md) and stop there — building their dashboard is not part of adopting the recorder.
 
 ## What you never write
 
@@ -332,6 +399,8 @@ Point the team at [`docs/reading-spend-api.md`](../../docs/reading-spend-api.md)
 ## Done when
 
 For Python: the four settings are set and `connect` is left to stop the service without them; one reporter built once; the plugin registered, every model client instrumented, or the LiteLLM callback in place; no call site waits on recording.
+
+For TypeScript: the four settings are set and `connect` is left to stop the service without them; one reporter built once; every model wrapped with the middleware, or every call reported by hand; no call site waits on recording.
 
 For Go:
 

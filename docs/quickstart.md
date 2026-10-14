@@ -28,6 +28,8 @@ go get github.com/techbridgeinnovation/agentpulse/recorder
 
 The recorder has no dependencies of its own. The TypeScript recorder needs Node 18.18 or newer.
 
+To have your coding agent do the rest of this page for you, install the Agent Pulse plugin in Claude Code with `/plugin install agentpulse --marketplace techbridgeinnovation/agentpulse`, or copy [the Cursor rule](https://github.com/techbridgeinnovation/agentpulse/blob/main/cursor/adopt-agent-pulse.mdc) into your project's `.cursor/rules/`, then ask it to add Agent Pulse to your service.
+
 ## Set four settings
 
 Copy them from the Connect page into your agent's environment. The recorder stops at startup if one is missing, so a mistake shows straight away.
