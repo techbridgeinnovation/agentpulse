@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.24"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,6 +7,7 @@ name = "techbridge-agentpulse"
 dynamic = ["version"]
 description = "Records what an AI agent spent, from inside the agent's own process, for Agent Pulse."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
 # Deliberately none. Everything this library depends on runs inside somebody else's agent.
 dependencies = []
@@ -15,6 +16,10 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/techbridgeinnovation/agentpulse"
+Source = "https://github.com/techbridgeinnovation/agentpulse/tree/main/python"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
