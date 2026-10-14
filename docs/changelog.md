@@ -7,11 +7,11 @@ order: 3
 
 # Changelog
 
-Recorder releases, newest first. Each is a tag on [github.com/techbridgeinnovation/agentpulse](https://github.com/techbridgeinnovation/agentpulse/releases), and Python releases from 0.6.1 are also on [PyPI](https://pypi.org/project/techbridge-agentpulse/).
+Recorder releases, newest first. Each is a tag on [github.com/techbridgeinnovation/agentpulse](https://github.com/techbridgeinnovation/agentpulse/releases), Python releases from 0.6.1 are also on [PyPI](https://pypi.org/project/techbridge-agentpulse/), and TypeScript releases from 0.2.1 on [npm](https://www.npmjs.com/package/techbridge-agentpulse).
 
 | Date | Release |
 | --- | --- |
-| 14 Oct 2026 | Python 0.6.1, the first on PyPI |
+| 14 Oct 2026 | Python 0.6.1, the first on PyPI; TypeScript 0.2.1, the first on npm |
 | 13 Oct 2026 | Python 0.6.0, TypeScript 0.2.0, Go recorder 0.3.0, Go ADK 2 hooks 0.3.0 |
 | 6 Oct 2026 | TypeScript 0.1.1 |
 | 5 Oct 2026 | TypeScript 0.1.0 |
@@ -31,7 +31,7 @@ pip install techbridge-agentpulse==0.6.1
 ```
 
 ```bash [TypeScript]
-npm install https://github.com/techbridgeinnovation/agentpulse/releases/download/typescript/v0.2.0/techbridge-agentpulse-0.2.0.tgz
+npm install techbridge-agentpulse@0.2.1
 ```
 
 ```bash [Go]

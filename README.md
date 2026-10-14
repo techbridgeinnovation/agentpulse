@@ -23,7 +23,11 @@ go get github.com/techbridgeinnovation/agentpulse/recorder
 pip install techbridge-agentpulse
 ```
 
-Each Python release is published to PyPI and tagged `python/v<version>`, listed on the [releases page](https://github.com/techbridgeinnovation/agentpulse/releases). A release is made by bumping `python/src/agentpulse/_version.py` in the pull request that carries the change: merging it tags and publishes the release.
+```bash
+npm install techbridge-agentpulse
+```
+
+Each Python release is published to PyPI and tagged `python/v<version>`, and each TypeScript release to npm and tagged `typescript/v<version>`, all listed on the [releases page](https://github.com/techbridgeinnovation/agentpulse/releases). A release is made by bumping `python/src/agentpulse/_version.py` or the `version` in `typescript/package.json` in the pull request that carries the change: merging it tags and publishes the release.
 
 ## Add it with your coding agent
 
