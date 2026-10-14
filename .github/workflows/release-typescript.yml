@@ -1,6 +1,8 @@
 # Releases the TypeScript recorder when its version changes on main.
 #
-# Bump `version` in `typescript/package.json` in the pull request that carries the change, and merging it is the release: this tags the merge `typescript/v<version>` and publishes a release with the package attached as `techbridge-agentpulse-<version>.tgz`, which `npm install <release asset URL>` installs. A version already tagged is left alone, so re-running or pushing again never moves a release.
+# Bump `version` in `typescript/package.json` in the pull request that carries the change, and merging it is the release: this publishes the package to npm as `techbridge-agentpulse`, tags the merge `typescript/v<version>` and publishes a release with the package attached as `techbridge-agentpulse-<version>.tgz`. A version already tagged is left alone, so re-running or pushing again never moves a release.
+#
+# npm accepts the upload through trusted publishing once the package names this repository and this workflow file. The first upload of a new package has nothing to name yet, so it uses the NPM_TOKEN secret when one is set.
 name: Release TypeScript recorder
 
 on:
@@ -11,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -23,6 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Read the version
         id: version
@@ -43,10 +47,27 @@ jobs:
         if: steps.exists.outputs.released != 'true'
         working-directory: typescript
         run: |
+          cp ../LICENSE LICENSE
           npm install --no-audit --no-fund
           npm run build
           npm test
           npm pack
+
+      - name: Publish to npm
+        if: steps.exists.outputs.released != 'true'
+        working-directory: typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Trusted publishing needs npm 11.5.1 or later.
+          npm install -g npm@11 --no-audit --no-fund
+          # A run that published and then failed to tag can be re-run.
+          if npm view "techbridge-agentpulse@$VERSION" version >/dev/null 2>&1; then
+            echo "techbridge-agentpulse@$VERSION is already on npm"
+          else
+            npm publish "techbridge-agentpulse-$VERSION.tgz" --provenance --access public
+          fi
 
       - name: Tag and publish the release
         if: steps.exists.outputs.released != 'true'
