@@ -15,7 +15,7 @@ You need an organisation and an API key with **Write** ticked, from the API keys
 ## Install the recorder
 
 ```bash [Python]
-pip install "techbridge-agentpulse @ git+https://github.com/techbridgeinnovation/agentpulse@python/v0.6.0#subdirectory=python"
+pip install techbridge-agentpulse
 ```
 
 ```bash [TypeScript]
