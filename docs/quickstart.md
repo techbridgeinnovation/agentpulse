@@ -19,7 +19,7 @@ pip install techbridge-agentpulse
 ```
 
 ```bash [TypeScript]
-npm install https://github.com/techbridgeinnovation/agentpulse/releases/download/typescript/v0.2.0/techbridge-agentpulse-0.2.0.tgz
+npm install techbridge-agentpulse
 ```
 
 ```bash [Go]

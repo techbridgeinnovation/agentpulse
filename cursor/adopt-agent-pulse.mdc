@@ -324,10 +324,10 @@ The same four settings, from the same environment variables, and the same rules.
 ### The dependency
 
 ```bash
-npm install https://github.com/techbridgeinnovation/agentpulse/releases/download/typescript/v0.2.0/techbridge-agentpulse-0.2.0.tgz
+npm install techbridge-agentpulse
 ```
 
-It has no dependencies of its own and needs Node 18.18 or later. Install the newest `typescript/v*` release listed on the repository's releases page.
+It has no dependencies of its own and needs Node 18.18 or later.
 
 ### The reporter, once, where the service starts
 
