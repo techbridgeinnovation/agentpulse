@@ -1,0 +1,52 @@
+# Tests the TypeScript recorder on every pull request that touches it, against each AI SDK major it supports.
+#
+# AP_AI_SDK_REQUIRED makes the run fail unless that major of `ai` and its OpenAI, Anthropic and Google providers are installed, so the tests against the real SDK cannot pass by being skipped. AI SDK 7 comes from the development dependencies; AI SDK 6 replaces it with the packages npm tags `ai-v6`, and the telemetry tests, which need 7, are skipped there.
+name: Test TypeScript recorder
+
+on:
+  pull_request:
+    paths: [typescript/**, python/tests/wire_fixtures.json, .github/workflows/test-typescript.yml]
+  push:
+    branches: [main]
+    paths: [typescript/**, python/tests/wire_fixtures.json, .github/workflows/test-typescript.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ai: ["7", "6"]
+    name: AI SDK ${{ matrix.ai }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install
+        working-directory: typescript
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck and build
+        if: matrix.ai == '7'
+        working-directory: typescript
+        run: |
+          npm run typecheck
+          npm run build
+
+      - name: Use AI SDK 6
+        if: matrix.ai == '6'
+        working-directory: typescript
+        run: npm install --no-save --no-audit --no-fund ai@ai-v6 @ai-sdk/openai@ai-v6 @ai-sdk/anthropic@ai-v6 @ai-sdk/google@ai-v6
+
+      - name: Test
+        working-directory: typescript
+        env:
+          AP_AI_SDK_REQUIRED: ${{ matrix.ai }}
+        run: npm test

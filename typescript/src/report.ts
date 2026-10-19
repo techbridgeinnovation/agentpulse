@@ -4,6 +4,7 @@
 
 import { currentScope, looksLikeEmail, workspaceName } from "./context.ts";
 import { embeddingMiddleware, type EmbeddingMiddleware, middleware, type Middleware, type MiddlewareOptions, type Tools, tools } from "./aisdk.ts";
+import { type AiSdkTelemetry, type AiSdkTelemetryOptions, telemetry } from "./aisdk-telemetry.ts";
 import { blockedFinish, errorCode, truncatedFinish } from "./failure.ts";
 import { ConfigError, Gateway } from "./gateway.ts";
 import { ask, type BudgetStatus, CachingDecider, type Decider, type Decision, DEFAULT_DECIDE_TIMEOUT_MS, DEFAULT_FAILURE_BACKOFF_MS, GatewayDecider, type Verdict, verdict } from "./governance.ts";
@@ -277,13 +278,18 @@ export class Reporter {
   }
 
   /** A middleware for the Vercel AI SDK's `wrapLanguageModel`, that records every call made with the wrapped model, and refuses one a budget has run out on by throwing SpendDenied when the reporter is governed. */
-  aiSdkMiddleware(options?: MiddlewareOptions): Middleware {
+  aiSdkMiddleware<V extends string = "v4">(options?: MiddlewareOptions<V>): Middleware<V> {
     return middleware(this, options);
   }
 
   /** A middleware for the Vercel AI SDK's `wrapEmbeddingModel`, from AI SDK 6, that records every embedding call made with the wrapped model. */
-  aiSdkEmbeddingMiddleware(options?: MiddlewareOptions): EmbeddingMiddleware {
+  aiSdkEmbeddingMiddleware<V extends string = "v4">(options?: MiddlewareOptions<V>): EmbeddingMiddleware<V> {
     return embeddingMiddleware(this, options);
+  }
+
+  /** A telemetry integration for AI SDK 7, for `registerTelemetry` or a call's `telemetry.integrations`, that records every model, embedding and tool call the SDK reports. It observes and never asks a budget: a model wrapped with `aiSdkMiddleware` is still how a call is refused, and is recorded by the middleware rather than twice. */
+  aiSdkTelemetry(options?: AiSdkTelemetryOptions): AiSdkTelemetry {
+    return telemetry(this, options);
   }
 
   /** The same AI SDK tools, each recorded when it runs: how long it took, how it failed and how large its result was, never what it was given or returned. */

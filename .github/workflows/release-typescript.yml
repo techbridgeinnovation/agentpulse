@@ -46,6 +46,9 @@ jobs:
       - name: Test and pack what is about to be released
         if: steps.exists.outputs.released != 'true'
         working-directory: typescript
+        env:
+          # The tests against the real AI SDK must run, never be skipped, before a release.
+          AP_AI_SDK_REQUIRED: "7"
         run: |
           cp ../LICENSE LICENSE
           npm install --no-audit --no-fund

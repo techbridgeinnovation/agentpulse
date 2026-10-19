@@ -7,7 +7,10 @@
 // Every generateText, streamText, generateObject and agent step made with that model is recorded. An embedding model is wrapped the same way, with `wrapEmbeddingModel` and its own middleware, and a set of tools with `reporter.aiSdkTools(tools)`. The SDK hands a middleware the provider's own usage as `usage.raw`, so a call to OpenAI, Anthropic or Gemini is recorded in that provider's convention, and any other provider in the SDK's own, `AI_SDK`. Nothing about a call's content is read: the middleware is handed the prompt and the reply, and this takes only the model, the counts, the finish and the failure.
 //
 // A governed reporter's middleware asks before each call and refuses one by throwing SpendDenied before the provider is called. A middleware cannot change which model its call uses, so a DOWNGRADE lets the call through as asked and is counted as not applied.
+//
+// The SDK's telemetry integration, in aisdk-telemetry.ts, is told of the same calls. Where both are set up, the middleware and the wrapped tools record a call and the integration leaves it alone, so each call is recorded once. Which calls they recorded is said through claims: a context the integration opens around each call, which the middleware or a wrapped tool marks from inside it, and which no other call can see.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 
 import { currentScope } from "./context.ts";
@@ -62,29 +65,57 @@ interface EmbedResult {
   response?: { body?: unknown };
 }
 
+/** @internal A call the telemetry integration is told of, which the middleware or a wrapped tool claims when it records the call itself. */
+export interface Claim {
+  readonly kind: "model" | "tool" | "embedding";
+  /** For a tool, the SDK's id for the one call it is, so a wrapped tool claims its own call and never one it runs inside. */
+  readonly toolCallId?: string;
+  /** For an embedding, the operation, `embed` or `embedMany`, the claim belongs to. */
+  readonly callId?: string;
+  claimed: boolean;
+}
+
+/** @internal The claim for the model attempt or the tool call running here, which the integration opens around each. */
+export const claims = new AsyncLocalStorage<Claim>();
+
+/** @internal The claim for the embedding operation running here. The SDK runs each `embed` and `embedMany` inside its tracing channel, which the integration binds this to; every call to the provider inside one operation is made with the same model. */
+export const embeddingClaims = new AsyncLocalStorage<Claim>();
+
+function claim(kind: "model" | "tool", toolCallId?: unknown): void {
+  const held = claims.getStore();
+  if (held?.kind !== kind) return;
+  if (kind === "tool" && (typeof toolCallId !== "string" || !toolCallId || held.toolCallId !== toolCallId)) return;
+  held.claimed = true;
+}
+
+function claimEmbedding(): void {
+  const held = embeddingClaims.getStore();
+  if (held?.kind === "embedding") held.claimed = true;
+}
+
 interface StreamResult {
   stream: ReadableStream<StreamPart>;
 }
 
-/** The middleware `wrapLanguageModel` takes. */
-export interface Middleware {
-  readonly specificationVersion: string;
-  wrapGenerate(options: { doGenerate: () => PromiseLike<Result>; model: Model }): Promise<Result>;
-  wrapStream(options: { doStream: () => PromiseLike<StreamResult>; model: Model }): Promise<StreamResult>;
+/** The middleware `wrapLanguageModel` takes. Its version, and each method's result, are the SDK's own types, so it fits the SDK's middleware type without a cast. */
+export interface Middleware<V extends string = string> {
+  readonly specificationVersion: V;
+  wrapGenerate<R extends Result>(options: { doGenerate: () => PromiseLike<R>; model: Model }): Promise<R>;
+  wrapStream<R extends StreamResult>(options: { doStream: () => PromiseLike<R>; model: Model }): Promise<R>;
 }
 
 /** The middleware `wrapEmbeddingModel` takes, from AI SDK 6. */
-export interface EmbeddingMiddleware {
-  readonly specificationVersion: string;
-  wrapEmbed(options: { doEmbed: () => PromiseLike<EmbedResult>; model: Model }): Promise<EmbedResult>;
+export interface EmbeddingMiddleware<V extends string = string> {
+  readonly specificationVersion: V;
+  wrapEmbed<R extends EmbedResult>(options: { doEmbed: () => PromiseLike<R>; model: Model }): Promise<R>;
 }
 
 /** A set of AI SDK tools, by name. Only each tool's `execute` is read. */
 export type Tools = Record<string, object>;
 
-export interface MiddlewareOptions {
-  /** The middleware version the installed SDK expects: `v4` for AI SDK 7, `v3` for 6, `v2` for 5. */
-  specificationVersion?: string;
+export interface MiddlewareOptions<V extends string = string> {
+  /** The middleware version the installed SDK expects: `v4` for AI SDK 7, the default, and `v3` for 6. */
+  specificationVersion?: V;
   /** The part of the product the calls belong to, where the scope names none. A component on the scope wins. */
   component?: string;
 }
@@ -113,8 +144,8 @@ export function providerOf(provider: string): { billedBy: string; format: string
   return { billedBy: (p.split(".")[0] ?? "").toUpperCase(), format: FORMAT_AI_SDK };
 }
 
-/** The counts to record and their convention: the provider's own where the SDK passed them on and the provider is one the server reads, the SDK's otherwise. */
-function usageOf(usage: unknown, format: string, metadata?: unknown): { reported: Record<string, number>; format: string } {
+/** @internal The counts to record and their convention: the provider's own where the SDK passed them on and the provider is one the server reads, the SDK's otherwise. */
+export function usageOf(usage: unknown, format: string, metadata?: unknown): { reported: Record<string, number>; format: string } {
   const u = (usage ?? {}) as { raw?: unknown };
   // AI SDK 5 passes no raw usage, and its Anthropic provider leaves Anthropic's own in the metadata instead, which is the only place the cache writes are.
   const raw = u.raw ?? (format === FORMAT_ANTHROPIC ? (metadata as { anthropic?: { usage?: unknown } } | undefined)?.anthropic?.usage : undefined);
@@ -128,8 +159,8 @@ function usageOf(usage: unknown, format: string, metadata?: unknown): { reported
 
 const known = (reason: string): boolean => blockedFinish(reason) || truncatedFinish(reason);
 
-// The provider's own reason, except where the SDK knows the call failed or was cut short and the provider's word is one no list here knows.
-function finishOf(reason: FinishReason | string | undefined): string {
+/** @internal The provider's own reason, except where the SDK knows the call failed or was cut short and the provider's word is one no list here knows. */
+export function finishOf(reason: FinishReason | string | undefined): string {
   if (typeof reason === "string") return reason;
   const raw = reason?.raw ?? "";
   const unified = reason?.unified ?? "";
@@ -140,7 +171,8 @@ function finishOf(reason: FinishReason | string | undefined): string {
 // A stream that nothing read to its end and nothing cancelled is recorded when it is collected, as cancelled. Collection may come late or, at exit, never, and nothing earlier can tell an abandoned stream from a slow reader.
 const abandoned = new FinalizationRegistry<() => void>((settle) => settle());
 
-function frameworkOf(): Framework {
+/** @internal */
+export function frameworkOf(): Framework {
   return { name: FRAMEWORK, version: installedVersion() };
 }
 
@@ -155,16 +187,17 @@ interface Outcome {
 
 type Call = { started: number; billedBy: string; format: string; component: string };
 
-export function middleware(reporter: Reporter, options: MiddlewareOptions = {}): Middleware {
+export function middleware<V extends string = "v4">(reporter: Reporter, options: MiddlewareOptions<V> = {}): Middleware<V> {
   const before = asker(reporter, options);
   const record = recorder(reporter);
 
   return {
-    specificationVersion: options.specificationVersion ?? "v4",
+    specificationVersion: options.specificationVersion ?? ("v4" as V),
 
-    async wrapGenerate({ doGenerate, model }) {
+    async wrapGenerate<R extends Result>({ doGenerate, model }: { doGenerate: () => PromiseLike<R>; model: Model }): Promise<R> {
+      claim("model");
       const call = await before(model);
-      let result: Result;
+      let result: R;
       try {
         result = await doGenerate();
       } catch (err) {
@@ -175,9 +208,10 @@ export function middleware(reporter: Reporter, options: MiddlewareOptions = {}):
       return result;
     },
 
-    async wrapStream({ doStream, model }) {
+    async wrapStream<R extends StreamResult>({ doStream, model }: { doStream: () => PromiseLike<R>; model: Model }): Promise<R> {
+      claim("model");
       const call = await before(model);
-      let result: StreamResult;
+      let result: R;
       try {
         result = await doStream();
       } catch (err) {
@@ -253,14 +287,15 @@ export function middleware(reporter: Reporter, options: MiddlewareOptions = {}):
 }
 
 /** The middleware for `wrapEmbeddingModel`. Embedding models arrived in the SDK's middleware with AI SDK 6, so `specificationVersion` is `v4` for 7 and `v3` for 6. */
-export function embeddingMiddleware(reporter: Reporter, options: MiddlewareOptions = {}): EmbeddingMiddleware {
+export function embeddingMiddleware<V extends string = "v4">(reporter: Reporter, options: MiddlewareOptions<V> = {}): EmbeddingMiddleware<V> {
   const before = asker(reporter, options);
   const record = recorder(reporter);
   return {
-    specificationVersion: options.specificationVersion ?? "v4",
-    async wrapEmbed({ doEmbed, model }) {
+    specificationVersion: options.specificationVersion ?? ("v4" as V),
+    async wrapEmbed<R extends EmbedResult>({ doEmbed, model }: { doEmbed: () => PromiseLike<R>; model: Model }): Promise<R> {
+      claimEmbedding();
       const call = await before(model);
-      let result: EmbedResult;
+      let result: R;
       try {
         result = await doEmbed();
       } catch (err) {
@@ -288,7 +323,8 @@ export function tools<T extends Tools>(reporter: Reporter, set: T): T {
     // A copy with the same prototype and every property, getters and hidden ones included, so only `execute` differs.
     const wrapped = Object.create(Object.getPrototypeOf(tool) as object | null, Object.getOwnPropertyDescriptors(tool)) as object;
     Object.defineProperty(wrapped, "execute", {
-      value: (...args: unknown[]): unknown => run(reporter, name, () => (execute as (...a: unknown[]) => unknown).apply(tool, args)),
+      // The SDK hands every execute the id of the call it is, beside the input.
+      value: (...args: unknown[]): unknown => run(reporter, name, () => (execute as (...a: unknown[]) => unknown).apply(tool, args), (args[1] as { toolCallId?: unknown } | undefined)?.toolCallId),
       writable: true,
       enumerable: true,
       configurable: true,
@@ -299,7 +335,8 @@ export function tools<T extends Tools>(reporter: Reporter, set: T): T {
 }
 
 // The tool's own result and error reach the SDK unchanged; only the time, the code and the size are kept.
-function run(reporter: Reporter, name: string, execute: () => unknown): unknown {
+function run(reporter: Reporter, name: string, execute: () => unknown, toolCallId?: unknown): unknown {
+  claim("tool", toolCallId);
   const started = performance.now();
   const done = (error: unknown, result?: unknown): void => {
     try {
@@ -351,8 +388,8 @@ async function* relay(source: AsyncIterable<unknown>, done: (error: unknown, res
   }
 }
 
-// What a cancel was given, where it names a deadline, or a cancel otherwise: the reason is whatever the caller passed, and only its code would be kept.
-function stoppedBy(reason: unknown): unknown {
+/** @internal What a cancel was given, where it names a deadline, or a cancel otherwise: the reason is whatever the caller passed, and only its code would be kept. */
+export function stoppedBy(reason: unknown): unknown {
   try {
     return errorCode(reason) === "DeadlineExceeded" ? reason : new Cancelled();
   } catch {
@@ -361,7 +398,7 @@ function stoppedBy(reason: unknown): unknown {
 }
 
 // Only a refusal leaves here as an error: anything else going wrong inside is counted and the call goes ahead as if the middleware were not there.
-function asker(reporter: Reporter, options: MiddlewareOptions): (model: Model) => Promise<Call> {
+function asker(reporter: Reporter, options: MiddlewareOptions<string>): (model: Model) => Promise<Call> {
   return async (model) => {
     const component = currentScope().component || options.component || "ai-sdk";
     let call: Call = { started: performance.now(), billedBy: "", format: FORMAT_AI_SDK, component };

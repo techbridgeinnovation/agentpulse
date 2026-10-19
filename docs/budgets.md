@@ -110,7 +110,8 @@ An enforced budget stops a call only where the recorder asks before the call is 
 | Gemini, OpenAI and Anthropic clients in Go, and Claude through Vertex in Go | Stops the call |
 | Google ADK, in Python and Go | Stops the call |
 | LiteLLM proxy | Stops the call |
-| LangChain, OpenAI Agents SDK, Vercel AI SDK | Stops the call |
+| LangChain, OpenAI Agents SDK, Vercel AI SDK middleware | Stops the call |
+| Vercel AI SDK telemetry | Neither: records only, and alerts |
 | OpenTelemetry | Neither: records only, and alerts |
 
 ## How exact the limit is
