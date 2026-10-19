@@ -145,6 +145,8 @@ The **Bill check** page shows each day: Google's bill, what was recorded for the
 | Not recorded | Google billed for an hour and model Agent Pulse saw no calls for. |
 | Waiting for bill | Calls were recorded and their bill hasn't been sent yet. |
 
+Bill higher and Not recorded usually come from calls outside your recorded services, such as local tests against the same project. Run tests against a separate project to keep them out.
+
 Recorded figures never change. The bill sits beside them, and budgets keep running on the estimate, which is live and covers every provider.
 
 Agent Pulse keeps the result for each hour and model, not your bill lines, for 120 days.
