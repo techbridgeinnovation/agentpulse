@@ -11,9 +11,9 @@ Read your organisation's spend over HTTP and show it beside your own figures: in
 
 ## Get a key
 
-On the **API keys** page, create a key and tick **Read**. Send its name as `X-Api-Key` and its secret as `X-Api-Secret` on every request.
+On the **API keys** page, create a key for **A dashboard**. Send its name as `X-Api-Key` and its secret as `X-Api-Secret` on every request.
 
-Keep reading and recording apart. A key used by your agents only needs **Write**, and a dashboard only needs **Read**. A read key that leaks shows everyone's spend in the organisation, so give one both only where a process does both.
+Keep reading and recording apart. A key used by your agents only needs to record, and a dashboard only needs to read. A read key that leaks shows everyone's spend in the organisation, so give one both only where a process does both.
 
 ## Pick the right method
 
@@ -69,7 +69,7 @@ A filter can never widen a read past its path: filtering a workspace by another 
 
 Costs are whole millionths of a US dollar, sent as strings. Divide by 1,000,000 when you display them, not before you add them up.
 
-`estimatedCostMicros` is priced from the call's tokens when it was recorded. `billedCostMicros` is what the provider's billing export says, and is filled only for traffic billed through Google. See [how cost is calculated](how-cost-is-calculated.md).
+`estimatedCostMicros` is priced from the call's tokens when it was recorded. `billedCostMicros` is the call's share of the Google bill you reported, filled only where its hour and model matched. See [check your bill](bill-check.md). See [how cost is calculated](how-cost-is-calculated.md).
 
 ## Show names
 

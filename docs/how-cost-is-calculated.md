@@ -26,9 +26,9 @@ The same holds for a model that was missing from the rate card: its calls are pr
 | Figure | Where it comes from | When |
 | --- | --- | --- |
 | Estimated | Token counts at list price | As soon as the call is recorded |
-| Billed | The provider's billing export | Overnight, for traffic billed through Google only |
+| Billed | Your Google bill, which you report | When you report the day, for traffic billed through Google only |
 
-A provider you pay directly, such as OpenAI or Anthropic, stays estimate only. A recent window shows estimates; an older one shows both, and a small difference between them is expected.
+A provider you pay directly, such as OpenAI or Anthropic, stays estimate only. A call carries the billed figure only when its hour and model on the bill came within 5% of what was recorded; any other hour keeps its gap visible on the [bill check](bill-check.md) instead. Google's bill lands about two days after the calls, so recent days show estimates only.
 
 ## Money is exact
 
