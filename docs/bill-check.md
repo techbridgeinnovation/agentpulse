@@ -19,7 +19,7 @@ Your own code reads the bill, with your own credentials, and sends it. Agent Pul
 
 Only traffic Google bills can be checked, which is Gemini and other models on Vertex AI. Calls to OpenAI or Anthropic directly stay estimates.
 
-## 1. Read one day of the bill
+## Read a day of your bill
 
 This query returns one day of Vertex AI charges for the projects your agents run in, in US dollars after credits. Replace the table and the project ids with yours.
 
@@ -41,7 +41,10 @@ WHERE service.description = 'Vertex AI'
 
 Send every line, including those that cost nothing: the day you send is taken as the whole bill for that day.
 
-## 2. Send it
+- **Only your own projects.** An export often covers several projects, such as test and production. Send only the projects whose agents record to the gateway you send to, or nothing matches.
+- **Skip a day with no lines.** Google may not have exported it yet, and sending none says the bill was zero. Send it on a later run instead.
+
+## Send it
 
 Post the lines with the window they cover:
 
@@ -67,13 +70,37 @@ curl "https://$AP_GATEWAY/v1/organisations/<organisation>/reconciliations:report
   }'
 ```
 
+```python
+reply = requests.post(
+    f"https://{os.environ['AP_GATEWAY']}/v1/organisations/<organisation>/reconciliations:reportBill",
+    headers={"X-Api-Key": os.environ["AP_API_KEY"], "X-Api-Secret": os.environ["AP_API_SECRET"]},
+    json={
+        "billedBy": "VERTEX_AI",
+        "startTime": "2026-10-13T00:00:00Z",
+        "endTime": "2026-10-14T00:00:00Z",
+        "lines": [
+            {
+                "billingAccount": "my-prod-project",
+                "startTime": "2026-10-13T17:00:00Z",
+                "endTime": "2026-10-13T18:00:00Z",
+                "product": "Gemini 3 Flash Text Input - Predictions",
+                "costMicros": "1310000",
+                "usageAmount": 2620000,
+            }
+        ],
+    },
+    timeout=60,
+)
+reply.raise_for_status()
+```
+
 The reply lists each hour and model and how it compared.
 
 - **The window** starts and ends on the hour and covers at most a day. Every line must start inside it.
 - **At most 20,000 lines** go in one report. A day with more is sent an hour at a time.
 - **`environment`** is optional. If your production and test agents bill to different projects, send each project's lines with its environment, `organisations/<organisation>/environments/<environment>`, so each is checked only against calls recorded there.
 
-## 3. Run it every day
+## Run it every day
 
 Google's export lands within about two days. Run the query and the post once a day for the day two days back, for example from Cloud Scheduler or a cron job.
 
@@ -118,7 +145,11 @@ The **Bill check** page shows each day: Google's bill, what was recorded for the
 | Not recorded | Google billed for an hour and model Agent Pulse saw no calls for. |
 | Waiting for bill | Calls were recorded and their bill hasn't been sent yet. |
 
+Bill higher and Not recorded usually come from calls outside your recorded services, such as local tests against the same project. Run tests against a separate project to keep them out.
+
 Recorded figures never change. The bill sits beside them, and budgets keep running on the estimate, which is live and covers every provider.
+
+Agent Pulse keeps the result for each hour and model, not your bill lines, for 120 days.
 
 To read the same results from your own code, list them with a key for **A dashboard**:
 
