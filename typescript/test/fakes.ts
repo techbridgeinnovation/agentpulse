@@ -97,7 +97,7 @@ export class MemorySink implements Sink {
 /** A provider on this machine: answers each request with the next scripted reply and remembers what it was sent. */
 export class Provider {
   readonly received: { path: string; body: unknown }[] = [];
-  readonly replies: { status: number; headers: Record<string, string>; body: string | string[] }[] = [];
+  readonly replies: { status: number; headers: Record<string, string>; body: string | string[]; delayMs?: number; broken?: boolean }[] = [];
   private server: Server;
   url = "";
 
@@ -108,8 +108,14 @@ export class Provider {
       const reply = this.replies.shift() ?? { status: 500, headers: {}, body: "{}" };
       res.writeHead(reply.status, reply.headers);
       if (Array.isArray(reply.body)) {
-        for (const chunk of reply.body) res.write(chunk);
-        res.end();
+        for (const chunk of reply.body) {
+          if (reply.delayMs) await new Promise((r) => setTimeout(r, reply.delayMs));
+          if (res.destroyed) return;
+          res.write(chunk);
+        }
+        // A provider that fails part way drops the connection rather than ending the stream.
+        if (reply.broken) setTimeout(() => res.destroy(), 20);
+        else res.end();
       } else {
         res.end(reply.body);
       }
@@ -122,12 +128,14 @@ export class Provider {
     return this;
   }
 
-  json(body: unknown, status = 200): void {
-    this.replies.push({ status, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  json(body: unknown, status = 200, headers: Record<string, string> = {}): void {
+    this.replies.push({ status, headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
   }
 
-  sse(events: unknown[]): void {
-    this.replies.push({ status: 200, headers: { "content-type": "text/event-stream" }, body: [...events.map((e) => `data: ${JSON.stringify(e)}\n\n`), "data: [DONE]\n\n"] });
+  /** Server-sent events, each `delayMs` after the last where it is set. A broken stream sends them and drops the connection, with no end. */
+  sse(events: unknown[], options: { delayMs?: number; broken?: boolean } = {}): void {
+    const chunks = events.map((e) => `data: ${JSON.stringify(e)}\n\n`);
+    this.replies.push({ status: 200, headers: { "content-type": "text/event-stream" }, body: options.broken ? chunks : [...chunks, "data: [DONE]\n\n"], ...options });
   }
 
   close(): Promise<void> {

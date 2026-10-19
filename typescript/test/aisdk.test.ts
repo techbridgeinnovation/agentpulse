@@ -1,4 +1,4 @@
-// Calls made through the real Vercel AI SDK and its providers, against a provider on this machine. Skipped where the SDK is not installed.
+// Calls made through the real Vercel AI SDK and its providers, against a provider on this machine. Skipped where the SDK is not installed, unless AP_AI_SDK_REQUIRED says it must be.
 
 import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
@@ -12,12 +12,7 @@ import { Recorder } from "../src/recorder.ts";
 import { Reporter } from "../src/report.ts";
 import { DECISION_DENY, DECISION_DOWNGRADE, STATUS_FAILED, STATUS_OK, STATUS_TRUNCATED } from "../src/wire.ts";
 import { MemorySink, Provider } from "./fakes.ts";
-
-const sdk = await import("ai").catch(() => undefined);
-const openaiSdk = await import("@ai-sdk/openai").catch(() => undefined);
-const anthropicSdk = await import("@ai-sdk/anthropic").catch(() => undefined);
-const googleSdk = await import("@ai-sdk/google").catch(() => undefined);
-const skip = !sdk || !openaiSdk ? "the Vercel AI SDK is not installed" : false;
+import { anthropicSdk, googleSdk, openaiSdk, sdk, skip } from "./sdk.ts";
 
 const AGENT = "organisations/acme/agents/assistant";
 

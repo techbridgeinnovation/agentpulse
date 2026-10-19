@@ -1,6 +1,6 @@
 {
   "name": "techbridge-agentpulse",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Records what an AI agent spent, from inside the agent's own process, for Agent Pulse.",
   "license": "MIT",
   "repository": {
@@ -29,7 +29,11 @@
     "test": "node --test test/*.test.ts"
   },
   "devDependencies": {
+    "@ai-sdk/anthropic": "^4.0.82",
+    "@ai-sdk/google": "^4.0.99",
+    "@ai-sdk/openai": "^4.0.96",
     "@types/node": "^24",
+    "ai": "^7.0.143",
     "typescript": "^7"
   }
 }
