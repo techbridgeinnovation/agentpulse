@@ -15,6 +15,7 @@ order: 3
 
 | Date | API |
 | --- | --- |
+| 20 Oct 2026 | A `workspace` or `agent` filter takes the short id as well as the full name; replies carry `RateLimit-Policy` with the limit's window; a badly written time or `orderBy` names its parameter; the reference drops the outcomes and prices `filter`, which was never served |
 | 20 Oct 2026 | Errors carry `reason`, `field` and `requestId`; replies carry `X-Request-Id` and `RateLimit-*` headers; empty lists and zero figures are always present; dimensions, filter fields and `readMask` accept camelCase and snake_case; `status`, `error_class` and `kind` filter values are matched in any case and refused outside their set; a filtered list no longer repeats an item between pages |
 
 ## Recorder releases

@@ -26,13 +26,15 @@ Every failed call is recorded with the provider's own error code, and grouped in
 | `ERROR_CLASS_CANCELLED` | Request cancelled | Unknown | The caller stopped waiting. Nothing was wrong with the call. |
 | `ERROR_CLASS_UNKNOWN` | Unknown error | Unknown | A code not yet mapped. The provider's code is shown beside it. |
 
+A call that did not fail has the class `ERROR_CLASS_UNSPECIFIED`. Grouped by `error_class`, a row's `errorClassOwner` says whose it is: `ours` for the ones marked Yours above, meaning your own request was at fault, `provider`, or `unknown`.
+
 Two statuses are not failures of the call itself: `DENIED`, stopped by your budget before it was sent and never billed, and `TRUNCATED`, stopped at a token limit or deadline after doing part of the work.
 
 ## Errors from the API
 
 | Status | Why | What to do |
 | --- | --- | --- |
-| `400` | The window is missing or ends before it starts, or a dimension or filter field is unknown. | Check the parameters against the method's page. |
+| `400` | A parameter is unknown or badly written: a missing window, a time zone, dimension, filter, read mask or page token that is not valid. | Check the `reason` and `field`, below. |
 | `401` | The key or secret is missing, unknown or revoked. | Send both headers. Create a new key if this one was revoked. |
 | `403` | A key without **Read** was used, or the path names another organisation. | Use a read key belonging to the organisation in the path. |
 | `429` | Over your organisation's rate limit. | Wait the seconds in `Retry-After`, then retry. |
@@ -42,7 +44,7 @@ Every refusal's body carries a `reason` your code can check, the `field` at faul
 | `reason` | `field` | What to change |
 | --- | --- | --- |
 | `UNKNOWN_PARAMETER` | The parameter | Remove it, or check its spelling against the method's page. |
-| `INVALID_PARAMETER` | The parameter | Send it in the type the method's page gives, once. |
+| `INVALID_PARAMETER` | The parameter | Send it in the type the method's page gives, once. A time is RFC 3339, such as `2026-10-01T00:00:00Z`, and `orderBy` takes only `occurred_at desc`. |
 | `MISSING_WINDOW` | `startTime` | Send both `startTime` and `endTime`. |
 | `INVALID_WINDOW` | `startTime` or `endTime` | Send both, with the end after the start. |
 | `INVALID_TIME_ZONE` | `timeZone` | Send an IANA name, such as `Africa/Nairobi`. |

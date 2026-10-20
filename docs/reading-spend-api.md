@@ -44,17 +44,18 @@ curl -G "https://$AP_GATEWAY/v1/organisations/<organisation>/activities:aggregat
   --data-urlencode 'endTime=2026-10-01T00:00:00Z'
 ```
 
-The dimensions are `workspace`, `project`, `agent`, `request`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `sub_agent`, `skill`, `framework`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `environment`, `date` and `hour`. Each also works in camelCase, such as `errorCode`.
+The dimensions are `workspace`, `project`, `agent`, `request`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `sub_agent`, `skill`, `framework`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `environment`, `date` and `hour`. Each also works in camelCase, such as `errorCode`, and a row's `dimensions` always come back keyed in snake_case, such as `error_code`.
 
-- **Days and hours** are cut in the `timeZone` you send, such as `timeZone=Africa/Nairobi`, and in UTC if you send none.
+- **Days and hours** are cut in the `timeZone` you send, such as `timeZone=Africa/Nairobi`, and in UTC if you send none. A day reads `2026-10-14` and an hour `2026-10-14T12:00`, with no offset.
+- **Rows** come most expensive first. Sort them yourself for a chart by day.
 - **Times** are RFC 3339. Send an offset or `Z`, such as `2026-10-01T00:00:00+03:00`. The window includes `startTime` and excludes `endTime`.
-- **A blank value** groups the calls that carried none. A `user` of `""` is work done for no signed-in person.
+- **A blank value** groups the calls that carried none. A `user` of `""` is work done for no signed-in person. A call that did not fail has the `error_class` `ERROR_CLASS_UNSPECIFIED`.
 - **A day with no calls** has no row. Fill the gaps in your chart yourself.
-- **`readMask`** picks the figures a row carries, such as `readMask=estimatedCostMicros,activityCount`. Leave it out for all of them.
+- **`readMask`** picks the figures to work out, such as `readMask=estimatedCostMicros,activityCount`, and a narrow one answers faster. The figures left out still appear, as `"0"`, and their times as `null`. Leave it out for all of them.
 
 ## Narrow it with a filter
 
-A filter keeps only matching calls: terms of `field = value` joined by `AND`, over the same names you can group by.
+A filter keeps only matching calls: terms of `field = value` joined by `AND`. The fields are `workspace`, `project`, `agent`, `request`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `sub_agent`, `skill`, `framework`, `tool`, `status`, `error_code`, `error_class`, `kind` and `environment`, in either spelling. A `workspace` or `agent` can be its short id, such as `default` or `atlas`, or its full name.
 
 | Filter | With | Gives |
 | --- | --- | --- |
@@ -85,7 +86,9 @@ Rows carry user identifiers. Join them with List users, or with your own user ta
 
 ## Read cost per outcome
 
-List the outcomes, then ask for the spend of the request each one belongs to with `filter=request = "<the outcome's request>"`, and divide by the outcome's `quantity`. Group by `request` to get every request's spend in one call.
+1. List every outcome. The list has no window or filter, so page through it all and keep the ones whose `occurredAt` falls in the period you report on.
+2. Ask Aggregate spend for the same period with `groupBy=request`, which gives every request's spend in one call.
+3. Join the two on `request`, and divide each request's spend by its outcomes' `quantity`.
 
 ## Page through a list
 
@@ -99,4 +102,13 @@ A refusal has the HTTP status and a body naming what to change:
 {"error": {"code": "InvalidArgument", "reason": "UNKNOWN_DIMENSION", "message": "\"colour\" is not a dimension that can be grouped by; allowed: ...", "field": "groupBy", "requestId": "4f1c9e2a7b3d4e5f8a9b0c1d2e3f4a5b"}}
 ```
 
-Check `reason` in your code, show `message` to a person, and quote `requestId` when you contact us. Every reply also carries the id as `X-Request-Id`, and how much of your rate limit is left as `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`. A `429` says how many seconds to wait in `Retry-After`. See [error codes](error-codes.md) for every reason.
+Check `reason` in your code, show `message` to a person, and quote `requestId` when you contact us. Every reply also carries the id as `X-Request-Id`. Every read your key is allowed to make also says where your rate limit stands:
+
+| Header | Means |
+| --- | --- |
+| `RateLimit-Policy` | The limit and its window in seconds, such as `6000;w=60`: 6,000 reads a minute. |
+| `RateLimit-Limit` | The reads the window holds. |
+| `RateLimit-Remaining` | How many are left now. |
+| `RateLimit-Reset` | Seconds until the full limit is back. |
+
+A `429` says how many seconds to wait in `Retry-After`. A read refused before it is counted, a `401` or `403`, carries none of them. See [error codes](error-codes.md) for every reason.
