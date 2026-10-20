@@ -13,6 +13,8 @@ Read your organisation's spend over HTTP and show it beside your own figures: in
 
 On the **API keys** page, create a key for **A dashboard**. Send its name as `X-Api-Key` and its secret as `X-Api-Secret` on every request.
 
+Every path starts with `https://gateway.agentspulse.ai`, the address on the **Connect** page. The examples call it `$AP_GATEWAY`.
+
 Keep reading and recording apart. A key used by your agents only needs to record, and a dashboard only needs to read. A read key that leaks shows everyone's spend in the organisation, so give one both only where a process does both.
 
 ## Pick the right method
@@ -42,18 +44,25 @@ curl -G "https://$AP_GATEWAY/v1/organisations/<organisation>/activities:aggregat
   --data-urlencode 'endTime=2026-10-01T00:00:00Z'
 ```
 
-The dimensions are `workspace`, `project`, `agent`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `skill`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `date` and `hour`. `date` and `hour` are in UTC.
+The dimensions are `workspace`, `project`, `agent`, `request`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `sub_agent`, `skill`, `framework`, `tool`, `status`, `error_code`, `error_class`, `kind`, `agent_kind`, `environment`, `date` and `hour`. Each also works in camelCase, such as `errorCode`, and a row's `dimensions` always come back keyed in snake_case, such as `error_code`.
+
+- **Days and hours** are cut in the `timeZone` you send, such as `timeZone=Africa/Nairobi`, and in UTC if you send none. A day reads `2026-10-14` and an hour `2026-10-14T12:00`, with no offset.
+- **Rows** come most expensive first. Sort them yourself for a chart by day.
+- **Times** are RFC 3339. Send an offset or `Z`, such as `2026-10-01T00:00:00+03:00`. The window includes `startTime` and excludes `endTime`.
+- **A blank value** groups the calls that carried none. A `user` of `""` is work done for no signed-in person. A call that did not fail has the `error_class` `ERROR_CLASS_UNSPECIFIED`.
+- **A day with no calls** has no row. Fill the gaps in your chart yourself.
+- **`readMask`** picks the figures to work out, such as `readMask=estimatedCostMicros,activityCount`, and a narrow one answers faster. The figures left out still appear, as `"0"`, and their times as `null`. Leave it out for all of them.
 
 ## Narrow it with a filter
 
-A filter keeps only matching calls: terms of `field = value` joined by `AND`, over the same names you can group by.
+A filter keeps only matching calls: terms of `field = value` joined by `AND`. The fields are `workspace`, `project`, `agent`, `request`, `model`, `provider`, `user`, `caller_service`, `caller_component`, `sub_agent`, `skill`, `framework`, `tool`, `status`, `error_code`, `error_class`, `kind` and `environment`, in either spelling. A `workspace` or `agent` can be its short id, such as `default` or `atlas`, or its full name.
 
 | Filter | With | Gives |
 | --- | --- | --- |
 | `user = "8c21e0b4"` | `groupBy=date` | One person's spend by day |
 | `agent = "organisations/acme/agents/atlas" AND status = FAILED` | `groupBy=error_class` | That agent's failures by kind |
 
-Only `=` and `AND` are accepted. Anything else is refused rather than ignored, so a figure never silently leaves out a term you wrote.
+Only `=` and `AND` are accepted. Anything else is refused rather than ignored, so a figure never silently leaves out a term you wrote. `status`, `error_class` and `kind` take a fixed set of values, matched in any case, and a value outside the set is refused.
 
 ## Read one customer
 
@@ -73,4 +82,33 @@ Costs are whole millionths of a US dollar, sent as strings. Divide by 1,000,000 
 
 ## Show names
 
-Rows carry user identifiers. Join them with List users, which holds the names your agents sent, or with your own user table.
+Rows carry user identifiers. Join them with List users, or with your own user table. A user is listed only once your code has sent their name or email, see [show names instead of identifiers](cost-per-customer.md#show-names-instead-of-identifiers).
+
+## Read cost per outcome
+
+1. List every outcome. The list has no window or filter, so page through it all and keep the ones whose `occurredAt` falls in the period you report on.
+2. Ask Aggregate spend for the same period with `groupBy=request`, which gives every request's spend in one call.
+3. Join the two on `request`, and divide each request's spend by its outcomes' `quantity`.
+
+## Page through a list
+
+A list returns 100 items unless you ask for up to 1,000 with `pageSize`. Pass `nextPageToken` back as `pageToken` until it comes back empty. Each item comes once, whatever the filter. An empty list is `[]` and a zero figure is `"0"`, so neither field is ever missing.
+
+## When something is refused
+
+A refusal has the HTTP status and a body naming what to change:
+
+```json
+{"error": {"code": "InvalidArgument", "reason": "UNKNOWN_DIMENSION", "message": "\"colour\" is not a dimension that can be grouped by; allowed: ...", "field": "groupBy", "requestId": "4f1c9e2a7b3d4e5f8a9b0c1d2e3f4a5b"}}
+```
+
+Check `reason` in your code, show `message` to a person, and quote `requestId` when you contact us. Every reply also carries the id as `X-Request-Id`. Every read your key is allowed to make also says where your rate limit stands:
+
+| Header | Means |
+| --- | --- |
+| `RateLimit-Policy` | The limit and its window in seconds, such as `6000;w=60`: 6,000 reads a minute. |
+| `RateLimit-Limit` | The reads the window holds. |
+| `RateLimit-Remaining` | How many are left now. |
+| `RateLimit-Reset` | Seconds until the full limit is back. |
+
+A `429` says how many seconds to wait in `Retry-After`. A read refused before it is counted, a `401` or `403`, carries none of them. See [error codes](error-codes.md) for every reason.
