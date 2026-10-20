@@ -27,7 +27,7 @@ On the **Budgets** page, choose **New budget**. Organisation admins and budget a
 
 - **Applies to:** the whole organisation, one agent, a set of users, or a set of workspaces. Choosing several users creates a separate budget for each person by default, each with the full limit; choose **One shared budget** instead for a team pool, where their spend is added together against one limit. Choosing several workspaces creates a budget for each.
 - **Workspace:** optionally, narrow it to one workspace. A workspace is one tenant of your organisation, named by your code when it records: a customer of your product, or an internal team. A call that names no workspace counts as your default workspace's.
-- **Period:** daily, weekly from Monday, monthly, yearly, or custom. A custom budget runs once between two dates, or repeats every so many days, up to 730. Periods begin at midnight in your organisation's time zone.
+- **Period:** daily, weekly from Monday, monthly, yearly, or custom. A custom budget runs once between two dates, or repeats every so many days, up to 730. Periods begin at midnight in the budget's time zone, which is your organisation's unless you choose another, such as for a person who works elsewhere.
 - **Limit:** the amount, in US dollars.
 - **At the limit:** **Enforce** stops covered model calls once the limit is reached. **Warn only** lets them continue and alerts you.
 
