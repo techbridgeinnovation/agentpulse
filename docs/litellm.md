@@ -30,12 +30,12 @@ The proxy cannot see your services' context, so pass it on each request: LiteLLM
 | `agentpulse_workspace` | Your customer. |
 | `agentpulse_project` | A unit of work inside the customer. |
 | `agentpulse_user` | The user's identifier, if not in `user`. |
-| `agentpulse_user_name`, `agentpulse_user_email` | The user's name and email, stored once. |
+| `agentpulse_user_name`, `agentpulse_user_email` | The user's name and email, stored once. Read only when `agentpulse_user` is set. |
 | `agentpulse_session`, `agentpulse_component`, `agentpulse_skill` | Session and the part of your product. |
 
 ## Budgets
 
-The proxy checks your budgets before forwarding each call. A stopped call is answered with a `403`, marked not to be retried. A warn-only budget past its limit lets the call through and alerts you. If Agent Pulse cannot answer, the proxy forwards the call.
+The proxy checks your budgets before forwarding each call. A stopped call is answered with a `403`, marked not to be retried. A budget set to downgrade sends the call to its cheaper model instead, when that model has the same provider. A warn-only budget past its limit lets the call through and alerts you. If Agent Pulse cannot answer, the proxy forwards the call.
 
 ## The LiteLLM SDK
 
@@ -45,4 +45,10 @@ A service using the LiteLLM SDK instead registers the callback once:
 litellm.callbacks = [reporter.litellm_callback()]
 ```
 
-The SDK has no hook that can stop a call. To have a budget stop one, ask `reporter.decide()` before the call.
+The SDK has no hook that can stop a call. To have a budget stop one, ask before the call, and name the provider unless the model runs on Vertex AI:
+
+```python
+verdict = reporter.decide("gpt-4o", provider="OPENAI")
+if verdict.proceed:
+    response = litellm.completion(model="gpt-4o", messages=messages)
+```
